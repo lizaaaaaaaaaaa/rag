@@ -1,20 +1,10 @@
-# 仮想環境
 .venv/
 env/
-
-# Pythonキャッシュ
 __pycache__/
-*.py[cod]
-
-# VSCodeや一時ファイル
 .vscode/
-*.log
-.DS_Store
-
-# Streamlit系・アップロードファイルなど
-uploaded_docs/
+.streamlit/
 rag/vectorstore/
+uploaded_docs/
 chat_logs.db
-
-# 環境変数ファイル
 .env
+*.log
