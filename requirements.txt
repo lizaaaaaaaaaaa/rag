@@ -18,3 +18,4 @@ python-dotenv
 langchain-community
 sentencepiece
 accelerate
+langchain-huggingface
