@@ -17,3 +17,4 @@ streamlit-extras
 python-dotenv
 langchain-community
 sentencepiece
+accelerate
