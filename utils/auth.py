@@ -15,9 +15,10 @@ def login_user():
         if username in USER_CREDENTIALS and USER_CREDENTIALS[username] == password:
             st.session_state["user"] = username
             st.success("ログイン成功！")
-            st.experimental_rerun()
+            st.rerun()  # ← 修正された行（以前の experimental_rerun の代わり）
         else:
             st.error("ユーザー名またはパスワードが間違っています")
 
 def get_user_role(username):
     return "admin"  # ここは今後複数ロール対応もできるように
+
