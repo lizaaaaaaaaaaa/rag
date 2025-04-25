@@ -1,4 +1,5 @@
 import os
+import streamlit as st
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -6,7 +7,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
 
-# .env 読み込み
+# .env 読み込みと切り替えフラグ
 load_dotenv()
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() == "true"
 
@@ -42,10 +43,19 @@ def load_vectorstore():
         VECTOR_DIR, embeddings, index_name=INDEX_NAME, allow_dangerous_deserialization=True
     )
 
-# 🔹 RAGチェーン構築（LLM切替対応）
+# 🔹 モデル読み込みをキャッシュ（初回のみロード）
+@st.cache_resource(show_spinner="🤖 rinnaモデルを読み込んでいます...")
+def load_rinna_model():
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    model_id = "rinna/japanese-gpt-neox-3.6b-instruction-ppo"
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
+    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
+    return tokenizer, model
+
+# 🔹 RAGチェーン構築（LLM切替 & キャッシュ対応）
 def get_rag_chain(vectorstore, return_source=True):
     if not USE_LOCAL_LLM:
-        # 🔁 クラウド用の軽量モード（ダミーLLM）
+        # クラウド用の軽量モード（ダミーLLM）
         from langchain.chains import LLMChain
         from langchain.prompts import PromptTemplate
         from langchain.llms.fake import FakeListLLM
@@ -54,14 +64,12 @@ def get_rag_chain(vectorstore, return_source=True):
         dummy_llm = FakeListLLM(responses=["この環境ではRAG応答は利用できません。"])
         return LLMChain(llm=dummy_llm, prompt=dummy_prompt)
 
-    # 🧠 ローカル用（rinnaモデル + プロンプト）
-    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+    # ローカルLLM（rinna）をキャッシュ経由で読み込み
+    from transformers import pipeline
     from langchain_community.llms import HuggingFacePipeline
     from langchain.chains import RetrievalQA
 
-    model_id = "rinna/japanese-gpt-neox-3.6b-instruction-ppo"
-    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
-    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
+    tokenizer, model = load_rinna_model()
 
     pipe = pipeline(
         "text-generation",
@@ -75,6 +83,7 @@ def get_rag_chain(vectorstore, return_source=True):
 
     llm = HuggingFacePipeline(pipeline=pipe)
 
+    # プロンプトテンプレート読み込み
     with open("rag/prompt_template.txt", encoding="utf-8") as f:
         prompt_str = f.read()
 
