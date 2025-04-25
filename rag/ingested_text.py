@@ -55,14 +55,18 @@ def load_rinna_model():
 # 🔹 RAGチェーン構築（LLM切替 & キャッシュ対応）
 def get_rag_chain(vectorstore, return_source=True):
     if not USE_LOCAL_LLM:
-        # クラウド用の軽量モード（ダミーLLM）
-        from langchain.chains import LLMChain
-        from langchain.prompts import PromptTemplate
-        from langchain.llms.fake import FakeListLLM
+        # OpenAI API でクラウドLLMを使用
+        from langchain.chat_models import ChatOpenAI
+        from langchain.chains import RetrievalQA
 
-        dummy_prompt = PromptTemplate.from_template("質問: {query}\n\n回答: この環境ではRAG応答は利用できません。")
-        dummy_llm = FakeListLLM(responses=["この環境ではRAG応答は利用できません。"])
-        return LLMChain(llm=dummy_llm, prompt=dummy_prompt)
+        llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
+
+        return RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=vectorstore.as_retriever(),
+            return_source_documents=return_source,
+        )
 
     # ローカルLLM（rinna）をキャッシュ経由で読み込み
     from transformers import pipeline
@@ -83,7 +87,6 @@ def get_rag_chain(vectorstore, return_source=True):
 
     llm = HuggingFacePipeline(pipeline=pipe)
 
-    # プロンプトテンプレート読み込み
     with open("rag/prompt_template.txt", encoding="utf-8") as f:
         prompt_str = f.read()
 
