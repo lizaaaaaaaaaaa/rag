@@ -1,12 +1,14 @@
 import os
+from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.chains import RetrievalQA
-from langchain_community.llms import HuggingFacePipeline
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from langchain.prompts import PromptTemplate
+
+# .env 読み込み
+load_dotenv()
+USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() == "true"
 
 # 保存ディレクトリ指定
 VECTOR_DIR = "rag/vectorstore"
@@ -40,8 +42,23 @@ def load_vectorstore():
         VECTOR_DIR, embeddings, index_name=INDEX_NAME, allow_dangerous_deserialization=True
     )
 
-# 🔹 RAGチェーン構築（rinna用・推論設定つき）
+# 🔹 RAGチェーン構築（LLM切替対応）
 def get_rag_chain(vectorstore, return_source=True):
+    if not USE_LOCAL_LLM:
+        # 🔁 クラウド用の軽量モード（ダミーLLM）
+        from langchain.chains import LLMChain
+        from langchain.prompts import PromptTemplate
+        from langchain.llms.fake import FakeListLLM
+
+        dummy_prompt = PromptTemplate.from_template("質問: {query}\n\n回答: この環境ではRAG応答は利用できません。")
+        dummy_llm = FakeListLLM(responses=["この環境ではRAG応答は利用できません。"])
+        return LLMChain(llm=dummy_llm, prompt=dummy_prompt)
+
+    # 🧠 ローカル用（rinnaモデル + プロンプト）
+    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+    from langchain_community.llms import HuggingFacePipeline
+    from langchain.chains import RetrievalQA
+
     model_id = "rinna/japanese-gpt-neox-3.6b-instruction-ppo"
     tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
     model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
@@ -58,7 +75,6 @@ def get_rag_chain(vectorstore, return_source=True):
 
     llm = HuggingFacePipeline(pipeline=pipe)
 
-    # 🔸 プロンプトテンプレート読み込み
     with open("rag/prompt_template.txt", encoding="utf-8") as f:
         prompt_str = f.read()
 
@@ -72,5 +88,5 @@ def get_rag_chain(vectorstore, return_source=True):
         chain_type="stuff",
         retriever=vectorstore.as_retriever(),
         return_source_documents=return_source,
-        chain_type_kwargs={"prompt": prompt}  # 🔸 ここが追加ポイント！
+        chain_type_kwargs={"prompt": prompt}
     )
