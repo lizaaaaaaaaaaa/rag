@@ -20,3 +20,4 @@ sentencepiece
 accelerate
 langchain-huggingface
 streamlit==1.32.2
+openai
