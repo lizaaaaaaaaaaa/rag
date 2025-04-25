@@ -1,4 +1,4 @@
 [server]
 headless = true
-port = $PORT
+port = 8501  # 仮にローカル環境用に固定
 enableCORS = false

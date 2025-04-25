@@ -2,9 +2,8 @@
 env/
 __pycache__/
 .vscode/
-.streamlit/
-rag/vectorstore/
 uploaded_docs/
 chat_logs.db
 .env
 *.log
+!streamlit/config.toml
