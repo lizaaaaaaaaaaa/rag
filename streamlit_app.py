@@ -1,26 +1,31 @@
 import streamlit as st
-from utils.auth import login_user, get_user_role
+from utils.auth import login_user, get_user_role, create_users_table
 
-# ページ設定
 st.set_page_config(page_title="RAG Fullstack App", layout="wide")
 
-# ログインしていない場合はログイン画面を表示
-if "user" not in st.session_state:
-    login_user()
-    st.stop()  # ログイン画面の後で描画を止める
+create_users_table()
 
-# ログイン後の処理
+if "user" not in st.session_state:
+    st.title("🔐 ログインページ")
+    username = st.text_input("ユーザー名")
+    password = st.text_input("パスワード", type="password")
+
+    if st.button("ログイン"):
+        if login_user(username, password):
+            st.success(f"✅ ようこそ {username} さん！")
+            st.experimental_rerun()
+        else:
+            st.error("❌ ログイン失敗。ユーザー名かパスワードが違います。")
+    st.stop()
+
+# ログイン成功後
 role = get_user_role(st.session_state["user"])
 st.sidebar.success(f"✅ ログイン中: {st.session_state['user']}（{role}）")
 
-# メイン画面のUI
 st.title("🌟 RAG Fullstack アプリへようこそ！")
-st.write("左のサイドバーからページを選択してください。")
-st.info("📤 アップロード、💬 チャット、📊 ダッシュボードなどを選べます。")
+st.write("左サイドバーからページを選んでください。")
 
-# ログアウト処理
 if st.sidebar.button("🔓 ログアウト"):
     del st.session_state["user"]
-    st.rerun()  # ← 新しい rerun 関数に変更（experimental ではない）
-
+    st.experimental_rerun()
 

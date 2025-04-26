@@ -2,7 +2,7 @@
 env/
 __pycache__/
 .vscode/
-uploaded_docs/
+# uploaded_docs/
 chat_logs.db
 .env
 *.log
