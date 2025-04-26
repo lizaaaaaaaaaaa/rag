@@ -1,7 +1,7 @@
 import sqlite3
 import os
 
-DB_FILE = "streamlit_rag_fullstack_ultimate/chat_logs.db"
+DB_FILE = "RAG-LLM-Project/chat_logs.db"
 
 # 既存ファイルがあれば削除
 if os.path.exists(DB_FILE):
