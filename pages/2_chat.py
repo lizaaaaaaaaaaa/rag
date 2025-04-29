@@ -1,3 +1,4 @@
+# ✅ 完成版: pages/2_chat.py
 import streamlit as st
 import sqlite3
 from datetime import datetime
@@ -8,7 +9,7 @@ st.set_page_config(page_title="RAGチャット", layout="centered")
 # タイトルと説明
 st.markdown("""
 <div style="text-align: center;">
-    <h1 style="font-size: 2.5em;">💬 RAGチャット</h1>
+    <h1 style="font-size: 2.5em;">\ud83d\udcac RAGチャット</h1>
     <p style="font-size: 1.1em;">PDFから内容を引用して回答するローカルチャットアプリ</p>
 </div>
 """, unsafe_allow_html=True)
@@ -26,26 +27,30 @@ if "rag_chain" not in st.session_state:
 
 # 入力フォームをカード風に表示
 with st.container():
-    st.markdown("### 📝 質問入力")
+    st.markdown("### \ud83d\udcdd 質問入力")
     user_input = st.text_input("アップロードしたPDFの内容を教えて！", key="chat_input")
 
-    if st.button("🚀 質問する") and user_input:
+    if st.button("\ud83d\ude80 質問する") and user_input:
         st.session_state.chat_history.append(("ユーザー", user_input))
         try:
             result = st.session_state.rag_chain.invoke({"query": user_input})
-            response = result.get("result", "❌ 回答が見つかりませんでした")
+            response = result.get("result", "\u274c 回答が見つかりませんでした")
             sources = result.get("source_documents", [])
+
+            # 出典整形（回答文に埋め込み）
+            if sources:
+                source_info = "; ".join(
+                    f"{doc.metadata.get('source', '不明')} (p{doc.metadata.get('page', '?')})"
+                    for doc in sources
+                )
+                response += f"\n\n\ud83d\udd17 出典: {source_info}"
+            else:
+                response += "\n\n\ud83d\udd17 出典情報はありません"
+
         except Exception as e:
             response = f"エラーが発生しました: {e}"
-            sources = []
 
         st.session_state.chat_history.append(("アシスタント", response))
-
-        # 出典の整形
-        source_info = "; ".join(
-            f"{doc.metadata.get('source', '不明')} (p{doc.metadata.get('page', '?')})"
-            for doc in sources
-        ) if sources else "なし"
 
         # DB保存
         try:
@@ -71,7 +76,7 @@ with st.container():
                 "user",
                 user_input,
                 response,
-                source_info
+                source_info if sources else "なし"
             ))
             conn.commit()
             conn.close()
@@ -80,7 +85,7 @@ with st.container():
 
 # チャット履歴の表示（新しい順）
 st.markdown("---")
-st.markdown("### 💬 チャット履歴")
+st.markdown("### \ud83d\udcac チャット履歴")
 
 for role, msg in reversed(st.session_state.chat_history):
     st.markdown(f"""
