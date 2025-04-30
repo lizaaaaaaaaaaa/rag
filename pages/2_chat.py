@@ -17,12 +17,12 @@ st.markdown("""
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-if "rag_chain" not in st.session_state:
-    try:
-        vectorstore = load_vectorstore()
-        st.session_state.rag_chain = get_rag_chain(vectorstore, return_source=True)
-    except Exception as e:
-        st.error(f"RAGの初期化に失敗しました: {e}")
+# 🔄 毎回ベクトルストアを読み直して rag_chain を再生成（最新PDFに対応）
+try:
+    vectorstore = load_vectorstore()
+    st.session_state.rag_chain = get_rag_chain(vectorstore, return_source=True)
+except Exception as e:
+    st.error(f"RAGの初期化に失敗しました: {e}")
 
 # 入力フォームをカード風に表示
 with st.container():
