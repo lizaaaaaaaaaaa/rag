@@ -49,7 +49,7 @@ def load_rinna_model():
     from transformers import AutoTokenizer, AutoModelForCausalLM
     model_id = "rinna/japanese-gpt-neox-3.6b-instruction-ppo"
     tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
-    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
+    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto").to("cpu")
     return tokenizer, model
 
 # 🔹 RAGチェーン構築（LLM切替 & キャッシュ対応）
