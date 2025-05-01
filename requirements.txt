@@ -8,10 +8,12 @@ bcrypt
 passlib
 python-jose
 pypdf
+
 langchain==0.3.0
 langchain-community==0.0.21
-langchain-huggingface==0.0.20
+langchain-huggingface==0.0.5
 transformers==4.37.2
+
 sentence-transformers
 faiss-cpu
 huggingface-hub
@@ -20,4 +22,3 @@ python-dotenv
 sentencepiece
 accelerate
 openai
-
