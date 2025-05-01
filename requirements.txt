@@ -10,7 +10,7 @@ python-jose
 pypdf
 
 langchain==0.3.0
-langchain-community==0.0.21
+langchain-community==0.0.17
 transformers==4.37.2
 
 sentence-transformers
