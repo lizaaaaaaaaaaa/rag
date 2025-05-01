@@ -1,4 +1,4 @@
-streamlit
+streamlit==1.32.2
 pandas
 matplotlib
 fastapi
@@ -9,7 +9,7 @@ passlib
 python-jose
 pypdf
 langchain
-transformers
+transformers==4.37.2         ← ★これ重要
 sentence-transformers
 faiss-cpu
 huggingface-hub
@@ -19,5 +19,5 @@ langchain-community
 sentencepiece
 accelerate
 langchain-huggingface
-streamlit==1.32.2
 openai
+

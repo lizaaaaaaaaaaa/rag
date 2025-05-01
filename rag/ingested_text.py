@@ -12,7 +12,7 @@ from langchain.chat_models import ChatOpenAI
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from langchain_community.llms import HuggingFacePipeline
 
-# 環境変数読み込み
+# .envから設定を読み込み
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "true").lower() == "true"
@@ -21,7 +21,7 @@ VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"
 
 
-# PDFアップロード → ベクトル化
+# 📥 PDFアップロード処理 → ベクトル化
 def ingest_pdf_to_vectorstore(pdf_path: str):
     loader = PyPDFLoader(pdf_path)
     docs = loader.load()
@@ -43,7 +43,7 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
     print(f"✅ {os.path.basename(pdf_path)} をベクトルストアに保存しました")
 
 
-# ベクトルストア読み込み
+# 📤 ベクトルストア読み込み
 def load_vectorstore():
     embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-small")
     return FAISS.load_local(
@@ -51,7 +51,7 @@ def load_vectorstore():
     )
 
 
-# ローカルLLM（open-calm-3b）
+# 🧠 ローカルLLM読み込み（open-calm-3b）
 @st.cache_resource(show_spinner="🤖 モデル準備中...")
 def load_local_llm():
     model_id = "cyberagent/open-calm-3b"
@@ -70,15 +70,15 @@ def load_local_llm():
     return HuggingFacePipeline(pipeline=pipe)
 
 
-# LLM切替：質問内容に応じて分岐
+# 🔀 質問内容によるLLMの自動切り替え
 def choose_llm_by_question(question: str):
-    keywords_for_openai = ["要約", "まとめ", "なぜ", "理由", "背景", "仕組み", "ポイント", "問題点", "改善"]
-    if any(kw in question for kw in keywords_for_openai):
+    summary_keywords = ["要約", "まとめ", "なぜ", "理由", "背景", "仕組み", "ポイント", "問題点", "改善"]
+    if any(kw in question for kw in summary_keywords):
         return "openai"
     return "local"
 
 
-# RAGチェーン作成（選択されたLLMを使って構築）
+# 🔧 RAGチェーン構築（選択されたLLMに応じて）
 def get_rag_chain(vectorstore, return_source=True, question=""):
     model_type = choose_llm_by_question(question)
 
@@ -91,7 +91,7 @@ def get_rag_chain(vectorstore, return_source=True, question=""):
             return_source_documents=return_source,
         )
 
-    # ローカルLLM（プロンプトテンプレート付き）
+    # 🧱 ローカルLLM構成（プロンプト適用）
     llm = load_local_llm()
     with open("rag/prompt_template.txt", encoding="utf-8") as f:
         prompt_str = f.read()
