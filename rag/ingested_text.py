@@ -8,21 +8,20 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 
-# OpenAIとローカルモデル両対応
 from langchain.chat_models import ChatOpenAI
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from langchain_community.llms import HuggingFacePipeline
 
-# 環境変数の読み込み
+# 環境変数読み込み
 load_dotenv()
-USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() == "true"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "true").lower() == "true"
 
 VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"
 
 
-# 🔹 PDF → ベクトルストア登録
+# PDFアップロード → ベクトル化
 def ingest_pdf_to_vectorstore(pdf_path: str):
     loader = PyPDFLoader(pdf_path)
     docs = loader.load()
@@ -44,7 +43,7 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
     print(f"✅ {os.path.basename(pdf_path)} をベクトルストアに保存しました")
 
 
-# 🔹 ベクトルストア読み込み
+# ベクトルストア読み込み
 def load_vectorstore():
     embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-small")
     return FAISS.load_local(
@@ -52,12 +51,10 @@ def load_vectorstore():
     )
 
 
-# 🔹 ローカルLLMロード（AutoTokenizerで安定化）
-@st.cache_resource(show_spinner="🤖 モデルを準備中...")
+# ローカルLLM（open-calm-3b）
+@st.cache_resource(show_spinner="🤖 モデル準備中...")
 def load_local_llm():
-    model_id = "rinna/japanese-gpt-neox-3.6b-instruction-ppo"
-
-    # ✅ SentencePiece対応：AutoTokenizer + use_fast=False
+    model_id = "cyberagent/open-calm-3b"
     tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
     model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
 
@@ -68,20 +65,20 @@ def load_local_llm():
         max_new_tokens=512,
         temperature=0.7,
         top_p=0.95,
-        repetition_penalty=1.2,
+        repetition_penalty=1.1,
     )
     return HuggingFacePipeline(pipeline=pipe)
 
 
-# 🔹 LLM選択（OpenAI/Local 自動切替）
+# LLM切替：質問内容に応じて分岐
 def choose_llm_by_question(question: str):
-    if not USE_LOCAL_LLM:
-        if any(kw in question for kw in ["要約", "なぜ", "理由", "仕組み", "背景"]):
-            return "openai"
+    keywords_for_openai = ["要約", "まとめ", "なぜ", "理由", "背景", "仕組み", "ポイント", "問題点", "改善"]
+    if any(kw in question for kw in keywords_for_openai):
+        return "openai"
     return "local"
 
 
-# 🔹 RAGチェーン構築
+# RAGチェーン作成（選択されたLLMを使って構築）
 def get_rag_chain(vectorstore, return_source=True, question=""):
     model_type = choose_llm_by_question(question)
 
@@ -94,7 +91,7 @@ def get_rag_chain(vectorstore, return_source=True, question=""):
             return_source_documents=return_source,
         )
 
-    # ローカルLLM用プロンプト適用
+    # ローカルLLM（プロンプトテンプレート付き）
     llm = load_local_llm()
     with open("rag/prompt_template.txt", encoding="utf-8") as f:
         prompt_str = f.read()
