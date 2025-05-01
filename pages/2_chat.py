@@ -8,8 +8,8 @@ st.set_page_config(page_title="RAGチャット", layout="centered")
 # タイトルと説明
 st.markdown("""
 <div style="text-align: center;">
-    <h1 style="font-size: 2.5em;">💬 RAGチャット</h1>
-    <p style="font-size: 1.1em;">PDFから内容を引用して回答するローカルチャットアプリ</p>
+    <h1 style="font-size: 2.5em;">\ud83d\udcac RAGチャット</h1>
+    <p style="font-size: 1.1em;">PDFから内容を引用して回答するローカル/クラウドハイブリッドチャット</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -17,23 +17,19 @@ st.markdown("""
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# 🔄 毎回ベクトルストアを読み直して rag_chain を再生成（最新PDFに対応）
-try:
-    vectorstore = load_vectorstore()
-    st.session_state.rag_chain = get_rag_chain(vectorstore, return_source=True)
-except Exception as e:
-    st.error(f"RAGの初期化に失敗しました: {e}")
-
-# 入力フォームをカード風に表示
+# 入力フォーム
 with st.container():
-    st.markdown("### 📝 質問入力")
+    st.markdown("### \ud83d\udcdd 質問入力")
     user_input = st.text_input("アップロードしたPDFの内容を教えて！", key="chat_input")
 
-    if st.button("🚀 質問する") and user_input:
+    if st.button("\ud83d\ude80 質問する") and user_input:
         st.session_state.chat_history.append(("ユーザー", user_input))
+
         try:
-            result = st.session_state.rag_chain.invoke({"query": user_input})
-            response = result.get("result", "❌ 回答が見つかりませんでした")
+            vectorstore = load_vectorstore()
+            rag_chain = get_rag_chain(vectorstore, return_source=True, question=user_input)
+            result = rag_chain.invoke({"query": user_input})
+            response = result.get("result", "\u274c 回答が見つかりませんでした")
             sources = result.get("source_documents", [])
         except Exception as e:
             response = f"エラーが発生しました: {e}"
@@ -41,7 +37,7 @@ with st.container():
 
         st.session_state.chat_history.append(("アシスタント", response))
 
-        # 出典の整形
+        # 出典整形
         source_info = "; ".join(
             f"{doc.metadata.get('source', '不明')} (p{doc.metadata.get('page', '?')})"
             for doc in sources
@@ -78,9 +74,9 @@ with st.container():
         except Exception as e:
             st.error(f"DB保存に失敗しました: {e}")
 
-# チャット履歴の表示（新しい順）
+# チャット履歴表示
 st.markdown("---")
-st.markdown("### 💬 チャット履歴")
+st.markdown("### \ud83d\udcac チャット履歴")
 
 for role, msg in reversed(st.session_state.chat_history):
     st.markdown(f"""
