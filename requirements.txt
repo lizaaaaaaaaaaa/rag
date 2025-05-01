@@ -9,7 +9,7 @@ passlib
 python-jose
 pypdf
 langchain
-transformers==4.37.2         ← ★これ重要
+transformers==4.37.2
 sentence-transformers
 faiss-cpu
 huggingface-hub
