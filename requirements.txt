@@ -19,3 +19,4 @@ python-dotenv
 sentencepiece
 accelerate
 openai
+pydantic==1.10.13
