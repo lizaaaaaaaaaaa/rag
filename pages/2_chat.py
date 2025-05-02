@@ -2,6 +2,7 @@ import os
 import sqlite3
 from datetime import datetime
 import streamlit as st
+import traceback  # ← エラーログ出力用
 from rag.ingested_text import load_vectorstore, get_rag_chain
 
 st.set_page_config(page_title="RAGチャット", layout="centered")
@@ -37,14 +38,31 @@ with st.container():
         st.session_state.chat_history.append(("ユーザー", user_input))
 
         with st.spinner("考え中...🤖"):
+            # 📤 ベクトルストア読み込み
             try:
                 vectorstore = load_vectorstore()
+            except Exception as e:
+                st.error("❌ ベクトルストアの読み込みに失敗しました")
+                st.code(traceback.format_exc())
+                st.stop()
+
+            # 🔧 RAGチェーン構築
+            try:
                 rag_chain = get_rag_chain(vectorstore, return_source=True, question=user_input)
+            except Exception as e:
+                st.error("❌ RAGチェーンの構築に失敗しました")
+                st.code(traceback.format_exc())
+                st.stop()
+
+            # 💬 チャット応答生成
+            try:
                 result = rag_chain.invoke({"question": user_input})
                 response = result.get("result", "❌ 回答が見つかりませんでした")
                 sources = result.get("source_documents", [])
             except Exception as e:
-                response = f"エラーが発生しました: {e}"
+                st.error("❌ 回答生成時にエラーが発生しました")
+                st.code(traceback.format_exc())
+                response = "❌ 回答に失敗しました"
                 sources = []
 
         safe_response = clean_text(response)
@@ -91,6 +109,7 @@ with st.container():
             conn.close()
         except Exception as e:
             st.error(f"DB保存に失敗しました: {e}")
+            st.code(traceback.format_exc())
 
 # 履歴表示
 st.markdown("---")
@@ -102,3 +121,4 @@ for role, msg in reversed(st.session_state.chat_history):
         <strong>{role}:</strong><br>{clean_text(msg)}
     </div>
     """, unsafe_allow_html=True)
+
