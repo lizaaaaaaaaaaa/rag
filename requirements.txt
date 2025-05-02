@@ -24,3 +24,5 @@ faiss-cpu
 openai
 
 pydantic==1.10.13
+
+langchain-text-splitters>=0.0.1
