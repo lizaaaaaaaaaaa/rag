@@ -1,9 +1,7 @@
-# FastAPI entry point (for /token + /chat)
-
 from fastapi import FastAPI
+from routers import chat
 
-app = FastAPI()
+app = FastAPI(title="RAG API")
 
-@app.get("/")
-def read_root():
-    return {"message": "FastAPI is running!"}
+app.include_router(chat.router)
+

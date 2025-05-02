@@ -1,18 +1,11 @@
-# 🧠 LangChain（monolithic構成・v0系安定版）
-langchain==0.0.350
-pydantic==1.10.13
-
-# 🧠 埋め込みモデル関連（huggingface / faiss）
-sentence-transformers==2.2.2
-transformers==4.31.0
-faiss-cpu
-sentencepiece
-huggingface-hub
-accelerate
-
-# 🧪 LLM連携
-openai
-
-# 🌐 Webアプリ構築
-streamlit==1.32.2
+fastapi
+uvicorn
 python-dotenv
+openai
+langchain==0.0.20
+langchain-community==0.0.20
+langchain-core==0.1.21
+langsmith
+transformers==4.37.2
+faiss-cpu
+sentence-transformers
