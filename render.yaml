@@ -4,4 +4,4 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run streamlit_app.py --server.port=$PORT --server.enableCORS false
+    startCommand: uvicorn api.main:app --host=0.0.0.0 --port=$PORT
