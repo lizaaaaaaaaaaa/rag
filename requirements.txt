@@ -1,28 +1,36 @@
+# 📦 UI & Web
 streamlit==1.32.2
-pandas
-matplotlib
 fastapi
 uvicorn
 python-multipart
-bcrypt
-passlib
-python-jose
-pypdf
 python-dotenv
 streamlit-extras
 
-langchain==0.1.11
-langchain-core>=0.1.33
-langchain-community==0.0.36
-langchain-text-splitters>=0.0.1
+# 📊 分析系
+pandas
+matplotlib
 
-transformers==4.37.2
-sentence-transformers
+# 🔐 認証系
+bcrypt
+passlib
+python-jose
+
+# 📄 PDF処理
+pypdf
+
+# 🧠 LangChain 安定版（monolithic構成）
+langchain==0.0.350
+
+# 🧠 Embedding / LLM関連
+sentence-transformers==2.2.2
+transformers==4.31.0
 sentencepiece
 huggingface-hub
 accelerate
 faiss-cpu
 openai
 
+# 📝 バリデーション
 pydantic==1.10.13
+
 
