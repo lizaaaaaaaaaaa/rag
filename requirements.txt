@@ -9,3 +9,4 @@ langsmith
 transformers==4.37.2
 faiss-cpu
 sentence-transformers
+streamlit==1.32.2
