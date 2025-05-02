@@ -1,6 +1,7 @@
 import os
 import uuid
 import streamlit as st
+import traceback
 from rag.ingested_text import ingest_pdf_to_vectorstore, load_vectorstore, get_rag_chain
 
 UPLOAD_DIR = "uploaded_docs"
@@ -28,32 +29,44 @@ if uploaded_file is not None:
 
     st.success(f"✅ アップロード成功: {unique_filename}")
 
+    # 🧠 ベクトルストアに取り込み（エラーログ付き）
     try:
         ingest_pdf_to_vectorstore(save_path)
         st.success("✅ ベクトルストア取り込み完了！")
     except Exception as e:
-        st.error(f"❌ ベクトル化に失敗しました: {e}")
+        st.error("❌ ベクトル化に失敗しました")
+        st.code(traceback.format_exc())
         st.stop()
 
-    # 質問UI
+    # 💬 質問UI
     st.subheader("💬 質問してみよう！")
     question = st.text_input("アップロードしたPDFの内容について質問")
 
     if question:
         try:
             vectorstore = load_vectorstore()
+        except Exception as e:
+            st.error("❌ ベクトルストアの読み込みに失敗しました")
+            st.code(traceback.format_exc())
+            st.stop()
+
+        try:
             rag_chain = get_rag_chain(vectorstore, return_source=True, question=question)
-            result = rag_chain.invoke({"question": question})  # ← 修正！
+        except Exception as e:
+            st.error("❌ RAGチェーンの構築に失敗しました")
+            st.code(traceback.format_exc())
+            st.stop()
 
+        try:
+            result = rag_chain.invoke({"question": question})
             st.write(f"📘 回答: {result.get('result', '❌ 回答が見つかりませんでした')}")
-
-            # 出典表示
             if result.get("source_documents"):
                 st.write("📎 出典:")
                 for doc in result["source_documents"]:
                     source = doc.metadata.get("source", "不明")
                     page = doc.metadata.get("page", "?")
                     st.write(f"- {source} (p{page})")
-
         except Exception as e:
-            st.error(f"❌ RAG応答エラー: {e}")
+            st.error("❌ 回答生成中にエラーが発生しました")
+            st.code(traceback.format_exc())
+
