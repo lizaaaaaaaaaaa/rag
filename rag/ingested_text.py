@@ -1,16 +1,27 @@
 import os
 import streamlit as st
 from dotenv import load_dotenv
-from langchain_community.document_loaders import PyPDFLoader
+
+# 📄 PDFローダー（monolithic構成）
+from langchain.document_loaders import PyPDFLoader
+
+# 🧠 チャンク分割・ベクトルストア・埋め込み
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
+from langchain.vectorstores import FAISS
+from langchain.embeddings import HuggingFaceEmbeddings
+
+# 💬 チャット構成とチェーン
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain.chat_models import ChatOpenAI
+from langchain.llms import HuggingFacePipeline
+
+# 🤗 モデル読み込み用（transformers）
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-from langchain_community.llms import HuggingFacePipeline
+
+# ✅ 必要に応じて：直接埋め込みを行いたいとき
 from sentence_transformers import SentenceTransformer
-from langchain.embeddings.base import Embeddings
+
 
 # .envから設定を読み込み
 load_dotenv()
