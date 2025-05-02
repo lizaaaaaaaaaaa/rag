@@ -11,9 +11,10 @@ pypdf
 python-dotenv
 streamlit-extras
 
-langchain==0.1.13
-langchain-core>=0.1.53
+langchain==0.1.11
+langchain-core>=0.1.33
 langchain-community==0.0.36
+langchain-text-splitters>=0.0.1
 
 transformers==4.37.2
 sentence-transformers
@@ -23,6 +24,5 @@ accelerate
 faiss-cpu
 openai
 
-pydantic>=2.7,<3.0
+pydantic==1.10.13
 
-langchain-text-splitters>=0.0.1
