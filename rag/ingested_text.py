@@ -1,9 +1,7 @@
 import os
 from dotenv import load_dotenv
 from functools import lru_cache
-
 from transformers import GPTNeoXTokenizer, GPTNeoXForCausalLM
-
 from langchain_community.document_loaders.pdf import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_openai import ChatOpenAI
@@ -12,9 +10,8 @@ from langchain_core.embeddings import Embeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
-
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from sentence_transformers import SentenceTransformer
+from transformers import pipeline 
 
 # ⬇️ trust_remote_code 対応のため、GPTNeoX系で必要
 # transformers>=4.26以降なら trust_remote_code=True で自動ロードされる
@@ -68,9 +65,6 @@ def load_vectorstore():
 @lru_cache()
 def load_local_llm():
     model_id = "cyberagent/open-calm-3b"
-    
-    from transformers import GPTNeoXTokenizer, GPTNeoXForCausalLM
-
     tokenizer = GPTNeoXTokenizer.from_pretrained(
         model_id,
         trust_remote_code=True
