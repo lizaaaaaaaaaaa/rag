@@ -2,8 +2,7 @@ import os
 from dotenv import load_dotenv
 from functools import lru_cache
 
-from transformers import GPTNeoXTokenizer
-GPTNeoXTokenizer
+from transformers import GPTNeoXTokenizer, GPTNeoXForCausalLM
 
 from langchain_community.document_loaders.pdf import PyPDFLoader
 from langchain_community.vectorstores import FAISS
@@ -69,16 +68,18 @@ def load_vectorstore():
 @lru_cache()
 def load_local_llm():
     model_id = "cyberagent/open-calm-3b"
-    tokenizer = AutoTokenizer.from_pretrained(
+    
+    from transformers import GPTNeoXTokenizer, GPTNeoXForCausalLM
+
+    tokenizer = GPTNeoXTokenizer.from_pretrained(
         model_id,
-        use_fast=False,
-        trust_remote_code=True  # ←❗ここがポイント
+        trust_remote_code=True
     )
-    model = AutoModelForCausalLM.from_pretrained(
+    model = GPTNeoXForCausalLM.from_pretrained(
         model_id,
         torch_dtype="auto",
         device_map="auto",
-        trust_remote_code=True  # ←❗こちらも重要
+        trust_remote_code=True
     )
 
     pipe = pipeline(
