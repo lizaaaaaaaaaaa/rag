@@ -11,9 +11,11 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
-# 環境変数の読み込み
+# 👇 ここで直接読み込む（trust_remote_codeで失敗しないように）
+from transformers import GPTNeoXTokenizer, GPTNeoXForCausalLM, pipeline
+
+# 環境変数読み込み
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "true").lower() == "true"
@@ -62,15 +64,11 @@ def load_vectorstore():
 def load_local_llm():
     model_id = "cyberagent/open-calm-3b"
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_id,
-        trust_remote_code=True
-    )
-    model = AutoModelForCausalLM.from_pretrained(
+    tokenizer = GPTNeoXTokenizer.from_pretrained(model_id)
+    model = GPTNeoXForCausalLM.from_pretrained(
         model_id,
         torch_dtype="auto",
-        device_map="auto",
-        trust_remote_code=True
+        device_map="auto"
     )
 
     pipe = pipeline(
