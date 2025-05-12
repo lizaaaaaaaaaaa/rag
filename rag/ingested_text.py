@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 from functools import lru_cache
 
 from transformers import GPTNeoXTokenizer
+GPTNeoXTokenizer
+
 from langchain_community.document_loaders.pdf import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_openai import ChatOpenAI
