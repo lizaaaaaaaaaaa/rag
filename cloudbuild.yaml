@@ -1,6 +1,7 @@
 steps:
-  - name: gcr.io/cloud-builders/docker
-    args: ["build", "-t", "gcr.io/rag-cloud-project/rag-api", "."]
-
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/rag-cloud-project/rag-api', '.']
 images:
-  - gcr.io/rag-cloud-project/rag-api
+  - 'gcr.io/rag-cloud-project/rag-api'
+options:
+  logging: CLOUD_LOGGING_ONLY
