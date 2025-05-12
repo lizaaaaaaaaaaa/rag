@@ -64,6 +64,7 @@ def load_local_llm():
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_id,
+        use_fast=False,
         trust_remote_code=True
     )
     model = AutoModelForCausalLM.from_pretrained(
