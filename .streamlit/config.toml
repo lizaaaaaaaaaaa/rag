@@ -1,5 +1,0 @@
-[server]
-headless = true
-port = 8501  # 仮にローカル環境用に固定
-enableCORS = false
-enableXsrfProtection = false

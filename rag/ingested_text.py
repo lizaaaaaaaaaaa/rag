@@ -1,29 +1,25 @@
 import os
-import streamlit as st
 from dotenv import load_dotenv
+from functools import lru_cache
 
-# 📄 PDFローダー（monolithic構成）
-from langchain.document_loaders import PyPDFLoader
-
-# 🧠 チャンク分割・ベクトルストア・埋め込み
+# LangChain & Transformers
+from langchain_community.document_loaders.pdf import PyPDFLoader
+from langchain_community.vectorstores import FAISS
+from langchain_openai import ChatOpenAI
+from langchain_community.llms import HuggingFacePipeline
+from langchain_core.embeddings import Embeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.embeddings import HuggingFaceEmbeddings
-
-# 💬 チャット構成とチェーン
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
-from langchain.chat_models import ChatOpenAI
-from langchain.llms import HuggingFacePipeline
 
-# 🤗 モデル読み込み用（transformers）
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-
-# ✅ 必要に応じて：直接埋め込みを行いたいとき
 from sentence_transformers import SentenceTransformer
 
+# ⬇️ trust_remote_code 対応のため、GPTNeoX系で必要
+# transformers>=4.26以降なら trust_remote_code=True で自動ロードされる
+# from transformers import GPTNeoXTokenizer  # ←手動インポートは不要になったが、fallback用に残してもOK
 
-# .envから設定を読み込み
+# 環境変数の読み込み
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "true").lower() == "true"
@@ -31,7 +27,6 @@ USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "true").lower() == "true"
 VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"
 
-# ✅ pydantic依存を完全に回避する埋め込みクラス
 class MyEmbedding(Embeddings):
     def __init__(self, model_name):
         self.model = SentenceTransformer(model_name)
@@ -42,7 +37,6 @@ class MyEmbedding(Embeddings):
     def embed_query(self, text):
         return self.model.encode(text).tolist()
 
-# 📥 PDFアップロード処理 → ベクトル化
 def ingest_pdf_to_vectorstore(pdf_path: str):
     loader = PyPDFLoader(pdf_path)
     docs = loader.load()
@@ -52,7 +46,8 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
 
     embeddings = MyEmbedding("intfloat/multilingual-e5-small")
 
-    if os.path.exists(os.path.join(VECTOR_DIR, f"{INDEX_NAME}.faiss")):
+    index_path = os.path.join(VECTOR_DIR, f"{INDEX_NAME}.faiss")
+    if os.path.exists(index_path):
         vectorstore = FAISS.load_local(
             VECTOR_DIR, embeddings, index_name=INDEX_NAME, allow_dangerous_deserialization=True
         )
@@ -61,21 +56,28 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
         vectorstore = FAISS.from_documents(documents, embeddings)
 
     vectorstore.save_local(VECTOR_DIR, index_name=INDEX_NAME)
-    print(f"✅ {os.path.basename(pdf_path)} をベクトルストアに保存しました")
+    print(f"✅ {os.path.basename(pdf_path)} をベクトルストアに追加保存しました")
 
-# 📤 ベクトルストア読み込み
 def load_vectorstore():
     embeddings = MyEmbedding("intfloat/multilingual-e5-small")
     return FAISS.load_local(
         VECTOR_DIR, embeddings, index_name=INDEX_NAME, allow_dangerous_deserialization=True
     )
 
-# 🧠 ローカルLLM読み込み（open-calm-3b）
-@st.cache_resource(show_spinner="🤖 モデル準備中...")
+@lru_cache()
 def load_local_llm():
     model_id = "cyberagent/open-calm-3b"
-    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
-    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id,
+        use_fast=False,
+        trust_remote_code=True  # ←❗ここがポイント
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        torch_dtype="auto",
+        device_map="auto",
+        trust_remote_code=True  # ←❗こちらも重要
+    )
 
     pipe = pipeline(
         "text-generation",
@@ -88,19 +90,13 @@ def load_local_llm():
     )
     return HuggingFacePipeline(pipeline=pipe)
 
-# 🔀 質問内容によるLLMの自動切り替え
 def choose_llm_by_question(question: str):
     summary_keywords = ["要約", "まとめ", "なぜ", "理由", "背景", "仕組み", "ポイント", "問題点", "改善"]
-    if any(kw in question for kw in summary_keywords):
-        return "openai"
-    return "local"
+    return "openai" if any(kw in question for kw in summary_keywords) else "local"
 
-# 🔧 RAGチェーン構築（選択されたLLMに応じて）
 def get_rag_chain(vectorstore, return_source=True, question=""):
-    model_type = choose_llm_by_question(question)
-
-    if model_type == "openai":
-        llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
+    if not USE_LOCAL_LLM:
+        llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
         return RetrievalQA.from_chain_type(
             llm=llm,
             chain_type="stuff",
@@ -108,7 +104,6 @@ def get_rag_chain(vectorstore, return_source=True, question=""):
             return_source_documents=return_source,
         )
 
-    # 🧱 ローカルLLM構成（プロンプト適用）
     llm = load_local_llm()
     with open("rag/prompt_template.txt", encoding="utf-8") as f:
         prompt_str = f.read()
@@ -125,4 +120,3 @@ def get_rag_chain(vectorstore, return_source=True, question=""):
         return_source_documents=return_source,
         chain_type_kwargs={"prompt": prompt}
     )
-

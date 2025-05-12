@@ -1,0 +1,6 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "gcr.io/rag-cloud-project/rag-api", "."]
+
+images:
+  - gcr.io/rag-cloud-project/rag-api

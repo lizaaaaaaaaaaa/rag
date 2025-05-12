@@ -1,6 +1,6 @@
+# ✅ 新しい構成：utils/auth.py（共通関数のみを残す）
 import sqlite3
 import bcrypt
-import streamlit as st
 
 DB_PATH = "users.db"
 
@@ -38,10 +38,18 @@ def login_user(username, password):
     conn.close()
 
     if result and bcrypt.checkpw(password.encode(), result[0]):
-        st.session_state["user"] = username
         return True
     else:
         return False
 
 def get_user_role(username):
-    return "user"  # シンプルに全員"user"（将来管理者権限など付けてもOK）
+    return "user"
+
+def verify_google_token(id_token_str, client_id):
+    from google.oauth2 import id_token
+    from google.auth.transport import requests as google_requests
+    try:
+        id_info = id_token.verify_oauth2_token(id_token_str, google_requests.Request(), client_id)
+        return id_info.get("email")
+    except Exception:
+        return None
