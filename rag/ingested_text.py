@@ -14,7 +14,7 @@ from sentence_transformers import SentenceTransformer
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
-# 環境変数読み込み
+# ✅ Cloud Run用に環境変数を読み込み
 load_dotenv(dotenv_path="/app/.env")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "true").lower() == "true"
@@ -61,24 +61,30 @@ def load_vectorstore():
         VECTOR_DIR, embeddings, index_name=INDEX_NAME, allow_dangerous_deserialization=True
     )
 
-@lru_cache()
+# ✅ LLMの遅延ロード用キャッシュ変数
+_local_llm = None
+
 def load_local_llm():
+    global _local_llm
+    if _local_llm is not None:
+        return _local_llm
+
+    print("🧠 Loading local LLM...")
+
     model_id = "cyberagent/open-calm-3b"
-    cache_dir = "/tmp/huggingface"  # Cloud Run の一時書き込みディレクトリ
+    cache_dir = "/tmp/huggingface"  # Cloud Runの書き込み可能領域
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_id,
-        trust_remote_code=True,          # ← エラー防止のため追加
+        trust_remote_code=True,
         use_fast=False,
         cache_dir=cache_dir,
     )
-    print("✅ Tokenizer loaded:", tokenizer.__class__)  # ← ログ出力で確認用
-
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype="auto",
         device_map="auto",
-        trust_remote_code=True,          # ← 念のためモデル側にも
+        trust_remote_code=True,
         cache_dir=cache_dir,
     )
 
@@ -91,14 +97,16 @@ def load_local_llm():
         top_p=0.95,
         repetition_penalty=1.1,
     )
-    return HuggingFacePipeline(pipeline=pipe)
+
+    _local_llm = HuggingFacePipeline(pipeline=pipe)
+    return _local_llm
 
 def choose_llm_by_question(question: str):
     summary_keywords = ["要約", "まとめ", "なぜ", "理由", "背景", "仕組み", "ポイント", "問題点", "改善"]
     return "openai" if any(kw in question for kw in summary_keywords) else "local"
 
 def get_rag_chain(vectorstore, return_source=True, question=""):
-    print("🔍 USE_LOCAL_LLM =", USE_LOCAL_LLM)  # ← 追加：Cloud Runログ確認用
+    print("🔍 USE_LOCAL_LLM =", USE_LOCAL_LLM)
 
     if not USE_LOCAL_LLM:
         print("🧠 OpenAI LLM selected")
