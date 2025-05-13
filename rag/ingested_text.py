@@ -15,9 +15,11 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
 # 環境変数読み込み
-load_dotenv()
+load_dotenv(dotenv_path="/app/.env")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "true").lower() == "true"
+
+print("✅ USE_LOCAL_LLM =", USE_LOCAL_LLM)
 
 VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"
