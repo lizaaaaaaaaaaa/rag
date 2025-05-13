@@ -7,3 +7,5 @@ __pycache__/
 *.log
 !streamlit/config.toml
 .env
+OPENAI_API_KEY.txt
+*.txt
