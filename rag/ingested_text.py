@@ -96,7 +96,10 @@ def choose_llm_by_question(question: str):
     return "openai" if any(kw in question for kw in summary_keywords) else "local"
 
 def get_rag_chain(vectorstore, return_source=True, question=""):
+    print("🔍 USE_LOCAL_LLM =", USE_LOCAL_LLM)  # ← 追加：Cloud Runログ確認用
+
     if not USE_LOCAL_LLM:
+        print("🧠 OpenAI LLM selected")         # ← 追加
         llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
         return RetrievalQA.from_chain_type(
             llm=llm,
@@ -105,6 +108,7 @@ def get_rag_chain(vectorstore, return_source=True, question=""):
             return_source_documents=return_source,
         )
 
+    print("🧠 Local LLM selected")              # ← 追加
     llm = load_local_llm()
     with open("rag/prompt_template.txt", encoding="utf-8") as f:
         prompt_str = f.read()

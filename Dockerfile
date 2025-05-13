@@ -9,6 +9,7 @@ RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 COPY rag/vectorstore rag/vectorstore
+COPY .env /app/.env
 
 # Cloud Run 側で PORT が渡されるので指定
 ENV PORT=8080
