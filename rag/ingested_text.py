@@ -62,17 +62,20 @@ def load_vectorstore():
 @lru_cache()
 def load_local_llm():
     model_id = "cyberagent/open-calm-3b"
+    cache_dir = "/tmp/huggingface"  # Cloud Run の一時書き込みディレクトリ
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_id,
         trust_remote_code=True,
-        use_fast=False  # ← これが Cloud Run でのクラッシュ回避のポイント
+        use_fast=False,
+        cache_dir=cache_dir,
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype="auto",
         device_map="auto",
-        trust_remote_code=True
+        trust_remote_code=True,
+        cache_dir=cache_dir,
     )
 
     pipe = pipeline(
