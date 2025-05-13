@@ -6,6 +6,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install langchain-openai==0.0.6
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade transformers==4.38.2
+RUN pip install sentencepiece protobuf
 
 COPY . .
 COPY rag/vectorstore rag/vectorstore

@@ -68,15 +68,17 @@ def load_local_llm():
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_id,
-        trust_remote_code=True,
+        trust_remote_code=True,          # ← エラー防止のため追加
         use_fast=False,
         cache_dir=cache_dir,
     )
+    print("✅ Tokenizer loaded:", tokenizer.__class__)  # ← ログ出力で確認用
+
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype="auto",
         device_map="auto",
-        trust_remote_code=True,
+        trust_remote_code=True,          # ← 念のためモデル側にも
         cache_dir=cache_dir,
     )
 
@@ -99,7 +101,7 @@ def get_rag_chain(vectorstore, return_source=True, question=""):
     print("🔍 USE_LOCAL_LLM =", USE_LOCAL_LLM)  # ← 追加：Cloud Runログ確認用
 
     if not USE_LOCAL_LLM:
-        print("🧠 OpenAI LLM selected")         # ← 追加
+        print("🧠 OpenAI LLM selected")
         llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
         return RetrievalQA.from_chain_type(
             llm=llm,
@@ -108,7 +110,7 @@ def get_rag_chain(vectorstore, return_source=True, question=""):
             return_source_documents=return_source,
         )
 
-    print("🧠 Local LLM selected")              # ← 追加
+    print("🧠 Local LLM selected")
     llm = load_local_llm()
     with open("rag/prompt_template.txt", encoding="utf-8") as f:
         prompt_str = f.read()

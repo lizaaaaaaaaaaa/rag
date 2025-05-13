@@ -2,7 +2,7 @@ import os
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQA
 from langchain_community.llms import HuggingFacePipeline
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
@@ -36,8 +36,18 @@ def load_vectorstore():
 # 🔹 RAGチェーン生成（rinnaモデル対応）
 def get_rag_chain(vectorstore, return_source=True):
     model_id = "rinna/japanese-gpt-neox-3.6b-instruction-ppo"
-    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
-    model = AutoModelForCausalLM.from_pretrained(model_id)
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id,
+        use_fast=False,
+        trust_remote_code=True  # ✅ 追加！
+    )
+    print("✅ Tokenizer loaded:", tokenizer.__class__)  # デバッグ用にログ出力
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        trust_remote_code=True  # ✅ モデル側にも追加
+    )
 
     pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=512)
     llm = HuggingFacePipeline(pipeline=pipe)
