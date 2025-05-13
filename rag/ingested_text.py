@@ -1,5 +1,4 @@
 import os
-import json
 from dotenv import load_dotenv
 from functools import lru_cache
 
@@ -14,7 +13,6 @@ from langchain.chains import RetrievalQA
 from sentence_transformers import SentenceTransformer
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-from huggingface_hub import snapshot_download
 
 # 環境変数読み込み
 load_dotenv()
@@ -65,21 +63,13 @@ def load_vectorstore():
 def load_local_llm():
     model_id = "cyberagent/open-calm-3b"
 
-    # 🌟 モデルキャッシュ先取得
-    model_path = snapshot_download(model_id)
-
-    # 🌟 tokenizer_config.json から tokenizer_class を除去（GPTNeoXTokenizer対策）
-    config_path = os.path.join(model_path, "tokenizer_config.json")
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        config.pop("tokenizer_class", None)
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f)
-
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id,
+        trust_remote_code=True,
+        use_fast=False  # ← これが Cloud Run でのクラッシュ回避のポイント
+    )
     model = AutoModelForCausalLM.from_pretrained(
-        model_path,
+        model_id,
         torch_dtype="auto",
         device_map="auto",
         trust_remote_code=True
