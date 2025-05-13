@@ -6,3 +6,4 @@ __pycache__/
 # chat_logs.db
 *.log
 !streamlit/config.toml
+.env
