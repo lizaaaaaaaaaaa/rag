@@ -2,20 +2,21 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# requirements.txt を先にコピーして依存関係を一括インストール
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install langchain-openai==0.0.6
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
-RUN pip install --upgrade transformers==4.38.2
-RUN pip install sentencepiece protobuf
 
+# pip更新と依存パッケージの一括インストール
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+# アプリケーションのファイル一式をコピー
 COPY . .
 COPY rag/vectorstore rag/vectorstore
+COPY rag/prompt_template.txt rag/prompt_template.txt
 
-# Cloud Run 側で PORT が渡されるので指定
+# Cloud Run用の環境変数
 ENV PORT=8080
 ENV CLOUD_RUN=true
 ENV PYTHONUNBUFFERED=1
 
-
+# FastAPI (Uvicorn) 起動
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
