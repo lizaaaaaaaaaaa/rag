@@ -19,6 +19,6 @@ pypdf==3.17.1
 accelerate==0.21.0
 sentencepiece
 torch==2.1.2
-tokenizers==0.15.2
+tokenizers==0.13.3
 protobuf
 
