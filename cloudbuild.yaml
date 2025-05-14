@@ -1,34 +1,37 @@
-# ───────── Cloud Build config ─────────
-# 変数 _TAG に自動で SHORT_SHA が入る
+# ───────────── Cloud Build config ─────────────
+# ① 一か所だけ substitutions を定義
 substitutions:
-  _TAG: "$SHORT_SHA"
+  _IMAGE: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api
+  _TAG: $SHORT_SHA      # ← コミットの短縮 SHA が自動で入る
 
 steps:
-  # 1️⃣ Docker build & push
+  # ② Docker build & push
   - name: gcr.io/cloud-builders/docker
-    env: ['PIP_DEFAULT_TIMEOUT=180']        # ← PyPI タイムアウト対策（任意）
     args:
       - build
       - -t
-      - asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:${_TAG}
+      - '$_IMAGE:$_TAG'
       - .
 
-  # 2️⃣ Cloud Run deploy
+  # ③ Cloud Run deploy（タグ → ダイジェストに変換して確実に取得させる）
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
+    id: deploy
+    entrypoint: bash
     args:
-      - run
-      - deploy
-      - rag-api
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:${_TAG}
-      - --region=asia-northeast1
-      - --platform=managed
-      - --allow-unauthenticated
-      - --service-account=190389115361-compute@developer.gserviceaccount.com
+      - -c
+      - |
+        IMAGE="$_IMAGE:$_TAG"
+        DIGEST=$(gcloud artifacts docker images describe "$IMAGE" --format='value(image_summary.digest)')
+        gcloud run deploy rag-api \
+          --image="$IMAGE@$DIGEST" \
+          --region=asia-northeast1 \
+          --platform=managed \
+          --allow-unauthenticated \
+          --service-account=190389115361-compute@developer.gserviceaccount.com
 
-# Cloud Build UI に表示される “ビルド済みイメージ” 情報
+# Cloud Build UI に表示されるビルド済みイメージ
 images:
-  - asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:${_TAG}
+  - '$_IMAGE:$_TAG'
 
 options:
   machineType: 'E2_HIGHCPU_8'
