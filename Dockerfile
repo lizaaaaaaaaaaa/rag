@@ -5,6 +5,9 @@ WORKDIR /app
 COPY requirements.txt .  
 RUN pip install --upgrade pip  
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install transformers==4.31.0 \
+    huggingface_hub==0.16.4 \
+    sentence-transformers==2.2.2
 
 COPY . .  
 COPY rag/vectorstore rag/vectorstore  
