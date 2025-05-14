@@ -16,7 +16,7 @@ app.include_router(google_oauth.router, prefix="/auth")
 def read_root():
     return {"message": "Hello from FastAPI on Cloud Run!"}
 
-if __name__ == "__main__" and os.getenv("CLOUD_RUN", "false").lower() != "true":
+if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
