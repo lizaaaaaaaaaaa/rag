@@ -1,17 +1,23 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest', '.']
+    env: ['PIP_DEFAULT_TIMEOUT=180']
+    args: [
+      'build',
+      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest',
+      '.'
+    ]
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:
-      - 'run'
-      - 'deploy'
-      - 'rag-api'
+      - run
+      - deploy
+      - rag-api
       - '--image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
       - '--region=asia-northeast1'
       - '--platform=managed'
       - '--allow-unauthenticated'
+      - '--service-account=190389115361-compute@developer.gserviceaccount.com'   # ★追加
 
 images:
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
