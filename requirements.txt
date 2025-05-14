@@ -1,24 +1,30 @@
+# ───────── Core ─────────
 fastapi==0.111.0
 uvicorn==0.29.0
 python-dotenv==1.0.1
+
+# ───────── LangChain / OpenAI ─────────
 openai==1.14.2
 langchain==0.1.17
 langchain-core==0.1.48
 langchain-community==0.0.36
 langchain-openai==0.0.6
 langsmith==0.1.21
-transformers==4.38.2
-huggingface_hub==0.16.4
+
+# ───────── LLM stack ─────────
+transformers==4.31.0
+tokenizers==0.13.3            # ★ 4.31 と互換
+huggingface_hub==0.19.4
 faiss-cpu==1.11.0
 sentence-transformers==2.2.2
+accelerate==0.27.2
+torch==2.2.2
+sentencepiece                # wheels 0.2.0+
+
+# ───────── Utilities ─────────
 pydantic==1.10.13
-streamlit==1.32.2
 PyYAML>=5.3
 bcrypt==4.1.2
 pypdf==3.17.1
-accelerate==0.27.2
-sentencepiece
-torch==2.2.2
-tokenizers>=0.19.0
 protobuf
-
+streamlit==1.32.2

@@ -1,24 +1,21 @@
 steps:
-  # 1. Docker イメージをビルド
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api', '.']
+    args: ['build', '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest', '.']
 
-  # 2. Cloud Run にデプロイ
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:
       - 'run'
       - 'deploy'
       - 'rag-api'
-      - '--image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api'
+      - '--image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
       - '--region=asia-northeast1'
       - '--platform=managed'
       - '--allow-unauthenticated'
 
 images:
-  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api'
+  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
 
 options:
+  machineType: 'E2_HIGHCPU_8'
   logging: CLOUD_LOGGING_ONLY
-  machineType: 'E2_HIGHCPU_8'  # 必要なら変更OK
-

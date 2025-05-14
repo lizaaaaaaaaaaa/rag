@@ -1,22 +1,22 @@
+# ベースイメージ
 FROM python:3.11-slim
 
+# 作業ディレクトリ
 WORKDIR /app
 
-COPY requirements.txt .  
-RUN pip install --upgrade pip  
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install transformers==4.31.0 \
-    huggingface_hub==0.16.4 \
-    sentence-transformers==2.2.2
+# ───── 1. 依存インストール ─────
+COPY requirements.txt .
+RUN pip install --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
-COPY . .  
-COPY rag/vectorstore rag/vectorstore  
-COPY rag/prompt_template.txt rag/prompt_template.txt
+# ───── 2. アプリケーションコピー ─────
+COPY . .
 
+# ───── 3. 環境変数 ─────
 ENV PORT=8080
 ENV CLOUD_RUN=true
 ENV PYTHONUNBUFFERED=1
 
+# ───── 4. 起動コマンド ─────
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
-
 
