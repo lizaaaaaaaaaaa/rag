@@ -12,7 +12,12 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from sentence_transformers import SentenceTransformer
 
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    GPTNeoXTokenizer,  # ← ★これが追加ポイント！
+    pipeline,
+)
 
 # ✅ Cloud Run用に環境変数を読み込み
 load_dotenv(dotenv_path="/app/.env")
@@ -71,8 +76,8 @@ def load_local_llm():
 
     print("🧠 Loading local LLM...")
 
-    model_id = "cyberagent/open-calm-3b"
-    cache_dir = "/tmp/huggingface"  # Cloud Runの書き込み可能領域
+    model_id = "rinna/japanese-gpt-neox-3.6b-instruction-ppo"
+    cache_dir = "/tmp/huggingface"
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_id,
