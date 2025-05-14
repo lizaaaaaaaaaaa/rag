@@ -7,7 +7,7 @@ langchain-core==0.1.48
 langchain-community==0.0.36
 langchain-openai==0.0.6
 langsmith==0.1.21
-transformers==4.31.0
+transformers==4.38.2
 faiss-cpu==1.11.0
 sentence-transformers==2.2.2
 pydantic==1.10.13
@@ -19,3 +19,5 @@ pypdf==3.17.1
 accelerate
 sentencepiece
 torch==2.1.2
+tokenizers==0.15.2
+protobuf
