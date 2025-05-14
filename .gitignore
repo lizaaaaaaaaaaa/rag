@@ -9,3 +9,5 @@ __pycache__/
 .env
 OPENAI_API_KEY.txt
 *.txt
+!requirements.txt
+!rag/prompt_template.txt
