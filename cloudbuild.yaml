@@ -1,35 +1,28 @@
-# ───────────── Cloud Build config ─────────────
-# ① 一か所だけ substitutions を定義
 substitutions:
   _IMAGE: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api
-  _TAG: $SHORT_SHA      # ← コミットの短縮 SHA が自動で入る
+  _TAG: $SHORT_SHA            # ← コミットの短縮 SHA
 
 steps:
-  # ② Docker build & push
+  # 1️⃣ Build & push
   - name: gcr.io/cloud-builders/docker
-    args:
-      - build
-      - -t
-      - '$_IMAGE:$_TAG'
-      - .
+    args: ['build', '-t', '$_IMAGE:$_TAG', '.']
 
-  # ③ Cloud Run deploy（タグ → ダイジェストに変換して確実に取得させる）
+  # 2️⃣ Deploy
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     id: deploy
     entrypoint: bash
     args:
       - -c
       - |
-        IMAGE="$_IMAGE:$_TAG"
-        DIGEST=$(gcloud artifacts docker images describe "$IMAGE" --format='value(image_summary.digest)')
-        gcloud run deploy rag-api \
-          --image="$IMAGE@$DIGEST" \
-          --region=asia-northeast1 \
-          --platform=managed \
-          --allow-unauthenticated \
-          --service-account=190389115361-compute@developer.gserviceaccount.com
+          IMG="$_IMAGE:$_TAG"
+          DIGEST=$(gcloud artifacts docker images describe "$IMG" --format='value(image_summary.digest)')
+          gcloud run deploy rag-api \
+            --image="$IMG@$DIGEST" \
+            --region=asia-northeast1 \
+            --platform=managed \
+            --allow-unauthenticated \
+            --service-account=190389115361-compute@developer.gserviceaccount.com
 
-# Cloud Build UI に表示されるビルド済みイメージ
 images:
   - '$_IMAGE:$_TAG'
 
