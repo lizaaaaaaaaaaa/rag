@@ -25,16 +25,17 @@ steps:
       - '--region=asia-northeast1'
       - '--platform=managed'
       - '--allow-unauthenticated'
-      - '--memory=512Mi'    # メモリ制限を追加
-      - '--cpu=1'           # CPU制限を追加
-      - '--timeout=300s'    # タイムアウト設定を追加
-      - '--min-instances=0' # 最小インスタンス数
-      - '--max-instances=5' # 最大インスタンス数
+      - '--memory=4Gi'     # より多くのメモリを割り当て
+      - '--cpu=2'          # 複数のCPUコアを割り当て
+      - '--timeout=600s'   # 長めのタイムアウト設定
+      - '--min-instances=1' # 常に1インスタンスをホット状態に保つ
+      - '--max-instances=20' # 高負荷時に多くのインスタンスを許可
+      - '--concurrency=80'  # 1インスタンスあたりの同時リクエスト数
       - '--service-account=190389115361-compute@developer.gserviceaccount.com'
 
 images:
   - '$_IMAGE:$_TAG'
 
 options:
-  machineType: 'E2_MEDIUM'  # コストを抑えるために変更
+  machineType: 'E2_HIGHCPU_8'  # 高性能なビルドマシン
   logging: CLOUD_LOGGING_ONLY
