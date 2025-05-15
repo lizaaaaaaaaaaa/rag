@@ -1,6 +1,6 @@
 substitutions:
-  _IMAGE_NAME: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api
   _TAG: v1.0.0
+  _IMAGE_NAME: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api
   _IMAGE_WITH_TAG: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.0
 
 steps:
@@ -11,12 +11,12 @@ steps:
     args: ['push', '$_IMAGE_WITH_TAG']
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: 'gcloud'
+    entrypoint: gcloud
     args:
-      - 'run'
-      - 'deploy'
-      - 'rag-api'
-      - '--image=$_IMAGE_WITH_TAG'     # ← ここも
+      - run
+      - deploy
+      - rag-api
+      - '--image=$_IMAGE_WITH_TAG'
       - '--region=asia-northeast1'
       - '--platform=managed'
       - '--allow-unauthenticated'
@@ -30,3 +30,4 @@ steps:
 
 images:
   - '$_IMAGE_WITH_TAG'
+
