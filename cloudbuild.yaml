@@ -1,16 +1,23 @@
 substitutions:
   _IMAGE: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api
-  _TAG: $SHORT_SHA   # Cloud Build が自動で入れる短いコミットSHA
+  _TAG: $SHORT_SHA            # Git の短 SHA
 
 steps:
-  # 1⃣ Build & push
+  # 1️⃣ Build
   - name: gcr.io/cloud-builders/docker
+    id: build
     args: ['build', '-t', '$_IMAGE:$_TAG', '.']
 
-  # 2⃣ Deploy to Cloud Run (タグのみ)
+  # 2️⃣ Push  ←★追加
+  - name: gcr.io/cloud-builders/docker
+    id: push
+    args: ['push', '$_IMAGE:$_TAG']
+
+  # 3️⃣ Deploy
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     id: deploy
     args:
+      - gcloud
       - run
       - deploy
       - rag-api
