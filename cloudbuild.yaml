@@ -1,25 +1,20 @@
-substitutions:
-  _TAG: v1.0.0
-  _IMAGE_NAME: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api
-  _IMAGE_WITH_TAG: $_IMAGE_NAME:$_TAG
-
 steps:
-  # Docker build
+  # ① Docker Build
   - name: gcr.io/cloud-builders/docker
-    args: ['build', '-t', '$_IMAGE_WITH_TAG', '.']
+    args: ['build', '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.0', '.']
 
-  # Docker push
+  # ② Docker Push
   - name: gcr.io/cloud-builders/docker
-    args: ['push', '$_IMAGE_WITH_TAG']
+    args: ['push', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.0']
 
-  # Cloud Run deploy (no PORT env)
+  # ③ Cloud Run Deploy
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
       - run
       - deploy
       - rag-api
-      - '--image=$_IMAGE_WITH_TAG'
+      - '--image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.0'
       - '--region=asia-northeast1'
       - '--platform=managed'
       - '--allow-unauthenticated'
@@ -29,14 +24,13 @@ steps:
       - '--min-instances=1'
       - '--max-instances=20'
       - '--concurrency=80'
-      - '--port=8080'
       - '--set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest'
       - '--command=uvicorn'
       - '--args=main:app,--host,0.0.0.0,--port,8080'
       - '--service-account=190389115361-compute@developer.gserviceaccount.com'
 
 images:
-  - '$_IMAGE_WITH_TAG'
+  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.0'
 
 options:
   machineType: 'E2_HIGHCPU_8'
