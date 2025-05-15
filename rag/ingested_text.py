@@ -1,7 +1,8 @@
 import os
-from dotenv import load_dotenv
+import logging
 from functools import lru_cache
 
+from dotenv import load_dotenv
 from langchain_community.document_loaders.pdf import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_openai import ChatOpenAI
@@ -11,20 +12,27 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from sentence_transformers import SentenceTransformer
-
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
-    GPTNeoXTokenizer,  # ← ★これが追加ポイント！
+    GPTNeoXTokenizer,
     pipeline,
 )
 
-# ✅ Cloud Run用に環境変数を読み込み
-load_dotenv(dotenv_path="/app/.env")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "true").lower() == "true"
+# ✅ ローカル開発用の .env 読み込み（Cloud Run では不要）
+if os.path.exists(".env"):
+    load_dotenv()
 
-print("✅ USE_LOCAL_LLM =", USE_LOCAL_LLM)
+# ✅ ロギング初期化（Cloud Logging対応）
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# ✅ OpenAIキー明示設定
+import openai
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "true").lower() == "true"
+logger.info("✅ USE_LOCAL_LLM = %s", USE_LOCAL_LLM)
 
 VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"
@@ -58,7 +66,7 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
         vectorstore = FAISS.from_documents(documents, embeddings)
 
     vectorstore.save_local(VECTOR_DIR, index_name=INDEX_NAME)
-    print(f"✅ {os.path.basename(pdf_path)} をベクトルストアに追加保存しました")
+    logger.info("✅ %s をベクトルストアに追加保存しました", os.path.basename(pdf_path))
 
 def load_vectorstore():
     embeddings = MyEmbedding("intfloat/multilingual-e5-small")
@@ -66,7 +74,6 @@ def load_vectorstore():
         VECTOR_DIR, embeddings, index_name=INDEX_NAME, allow_dangerous_deserialization=True
     )
 
-# ✅ LLMの遅延ロード用キャッシュ変数
 _local_llm = None
 
 def load_local_llm():
@@ -74,7 +81,7 @@ def load_local_llm():
     if _local_llm is not None:
         return _local_llm
 
-    print("🧠 Loading local LLM...")
+    logger.info("🧠 Loading local LLM...")
 
     model_id = "rinna/japanese-gpt-neox-3.6b-instruction-ppo"
     cache_dir = "/tmp/huggingface"
@@ -111,10 +118,10 @@ def choose_llm_by_question(question: str):
     return "openai" if any(kw in question for kw in summary_keywords) else "local"
 
 def get_rag_chain(vectorstore, return_source=True, question=""):
-    print("🔍 USE_LOCAL_LLM =", USE_LOCAL_LLM)
+    logger.info("🔍 get_rag_chain - USE_LOCAL_LLM = %s", USE_LOCAL_LLM)
 
     if not USE_LOCAL_LLM:
-        print("🧠 OpenAI LLM selected")
+        logger.info("🧠 OpenAI LLM selected")
         llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
         return RetrievalQA.from_chain_type(
             llm=llm,
@@ -123,7 +130,7 @@ def get_rag_chain(vectorstore, return_source=True, question=""):
             return_source_documents=return_source,
         )
 
-    print("🧠 Local LLM selected")
+    logger.info("🧠 Local LLM selected")
     llm = load_local_llm()
     with open("rag/prompt_template.txt", encoding="utf-8") as f:
         prompt_str = f.read()
