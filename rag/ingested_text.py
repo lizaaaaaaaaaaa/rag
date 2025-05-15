@@ -19,17 +19,19 @@ from transformers import (
     pipeline,
 )
 
-# ✅ ローカル開発用の .env 読み込み（Cloud Run では不要）
+# ✅ ローカル用 .env 読み込み（Cloud Runでは不要）
 if os.path.exists(".env"):
     load_dotenv()
 
-# ✅ ロギング初期化（Cloud Logging対応）
+# ✅ ロギング初期化
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ✅ OpenAIキー明示設定
+# ✅ OpenAI APIキーの安全設定
 import openai
-openai.api_key = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if OPENAI_API_KEY:
+    openai.api_key = OPENAI_API_KEY
 
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "true").lower() == "true"
 logger.info("✅ USE_LOCAL_LLM = %s", USE_LOCAL_LLM)

@@ -1,6 +1,6 @@
 import os
 import logging
-import traceback  # ← 🔧 忘れず追加！
+import traceback
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
@@ -9,14 +9,17 @@ from pydantic import BaseModel
 from langchain_core.documents import Document
 from rag.ingested_text import load_vectorstore, get_rag_chain
 
-# 🔐 .env 読み込み（ローカル開発用）
-load_dotenv()
+# ✅ .env の安全な読み込み（開発用）
+if os.path.exists(".env"):
+    load_dotenv()
 
-# 🔑 OpenAI APIキーを設定（Cloud Runでは環境変数から注入）
+# ✅ OpenAI APIキーの安全設定
 import openai
-openai.api_key = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if OPENAI_API_KEY:
+    openai.api_key = OPENAI_API_KEY
 
-# 🔧 Logging設定（Cloud Loggingに連携しやすく）
+# ✅ ロギング初期化（Cloud Logging 対応）
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -29,13 +32,12 @@ class ChatRequest(BaseModel):
 async def chat_endpoint(request: ChatRequest):
     try:
         query = request.query
+        logger.info(f"📩 新しい質問を受信: {query}")
 
-        # ベクトルストアとRAGチェーンを構築
         vectorstore = load_vectorstore()
         rag_chain = get_rag_chain(vectorstore, return_source=True, question=query)
         result = rag_chain.invoke({"query": query})
 
-        # ソースをJSON化可能な形に変換
         sources = []
         for doc in result.get("source_documents", []):
             if isinstance(doc, Document):
@@ -54,4 +56,5 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
 
