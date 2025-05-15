@@ -1,7 +1,7 @@
 substitutions:
   _TAG: v1.0.0
   _IMAGE_NAME: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api
-  _IMAGE_WITH_TAG: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.0
+  _IMAGE_WITH_TAG: $_IMAGE_NAME:$_TAG
 
 steps:
   - name: gcr.io/cloud-builders/docker
@@ -30,4 +30,9 @@ steps:
 
 images:
   - '$_IMAGE_WITH_TAG'
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY   # ← ✅ この行を追加！！
+
 
