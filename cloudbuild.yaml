@@ -4,12 +4,15 @@ substitutions:
   _IMAGE_WITH_TAG: $_IMAGE_NAME:$_TAG
 
 steps:
+  # Docker build
   - name: gcr.io/cloud-builders/docker
     args: ['build', '-t', '$_IMAGE_WITH_TAG', '.']
 
+  # Docker push
   - name: gcr.io/cloud-builders/docker
     args: ['push', '$_IMAGE_WITH_TAG']
 
+  # Cloud Run deploy
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -26,6 +29,16 @@ steps:
       - '--min-instances=1'
       - '--max-instances=20'
       - '--concurrency=80'
+      - '--port=8080'
+      - '--set-env-vars=PORT=8080'
+      - '--set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest'
+      - '--command=uvicorn'
+      - '--args'
+      - main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
       - '--service-account=190389115361-compute@developer.gserviceaccount.com'
 
 images:
@@ -33,6 +46,4 @@ images:
 
 options:
   machineType: 'E2_HIGHCPU_8'
-  logging: CLOUD_LOGGING_ONLY   # ← ✅ この行を追加！！
-
-
+  logging: CLOUD_LOGGING_ONLY

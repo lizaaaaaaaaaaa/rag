@@ -5,6 +5,7 @@ WORKDIR /app
 # 依存ファイルのコピー＆インストール
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install transformers==4.31.0
 
 # アプリ全体をコピー（.env は含めない前提！）
 COPY . .
