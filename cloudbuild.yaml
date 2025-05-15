@@ -1,13 +1,13 @@
 substitutions:
   _IMAGE: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api
-  _TAG: $SHORT_SHA            # ← コミットの短縮 SHA
+  _TAG: $SHORT_SHA   # ← コミットの短 SHA
 
 steps:
-  # 1️⃣ Build & push
+  # 1️⃣  Build & push
   - name: gcr.io/cloud-builders/docker
     args: ['build', '-t', '$_IMAGE:$_TAG', '.']
 
-  # 2️⃣ Deploy
+  # 2️⃣  Deploy to Cloud Run
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     id: deploy
     entrypoint: bash
@@ -15,9 +15,9 @@ steps:
       - -c
       - |
           IMG="$_IMAGE:$_TAG"
-          DIGEST=$(gcloud artifacts docker images describe "$IMG" --format='value(image_summary.digest)')
+          DIGEST=$(gcloud artifacts docker images describe "$$IMG" --format='value(image_summary.digest)')
           gcloud run deploy rag-api \
-            --image="$IMG@$DIGEST" \
+            --image="$$IMG@$$DIGEST" \
             --region=asia-northeast1 \
             --platform=managed \
             --allow-unauthenticated \
