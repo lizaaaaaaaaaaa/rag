@@ -17,6 +17,7 @@ from transformers import (
     AutoModelForCausalLM,
     pipeline,
 )
+import torch  # ← 🔥 float32 を使うために追加
 
 # ✅ ローカル用 .env 読み込み（Cloud Runでは不要）
 if os.path.exists(".env"):
@@ -95,7 +96,7 @@ def load_local_llm():
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        torch_dtype="auto",
+        torch_dtype=torch.float32,  # ← ここが重要！（float16での実行を防ぐ）
         device_map="auto",
         trust_remote_code=True,
         cache_dir=cache_dir,
