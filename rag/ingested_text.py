@@ -96,7 +96,7 @@ def load_local_llm():
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        torch_dtype=torch.float32,  # ← ここが重要！（float16での実行を防ぐ）
+        torch_dtype="auto",  
         device_map="auto",
         trust_remote_code=True,
         cache_dir=cache_dir,
