@@ -15,7 +15,6 @@ from sentence_transformers import SentenceTransformer
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
-    GPTNeoXTokenizer,
     pipeline,
 )
 
