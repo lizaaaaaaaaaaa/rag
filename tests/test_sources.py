@@ -1,14 +1,16 @@
-import re, json, requests
+# tests/test_sources.py
+import re
+from fastapi.testclient import TestClient
+from main import app   # ← FastAPI インスタンスを import
 
-# FastAPI が localhost:8000 で動いている前提
+client = TestClient(app)
+
 def test_source_format():
-    resp = requests.post(
-        "http://localhost:8000/chat",
-        json={"query": "PDFは何枚？"}
-    )
+    resp = client.post("/chat", json={"query": "PDFは何枚？"})
     assert resp.status_code == 200
     data = resp.json()
-    assert "sources" in data
-    # sources は list / どれか 1 つでも file.pdf:ページ の形式があれば OK
-    joined = json.dumps(data["sources"])
-    assert re.search(r"\.pdf\":?\s*\"?\d+", joined)
+
+    # sources が list で、少なくとも 1 件は file.pdf:page の形式
+    joined = str(data.get("sources", ""))
+    assert re.search(r"\.pdf[\"']?:[\"']?\d+", joined)
+
