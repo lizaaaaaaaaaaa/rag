@@ -21,13 +21,14 @@ app.add_middleware(
 )
 
 # ===== ルーター分割・インポート =====
-from api.routers import upload, chat, google_oauth  # ← Google OAuthルーター
+from api.routers import upload, chat, google_oauth, healthz  # ← healthzを追加！
 from api import users  # ← users.py（FastAPI-Users用/自作ユーザー管理用）
 
 # ===== ルーター登録 =====
 app.include_router(upload.router, prefix="", tags=["upload"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(google_oauth.router, prefix="/auth", tags=["auth"])
+app.include_router(healthz.router, prefix="", tags=["healthz"])  # ← 追加！
 
 # --- FastAPI-Usersなど追加する場合 ---
 # 例:
