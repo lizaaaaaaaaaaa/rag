@@ -34,7 +34,7 @@ steps:
       - --port=8080
 
       # ここで全ての環境変数（直接指定ぶん）をまとめて書く
-      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=34.84.65.0,DB_PORT=5432,DB_NAME=rag_db,DB_USER=raguser
+      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=10.19.80.4,DB_PORT=5432,DB_NAME=rag_db,DB_USER=raguser
 
       # シークレット（Secret Managerで登録済みのものだけ記載）
       - --set-secrets=DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest
