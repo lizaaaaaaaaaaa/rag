@@ -1,11 +1,10 @@
-# ✅ auth/google_oauth.py（APIルーター定義）
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
 import os
 import requests
 from utils import auth  # utils/auth.py の関数を利用
 
-router = APIRouter()
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")

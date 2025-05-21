@@ -29,3 +29,6 @@ pypdf==3.17.1
 protobuf==4.25.3
 streamlit==1.32.2
 google-auth==2.29.0
+
+google-cloud-firestore==2.20.2
+python-multipart

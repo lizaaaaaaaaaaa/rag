@@ -53,3 +53,6 @@ def verify_google_token(id_token_str, client_id):
         return id_info.get("email")
     except Exception:
         return None
+def get_current_user():
+    # ローカル用の仮ユーザーID返却
+    return "local-user"

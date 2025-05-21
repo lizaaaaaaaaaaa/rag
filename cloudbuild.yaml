@@ -14,7 +14,7 @@ steps:
       'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'
     ]
 
-  # ③ Cloud Run にデプロイ（明示的にバージョンタグを指定）
+  # ③ Cloud Run にデプロイ（全設定を明示的に上書き）
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -25,15 +25,26 @@ steps:
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
-      - --memory=32Gi
-      - --cpu=8
+      - --memory=16Gi
+      - --cpu=4
       - --timeout=600s
       - --min-instances=1
       - --max-instances=20
       - --concurrency=80
       - --port=8080
-      - --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest
+
+      # ここで全ての環境変数（直接指定ぶん）をまとめて書く
+      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=34.84.65.0,DB_PORT=5432,DB_NAME=rag_db,DB_USER=raguser
+
+      # シークレット（Secret Managerで登録済みのものだけ記載）
+      - --set-secrets=DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest
+
+      # サービスアカウント指定（Cloud SQL Client権限ありのもの！）
       - --service-account=190389115361-compute@developer.gserviceaccount.com
+
+      # VPCコネクタとVPC経由トラフィック（※cloudrun-to-sqlは自分で作成した名前）
+      - --vpc-connector=cloudrun-to-sql
+      - --vpc-egress=private-ranges-only
 
 images:
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'

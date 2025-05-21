@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.simple-container {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+.simple-flex {
+  display: flex;
+  gap: 2rem;
+}
+.simple-box {
+  background: #1a1a1a;
+  color: #f4f4f4;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+}
+.simple-title {
+  font-size: 1.3rem;
+  margin-bottom: 1rem;
+  font-weight: bold;
+}
+.simple-label {
+  font-size: 1.05rem;
+  margin-bottom: 0.5rem;
+}
+.simple-input, .simple-button {
+  font-size: 1rem;
+  padding: 0.8em 1em;
+  border-radius: 8px;
+  border: none;
+  margin-bottom: 0.5em;
+}
+.simple-input {
+  width: 70%;
+  margin-right: 0.5em;
+}
+.simple-button {
+  background: #1976d2;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.simple-button:disabled {
+  background: #bbb;
+  cursor: not-allowed;
+}
+.simple-link {
+  color: #90caf9;
+  text-decoration: underline;
+}
+@media (max-width: 700px) {
+  .simple-flex {
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .simple-box {
+    padding: 1rem;
+  }
+  .simple-input {
+    width: 100%;
+    margin-bottom: 0.5em;
+  }
+}

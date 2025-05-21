@@ -1,99 +1,88 @@
-# api/routers/chat.py
-import os
 import logging
-import traceback
 from pathlib import Path
-from typing import List, Dict, Any
+from datetime import datetime
+from uuid import uuid4
 
-from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter
 from pydantic import BaseModel
-from langchain_core.documents import Document
-
 from rag.ingested_text import load_vectorstore, get_rag_chain
-from utils.cleanup import cleanup_answer
 
-# ---------- .env 読み込み（開発環境のみ） ----------
-if Path(".env").exists():
-    load_dotenv()
+# === エクスポート用 ===
+from fastapi.responses import StreamingResponse, JSONResponse
+import csv
+import io
 
-# ---------- OpenAI API キー設定（必要なら） ----------
-import openai  # noqa: E402
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if OPENAI_API_KEY:
-    openai.api_key = OPENAI_API_KEY
-
-# ---------- ロギング ----------------------------------
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
-
-# ---------- FastAPI ルーター ---------------------------
 router = APIRouter()
 
-# ---------- スキーマ -----------------------------------
+# グローバル履歴（MVP用）/本番はDB化
+history_logs = []
+
 class ChatRequest(BaseModel):
-    query: str
+    question: str
 
-
-@router.post("/")
-async def chat_endpoint(request: ChatRequest):
-    """
-    ユーザーの query を受け取り、RAG で回答を返す。
-    - cleanup_answer() で冗長行を除去
-    - sources には file.pdf:page を示す 'ref' キーを必ず含める
-    """
+@router.post("/", summary="AIチャット", response_description="RAG回答（出典付き）")
+async def chat_endpoint(req: ChatRequest):
+    query = req.question
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    answer = ""
+    sources = []
     try:
-        query: str = request.query.strip()
-        logger.info(f"📩 新しい質問を受信: {query}")
-
-        # 1) Vectorstore & RAG チェーン用意
         vectorstore = load_vectorstore()
-        rag_chain = get_rag_chain(
-            vectorstore=vectorstore,
-            return_source=True,
-            question=query,
-        )
+        rag_chain = get_rag_chain(vectorstore=vectorstore, return_source=True, question=query)
+        result = rag_chain.invoke({"query": query})
+        answer = result.get("result", "")
+        # 出典情報の構造化
+        sources = []
+        for doc in result.get("source_documents", []):
+            meta = {k: str(v) for k, v in doc.metadata.items()}
+            meta["source"] = Path(meta.get("source", "unknown")).name
+            meta.setdefault("page", "?")
+            sources.append({"metadata": meta})
+    except Exception as e:
+        answer = f"【エラー】RAG回答に失敗しました: {e}"
 
-        # 2) 生成
-        raw_result: Dict[str, Any] = rag_chain.invoke({"query": query})
+    log = {
+        "id": str(uuid4()),
+        "question": query,
+        "answer": answer,
+        "timestamp": now,
+        "sources": sources,
+    }
+    history_logs.append(log)
+    return {"answer": answer, "sources": sources}
 
-        # 3) 回答加工（重複行カット）
-        raw_answer: str = str(raw_result.get("result", ""))
-        answer: str = cleanup_answer(
-            raw_answer,
-            int(os.getenv("ANSWER_MAX_LINES", 20)),
-        )
+@router.get("/history", summary="チャット履歴取得")
+def get_history():
+    return {"logs": history_logs}
 
-        # 4) ソース整形
-        sources: List[Dict[str, Any]] = []
-        for doc in raw_result.get("source_documents", []):
-            if isinstance(doc, Document):
-                meta = {k: str(v) for k, v in doc.metadata.items()}
-                meta.setdefault("source", Path(meta.get("source", "unknown")).name)
-                meta.setdefault("page", "?")
+# ===========================
+# チャット履歴のエクスポートAPI
+# ===========================
 
-                # ★ テストが期待する "file.pdf:page" を 'ref' に追加
-                filename = Path(meta["source"]).name
-                meta["ref"] = f"{filename}:{meta['page']}"
+@router.get("/export/csv", summary="チャット履歴CSVダウンロード")
+def export_csv():
+    si = io.StringIO()
+    writer = csv.writer(si)
+    # CSVヘッダー
+    writer.writerow(["id", "question", "answer", "timestamp"])
+    # データ行
+    for log in history_logs:
+        writer.writerow([
+            log.get("id", ""),
+            log.get("question", ""),
+            log.get("answer", ""),
+            log.get("timestamp", ""),
+        ])
+    si.seek(0)
+    return StreamingResponse(
+        si,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=chat_history.csv"}
+    )
 
-                sources.append(
-                    {
-                        "page_content": str(doc.page_content),
-                        "metadata": meta,
-                    }
-                )
-            else:
-                sources.append({"data": str(doc)})
-
-        # 5) レスポンス
-        return JSONResponse(
-            content={
-                "answer": answer,
-                "sources": sources,
-            }
-        )
-
-    except Exception:  # noqa: BLE001
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+@router.get("/export/json", summary="チャット履歴JSONダウンロード")
+def export_json():
+    return JSONResponse(
+        content=history_logs,
+        headers={"Content-Disposition": "attachment; filename=chat_history.json"}
+    )
