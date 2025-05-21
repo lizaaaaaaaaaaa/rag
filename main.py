@@ -22,7 +22,7 @@ app.add_middleware(
 
 # ===== ルーター分割・インポート =====
 from api.routers import upload, chat, google_oauth, healthz  # ← healthzを追加！
-from api import users  # ← users.py（FastAPI-Users用/自作ユーザー管理用）
+#from api import users  # ← users.py（FastAPI-Users用/自作ユーザー管理用）
 
 # ===== ルーター登録 =====
 app.include_router(upload.router, prefix="", tags=["upload"])
