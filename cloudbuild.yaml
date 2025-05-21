@@ -1,5 +1,4 @@
 steps:
-  # ① Docker build（キャッシュ完全無効化！）
   - name: gcr.io/cloud-builders/docker
     args: [
       'build',
@@ -7,15 +6,11 @@ steps:
       '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99',
       '.'
     ]
-
-  # ② Docker push
   - name: gcr.io/cloud-builders/docker
     args: [
       'push',
       'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'
     ]
-
-  # ③ Cloud Run にデプロイ（全設定を明示的に上書き）
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -33,17 +28,9 @@ steps:
       - --max-instances=20
       - --concurrency=80
       - --port=8080
-
-      # 環境変数
       - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=10.19.80.4,DB_PORT=5432,DB_NAME=rag_db,DB_USER=raguser
-
-      # シークレット
       - --set-secrets=DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest
-
-      # サービスアカウント
       - --service-account=190389115361-compute@developer.gserviceaccount.com
-
-      # VPCコネクタ
       - --vpc-connector=cloudrun-to-sql
       - --vpc-egress=private-ranges-only
 
@@ -51,5 +38,5 @@ images:
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'
 
 options:
-  machineType: 'E2_HIGHCPU_8'   # ビルド用マシンタイプ
-  logging: CLOUD_LOGGING_ONLY   # ログはGCPのみ
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
