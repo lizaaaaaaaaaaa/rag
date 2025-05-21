@@ -22,10 +22,11 @@ app.add_middleware(
 )
 
 # ===== ルーター分割・インポート =====
+print("=== before healthz import ===")    # ←ここ！
 from api.routers import upload, chat, google_oauth, healthz
+print("=== after healthz import ===")     # ←ここ！
 
 # ===== ルーター登録 =====
-# prefixは衝突しないものだけにする（uploadはprefix="/upload"などでもOK）
 app.include_router(upload.router, prefix="", tags=["upload"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(google_oauth.router, prefix="/auth", tags=["auth"])
