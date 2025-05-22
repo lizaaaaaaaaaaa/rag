@@ -1,3 +1,5 @@
+# Force new build trigger on [日付]
+
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
