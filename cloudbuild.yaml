@@ -1,39 +1,17 @@
-# ===============================
-# Cloud Build 自動ビルド＆デプロイ
-# ===============================
-
-# どのGitコミット/ブランチをビルドするか指定可能
-substitutions:
-  _GIT_COMMIT_SHA: 'main'  # デフォルト: mainブランチ最新
-
 steps:
-  # 1. 指定コミット/ブランチをcheckout
-  - name: 'gcr.io/cloud-builders/git'
-    args: ['checkout', '${_GIT_COMMIT_SHA}']
-    id: 'Checkout Source'
-
-  # 2. Dockerイメージビルド
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: gcr.io/cloud-builders/docker
     args: [
       'build',
       '--no-cache',
       '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99',
       '.'
     ]
-    waitFor: ['Checkout Source']
-    id: 'Build Docker Image'
-
-  # 3. Artifact Registryへpush
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: gcr.io/cloud-builders/docker
     args: [
       'push',
       'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'
     ]
-    waitFor: ['Build Docker Image']
-    id: 'Push Docker Image'
-
-  # 4. Cloud Runにデプロイ
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
       - run
@@ -55,9 +33,6 @@ steps:
       - --service-account=190389115361-compute@developer.gserviceaccount.com
       - --vpc-connector=cloudrun-to-sql
       - --vpc-egress=private-ranges-only
-      - --update-labels=gcb-commit-sha=$COMMIT_SHA
-    waitFor: ['Push Docker Image']
-    id: 'Deploy to Cloud Run'
 
 images:
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'
