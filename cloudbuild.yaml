@@ -1,23 +1,37 @@
+substitutions:
+  _GIT_COMMIT_SHA: ""
+
 steps:
+  - name: 'gcr.io/cloud-builders/git'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Checking out specific commit: ${_GIT_COMMIT_SHA}"
+        git fetch --all
+        git checkout ${_GIT_COMMIT_SHA}
+
   - name: gcr.io/cloud-builders/docker
     args: [
       'build',
       '--no-cache',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99',
+      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:$SHORT_SHA',
       '.'
     ]
+
   - name: gcr.io/cloud-builders/docker
     args: [
       'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'
+      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:$SHORT_SHA'
     ]
+
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
       - run
       - deploy
       - rag-api
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99
+      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:$SHORT_SHA
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
@@ -33,9 +47,10 @@ steps:
       - --service-account=190389115361-compute@developer.gserviceaccount.com
       - --vpc-connector=cloudrun-to-sql
       - --vpc-egress=private-ranges-only
+      - --update-labels=gcb-commit-sha=${_GIT_COMMIT_SHA}
 
 images:
-  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'
+  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:$SHORT_SHA'
 
 options:
   machineType: 'E2_HIGHCPU_8'
