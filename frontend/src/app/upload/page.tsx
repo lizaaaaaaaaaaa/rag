@@ -16,7 +16,7 @@ export default function UploadPage() {
     if (!selectedFile) return;
     const formData = new FormData();
     formData.append("file", selectedFile);
-    const res = await fetch("http://localhost:8000/upload_pdf", {
+    const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/upload_pdf", {
       method: "POST",
       body: formData,
     });

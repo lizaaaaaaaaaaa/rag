@@ -3,7 +3,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 
-st.set_page_config(page_title="履歴ダウンロード", layout="centered")
+st.set_page_config(page_title="履歴ダウンロード", layout="wide")
 
 st.title("📥 チャット履歴ダウンロード")
 

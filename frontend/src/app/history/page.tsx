@@ -30,7 +30,7 @@ export default function HistoryPage() {
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch("http://localhost:8000/chat/history");
+      const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/history",);
       if (!res.ok) throw new Error(`API Error: ${res.status}`);
       const data = await res.json();
       setHistory(Array.isArray(data.logs) ? data.logs : []);
@@ -56,7 +56,7 @@ export default function HistoryPage() {
     if (!selectedFile) return;
     const formData = new FormData();
     formData.append("file", selectedFile);
-    const res = await fetch("http://localhost:8000/upload_pdf", {
+    const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/upload_pdf", {
       method: "POST",
       body: formData,
     });
@@ -68,7 +68,7 @@ export default function HistoryPage() {
 
   // --- エクスポートボタン ---
   const downloadCSV = async () => {
-    const res = await fetch("http://localhost:8000/chat/export/csv");
+    const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/export/csv");
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -80,7 +80,7 @@ export default function HistoryPage() {
     window.URL.revokeObjectURL(url);
   };
   const downloadJSON = async () => {
-    const res = await fetch("http://localhost:8000/chat/export/json");
+    const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/export/json");
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -134,7 +134,7 @@ export default function HistoryPage() {
                   {item.sources.map((src: Source, i: number) => (
                     <li key={i}>
                       <a
-                        href={`http://localhost:8000/pdfs/${encodeURIComponent(src.metadata.source)}`}
+                        href={`https://rag-api-190389115361.asia-northeast1.run.app/pdfs/${encodeURIComponent(src.metadata.source)}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         style={{ color: "#1976d2", textDecoration: "underline" }}

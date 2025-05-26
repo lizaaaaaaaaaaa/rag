@@ -1,7 +1,7 @@
 import streamlit as st
 from utils.auth import signup_user, create_users_table
 
-st.set_page_config(page_title="新規登録", layout="centered")
+st.set_page_config(page_title="新規登録", layout="wide")
 
 st.title("📝 新規ユーザー登録")
 

@@ -29,9 +29,10 @@ if uploaded_file is not None:
 
     st.success(f"✅ アップロード成功: {unique_filename}")
 
-    # 🧠 ベクトルストアに取り込み（エラーログ付き）
+    # 🧠 ベクトルストアに取り込み（エラーログ付き）※フィードバック付き
     try:
-        ingest_pdf_to_vectorstore(save_path)
+        with st.spinner("ベクトルストア取り込み中...⏳"):
+            ingest_pdf_to_vectorstore(save_path)
         st.success("✅ ベクトルストア取り込み完了！")
     except Exception as e:
         st.error("❌ ベクトル化に失敗しました")
@@ -44,21 +45,24 @@ if uploaded_file is not None:
 
     if question:
         try:
-            vectorstore = load_vectorstore()
+            with st.spinner("ベクトルストア読込中..."):
+                vectorstore = load_vectorstore()
         except Exception as e:
             st.error("❌ ベクトルストアの読み込みに失敗しました")
             st.code(traceback.format_exc())
             st.stop()
 
         try:
-            rag_chain = get_rag_chain(vectorstore, return_source=True, question=question)
+            with st.spinner("RAGチェーン構築中..."):
+                rag_chain = get_rag_chain(vectorstore, return_source=True, question=question)
         except Exception as e:
             st.error("❌ RAGチェーンの構築に失敗しました")
             st.code(traceback.format_exc())
             st.stop()
 
         try:
-            result = rag_chain.invoke({"question": question})
+            with st.spinner("回答生成中..."):
+                result = rag_chain.invoke({"question": question})
             st.write(f"📘 回答: {result.get('result', '❌ 回答が見つかりませんでした')}")
             if result.get("source_documents"):
                 st.write("📎 出典:")
@@ -69,4 +73,3 @@ if uploaded_file is not None:
         except Exception as e:
             st.error("❌ 回答生成中にエラーが発生しました")
             st.code(traceback.format_exc())
-

@@ -30,7 +30,7 @@ export default function ChatPage() {
   // 履歴取得
   const fetchHistory = async () => {
     try {
-      const res = await fetch("http://localhost:8000/chat/history");
+      const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat",);
       if (!res.ok) throw new Error(`API Error: ${res.status}`);
       const data = await res.json();
       setHistory(Array.isArray(data.logs) ? data.logs : []);
@@ -51,7 +51,7 @@ export default function ChatPage() {
     setSources([]);
     setError(null);
     try {
-      const res = await fetch("http://localhost:8000/chat", {
+      const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),
@@ -92,7 +92,7 @@ export default function ChatPage() {
                       {item.sources.map((src, i) => (
                         <li key={i}>
                           <a
-                            href={`http://localhost:8000/pdfs/${encodeURIComponent(src.metadata.source)}`}
+                            href={`https://rag-api-190389115361.asia-northeast1.run.app/pdfs/${encodeURIComponent(src.metadata.source)}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             style={{ color: "#1976d2", textDecoration: "underline" }}
@@ -148,7 +148,7 @@ export default function ChatPage() {
                       {sources.map((src, i) => (
                         <li key={i}>
                           <a
-                            href={`http://localhost:8000/pdfs/${encodeURIComponent(src.metadata.source)}`}
+                            href={`https://rag-api-190389115361.asia-northeast1.run.app/pdfs/${encodeURIComponent(src.metadata.source)}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             style={{ color: "#1976d2", textDecoration: "underline" }}
