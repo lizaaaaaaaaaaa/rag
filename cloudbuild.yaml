@@ -1,17 +1,40 @@
 steps:
-  - name: gcr.io/cloud-builders/docker
+  # 1. APIサーバー用イメージをビルド
+  - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
       '--no-cache',
       '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99',
+      '-f', 'Dockerfile.api',
       '.'
     ]
-  - name: gcr.io/cloud-builders/docker
+
+  # 2. APIサーバーイメージをArtifact Registryにプッシュ
+  - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
       'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'
     ]
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+
+  # 3. フロントエンド用イメージをビルド
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '--no-cache',
+      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.99',
+      '-f', 'Dockerfile.front',
+      '.'
+    ]
+
+  # 4. フロントエンドイメージをArtifact Registryにプッシュ
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'push',
+      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.99'
+    ]
+
+  # 5. APIサーバーをCloud Runにデプロイ
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - run
@@ -34,8 +57,30 @@ steps:
       - --vpc-connector=cloudrun-to-sql
       - --vpc-egress=private-ranges-only
 
+  # 6. フロントエンドをCloud Runにデプロイ
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - rag-frontend
+      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.99
+      - --region=asia-northeast1
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=2Gi
+      - --cpu=2
+      - --timeout=300s
+      - --min-instances=1
+      - --max-instances=10
+      - --concurrency=80
+      - --port=8080
+      # 必要に応じてfront用の環境変数やサービスアカウントもセット
+      # 例: - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app
+
 images:
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'
+  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.99'
 
 options:
   machineType: 'E2_HIGHCPU_8'
