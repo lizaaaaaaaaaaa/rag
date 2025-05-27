@@ -75,8 +75,7 @@ steps:
       - --max-instances=10
       - --concurrency=80
       - --port=8080
-      # 必要に応じてfront用の環境変数やサービスアカウントもセット
-      # 例: - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app
+      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app
 
 images:
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.99'
