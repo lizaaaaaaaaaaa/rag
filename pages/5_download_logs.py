@@ -1,11 +1,9 @@
 import streamlit as st
+st.set_page_config(page_title="履歴ダウンロード", page_icon="🗒️", layout="wide")  # ←import直後
+
 import sqlite3
 import pandas as pd
 from datetime import datetime
-
-st.set_page_config(page_title="履歴ダウンロード", layout="wide")
-
-st.title("📥 チャット履歴ダウンロード")
 
 DB_FILE = "chat_logs.db"
 
@@ -13,6 +11,12 @@ DB_FILE = "chat_logs.db"
 if "user" not in st.session_state:
     st.warning("ログインしてください。")
     st.stop()
+
+# === ページタイトル・説明 ===
+st.title("🗒️ チャット履歴ダウンロード")
+st.write("""
+このページでは、自分（または管理者の場合は全ユーザー）のチャット履歴をCSVまたはJSON形式でダウンロードできます。
+""")
 
 username = st.session_state["user"]
 is_admin = username == "admin"  # 管理者判定
@@ -34,10 +38,13 @@ try:
     rows = cursor.fetchall()
     conn.close()
 
-    if rows:
-        df = pd.DataFrame(rows, columns=["ID", "日時", "ユーザー名", "ロール", "質問", "回答", "出典"])
+    # 必要ならカラム名はDBの設計に合わせて修正
+    colnames = [desc[0] for desc in cursor.description] if rows else []
 
-        # 📄 ファイル名を自動生成（例: chat_logs_admin_20250426_1430.csv）
+    if rows:
+        df = pd.DataFrame(rows, columns=colnames)
+
+        # 📄 ファイル名を自動生成
         now_str = datetime.now().strftime("%Y%m%d_%H%M")
         filename_base = f"chat_logs_{username}_{now_str}"
 
@@ -51,10 +58,10 @@ try:
         )
 
         # JSONダウンロードボタン
-        json = df.to_json(orient="records", force_ascii=False, indent=2)
+        json_str = df.to_json(orient="records", force_ascii=False, indent=2)
         st.download_button(
             label="📥 JSONでダウンロード",
-            data=json,
+            data=json_str,
             file_name=f"{filename_base}.json",
             mime="application/json"
         )

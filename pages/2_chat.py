@@ -1,14 +1,34 @@
 import streamlit as st
-from api import post_chat
+st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
+
+import requests
 import psycopg2
 import os
 from datetime import datetime
 
-st.set_page_config(page_title="チャット", layout="wide")
-st.title("チャット")
+# --- RAG APIのエンドポイント ---
+API_URL = os.environ.get("RAG_API_URL", "http://localhost:8000/chat")  # 必要なら環境変数に
+
+def post_chat(user_input, username):
+    payload = {"question": user_input}
+    try:
+        r = requests.post(API_URL, json=payload, timeout=30)
+        if r.status_code == 200:
+            res = r.json()
+            # FastAPI側で "answer" or "result" 返却に対応
+            return {"result": res.get("answer") or res.get("result"), "sources": res.get("sources", [])}
+        else:
+            return {"result": f"エラー: {r.status_code} / {r.text}"}
+    except Exception as e:
+        return {"result": f"通信エラー: {e}"}
+
+# --- 未ログインガード ---
+if "user" not in st.session_state:
+    st.warning("ログインしてください。")
+    st.stop()
 
 # DB接続情報（環境変数から取得）
-db_host = os.environ.get("DB_HOST", "127.0.0.1")
+db_host = os.environ.get("DB_HOST", "10.19.80.4")
 db_port = int(os.environ.get("DB_PORT", "5432"))
 db_name = os.environ.get("DB_NAME", "rag_db")
 db_user = os.environ.get("DB_USER", "raguser")
@@ -18,11 +38,13 @@ db_password = os.environ.get("DB_PASSWORD", "yourpassword")
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
-# ログインユーザー名取得（未ログインなら「local-user」などにする）
+# ログインユーザー名取得
 username = st.session_state.get("user", "local-user")
 role = st.session_state.get("role", "user")
 
-user_input = st.text_input("メッセージを入力", "")
+st.title("💬 チャット")
+
+user_input = st.text_input("メッセージを入力してください", "")
 
 if st.button("送信") and user_input:
     # ↓API経由のRAG応答
@@ -49,5 +71,5 @@ if st.button("送信") and user_input:
         st.error(f"DB保存エラー: {e}")
 
 # チャット履歴の表示
-for role, msg in st.session_state["messages"]:
-    st.markdown(f"**{role}**: {msg}")
+for r, msg in st.session_state["messages"]:
+    st.markdown(f"**{r}**: {msg}")

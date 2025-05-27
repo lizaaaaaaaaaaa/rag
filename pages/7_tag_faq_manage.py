@@ -1,5 +1,6 @@
-# pages/7_tag_faq_manage.py
 import streamlit as st
+st.set_page_config(page_title="FAQ・タグ管理", page_icon="🏷️", layout="wide")  # ←import直後！
+
 import sqlite3
 import pandas as pd
 
@@ -7,13 +8,23 @@ DB_FILE = "chat_logs.db"
 FAQ_TABLE = "faqs"
 TAG_TABLE = "tags"
 
-st.set_page_config(page_title="FAQ・タグ管理", layout="wide")
-st.title("🗂️ FAQ・タグ 管理画面")
+# === ページタイトル・説明 ===
+st.title("🏷️ FAQ・タグ管理ページ")
+st.write("""
+このページでは、FAQ（よくある質問）とタグの追加・管理ができます。
+FAQやタグを登録するとチャットやダッシュボードで活用できます。
+""")
+
+# --- DB接続 ---
+conn = sqlite3.connect(DB_FILE)
 
 # FAQ表示・追加
-st.subheader("FAQ管理")
-conn = sqlite3.connect(DB_FILE)
-faq_df = pd.read_sql_query(f"SELECT * FROM {FAQ_TABLE}", conn) if FAQ_TABLE in pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table'", conn)['name'].tolist() else pd.DataFrame(columns=["id","question","answer"])
+st.subheader("❓ FAQ管理")
+table_list = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table'", conn)['name'].tolist()
+if FAQ_TABLE in table_list:
+    faq_df = pd.read_sql_query(f"SELECT * FROM {FAQ_TABLE}", conn)
+else:
+    faq_df = pd.DataFrame(columns=["id", "question", "answer"])
 st.dataframe(faq_df)
 
 with st.form("add_faq"):
@@ -27,8 +38,11 @@ with st.form("add_faq"):
         st.experimental_rerun()
 
 # タグ表示・追加
-st.subheader("タグ管理")
-tag_df = pd.read_sql_query(f"SELECT * FROM {TAG_TABLE}", conn) if TAG_TABLE in pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table'", conn)['name'].tolist() else pd.DataFrame(columns=["id","tag"])
+st.subheader("🏷️ タグ管理")
+if TAG_TABLE in table_list:
+    tag_df = pd.read_sql_query(f"SELECT * FROM {TAG_TABLE}", conn)
+else:
+    tag_df = pd.DataFrame(columns=["id", "tag"])
 st.dataframe(tag_df)
 
 with st.form("add_tag"):

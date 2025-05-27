@@ -1,11 +1,17 @@
 import streamlit as st
+st.set_page_config(page_title="タグ・FAQ編集", page_icon="✏️", layout="wide")  # ←import直後
+
 import pandas as pd
 import sqlite3
 
 DB_FILE = "chat_logs.db"  # 必要に応じて変更
 
-st.set_page_config(page_title="タグ・FAQ編集", layout="wide")
-st.title("🏷️ タグ／FAQナレッジ管理（管理者専用）")
+# === ページタイトル・説明 ===
+st.title("✏️ タグ・FAQ編集ページ")
+st.write("""
+このページでは管理者がタグやFAQナレッジを追加・編集・削除できます。  
+（※現在はchat_logsテーブルを直接操作しています。）
+""")
 
 # 🔒 管理者判定（管理者のみ操作できる）
 user = st.session_state.get("user", "")
@@ -18,11 +24,13 @@ cursor = conn.cursor()
 
 # タグ一覧を取得
 try:
-    tag_df = pd.read_sql_query("SELECT DISTINCT タグ FROM chat_logs WHERE タグ IS NOT NULL AND タグ != ''", conn)
+    tag_df = pd.read_sql_query(
+        "SELECT DISTINCT タグ FROM chat_logs WHERE タグ IS NOT NULL AND タグ != ''", conn
+    )
 except Exception:
     tag_df = pd.DataFrame(columns=["タグ"])
 
-st.subheader("【タグ管理】")
+st.subheader("🏷️ タグ管理")
 st.write("現在のタグ一覧：")
 st.dataframe(tag_df)
 
@@ -49,11 +57,10 @@ if not tag_df.empty:
         st.success(f"タグ「{del_tag}」を全データから削除しました。")
         st.experimental_rerun()
 
-# --- FAQ管理（仮） ---
-st.subheader("【FAQナレッジ管理（サンプル）】")
-st.write("ここにFAQ編集UIやFAQテーブル連携を拡張できます。")
+# --- FAQ管理（サンプル） ---
+st.subheader("❓ FAQナレッジ管理（サンプル）")
+st.write("ここでFAQ（質問・回答・タグ）を追加できます。")
 
-# FAQ編集はchat_logsに「質問・回答・タグ」形式で直接追加する or 別テーブル設計もOK
 with st.form(key="add_faq_form"):
     faq_q = st.text_area("FAQ質問")
     faq_a = st.text_area("FAQ回答")

@@ -2,7 +2,7 @@ import os
 import sqlite3
 import bcrypt
 
-# ========== ローカル用（SQLite: ユーザー名＋パスワード認証） ==========
+# ========== ローカル用（SQLite: ユーザー名＋パスワード認証＋role管理） ==========
 DB_PATH = "users.db"
 
 def create_users_table():
@@ -12,18 +12,20 @@ def create_users_table():
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE,
-            password TEXT
+            password TEXT,
+            role TEXT
         )
     """)
     conn.commit()
     conn.close()
 
-def signup_user(username, password):
+def signup_user(username, password, role="user"):
+    create_users_table()
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     hashed_pw = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
     try:
-        cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, hashed_pw))
+        cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", (username, hashed_pw, role))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -32,6 +34,7 @@ def signup_user(username, password):
         conn.close()
 
 def login_user(username, password):
+    create_users_table()
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT password FROM users WHERE username=?", (username,))
@@ -43,8 +46,16 @@ def login_user(username, password):
         return False
 
 def get_user_role(username):
-    # ローカル認証ユーザーは一律 "user"
-    return "user"
+    create_users_table()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT role FROM users WHERE username = ?", (username,))
+    result = cursor.fetchone()
+    conn.close()
+    if result and result[0]:
+        return result[0]
+    else:
+        return "user"
 
 def get_current_user():
     # ローカル用の仮ユーザーID返却

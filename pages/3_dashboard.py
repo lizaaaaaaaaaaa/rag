@@ -1,10 +1,9 @@
 import streamlit as st
+st.set_page_config(page_title="ダッシュボード", page_icon="📊", layout="wide")  # ←import直後
+
 import psycopg2
 import pandas as pd
 import os
-
-st.set_page_config(page_title="ダッシュボード", layout="wide")
-st.title("📊 チャット履歴ダッシュボード（出典付き）")
 
 # 🔒 ログインチェック
 if "user" not in st.session_state:
@@ -14,8 +13,15 @@ if "user" not in st.session_state:
 username = st.session_state["user"]
 is_admin = username == "admin"  # 管理者判定
 
+# === ページタイトルと説明 ===
+st.title("📊 チャット履歴ダッシュボード")
+st.write("""
+ここでは自分のチャット履歴（管理者は全ユーザー分）が確認できます。  
+タグや顧客で絞り込みも可能です。エクスポートボタンからCSV/JSON形式でダウンロードもできます。
+""")
+
 # === DB接続設定（環境変数から取得／なければデフォルト値） ===
-db_host = os.environ.get("DB_HOST", "127.0.0.1")
+db_host = os.environ.get("DB_HOST", "10.19.80.4")
 db_port = int(os.environ.get("DB_PORT", "5432"))
 db_name = os.environ.get("DB_NAME", "rag_db")
 db_user = os.environ.get("DB_USER", "raguser")
@@ -67,7 +73,7 @@ try:
         if filter_cols:
             st.info("絞り込み中: " + " / ".join(filter_cols))
 
-        # --- ページネーションを追加（ここが新要素） ---
+        # --- ページネーションを追加 ---
         PAGE_SIZE = 20
         total = len(df)
         if total > 0:

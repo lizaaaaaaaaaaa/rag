@@ -1,17 +1,26 @@
+import streamlit as st
+st.set_page_config(page_title="アップロード & RAG質問", page_icon="📤", layout="wide")  # ←import直後
+
 import os
 import uuid
-import streamlit as st
 import traceback
 from google.cloud import storage
 from rag.ingested_text import ingest_pdf_to_vectorstore, load_vectorstore, get_rag_chain
 
-# --- ここから未ログインガード ---
+# --- 未ログインガード ---
 if "user" not in st.session_state:
     st.warning("ログインしてください。")
     st.stop()
 # --- ここまで ---
 
-# GCSバケット名は環境変数優先（なければデフォルト）
+# === ページタイトル・説明 ===
+st.title("📤 PDFアップロード & 💬 RAG質問")
+st.write("""
+このページでは、PDFファイルをアップロードして、その内容に対してRAG（検索拡張生成）質問ができます。
+アップロードしたPDFは自動的にGCSへ保存され、ベクトルストアに取り込まれます。
+""")
+
+# GCSバケット名（環境変数優先／なければデフォルト）
 GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "run-sources-rag-cloud-project-asia-northeast1")
 
 # GCSアップロード関数
@@ -21,10 +30,6 @@ def upload_to_gcs(file, bucket_name, blob_name):
     blob = bucket.blob(blob_name)
     blob.upload_from_file(file, rewind=True)
     return f"gs://{bucket_name}/{blob_name}"
-
-st.set_page_config(page_title="アップロード & RAG質問", layout="wide")
-st.title("📤 PDFアップロード & 💬 RAG質問")
-st.write("アップロードしたPDFの内容から質問できます")
 
 # ファイルアップロード
 uploaded_file = st.file_uploader("PDFファイルを選択", type=["pdf"])
@@ -47,10 +52,7 @@ if uploaded_file is not None:
     # GCSへのアップロードが完了したらベクトルストアに取り込み
     try:
         with st.spinner("ベクトルストア取り込み中...⏳"):
-            # GCSから一時ファイルとしてダウンロードしてingestする方法もOK
-            # ここは ingest_pdf_to_vectorstore(blob_name or gcs_uri) に応じて修正
-            # ingest_pdf_to_vectorstore関数がGCS対応していない場合は一時DLも要検討
-            ingest_pdf_to_vectorstore(blob_name)  # ←必要に応じてパスを修正
+            ingest_pdf_to_vectorstore(blob_name)  # 必要に応じてパス修正
         st.success("✅ ベクトルストア取り込み完了！")
     except Exception as e:
         st.error("❌ ベクトル化に失敗しました")

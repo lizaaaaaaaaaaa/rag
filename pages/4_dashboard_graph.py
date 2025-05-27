@@ -1,13 +1,25 @@
 import streamlit as st
+st.set_page_config(page_title="チャット履歴グラフ可視化", page_icon="📈", layout="wide")  # ←import直後！
+
 import pandas as pd
 import sqlite3
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime
 
+# --- ログインチェック ---
+if "user" not in st.session_state:
+    st.warning("ログインしてください。")
+    st.stop()
+
+# === ページタイトル・説明 ===
+st.title("📈 チャット履歴グラフ可視化")
+st.write("""
+このページでは、チャット履歴をグラフで可視化できます。  
+タグ・顧客・期間ごとにフィルタし、日別推移・タグ別・ユーザー×タグのヒートマップを確認できます。
+""")
+
 DB_FILE = "chat_logs.db"
-st.set_page_config(page_title="チャット履歴グラフ可視化", layout="wide")
-st.title("📈 チャット履歴グラフ可視化（テスト版）")
 
 # 管理者モード
 is_admin = st.checkbox("管理者モード：全履歴対象", value=False)

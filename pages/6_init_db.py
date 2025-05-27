@@ -1,12 +1,17 @@
 import streamlit as st
+st.set_page_config(page_title="DB初期化", page_icon="🛠️", layout="wide")  # ←import直後
+
 import sqlite3
 import os
 
-st.set_page_config(page_title="DB初期化", layout="wide")
-
-st.title("🧹 chat_logs テーブルの初期化")
-
 DB_FILE = "chat_logs.db"
+
+# === ページタイトル・説明 ===
+st.title("🛠️ チャットログDB初期化")
+st.write("""
+このページではチャット履歴用データベース（chat_logs.db）を初期化できます。  
+すでにテーブルが存在する場合は再初期化できません。
+""")
 
 # テーブルがすでに存在するか確認する関数
 def check_table_exists():
