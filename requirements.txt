@@ -34,3 +34,5 @@ google-cloud-firestore==2.20.2
 python-multipart
 
 psycopg2-binary
+
+google-cloud-storage
