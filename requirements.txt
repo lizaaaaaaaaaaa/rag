@@ -14,7 +14,7 @@ langsmith==0.1.21
 # ───── LLM Stack ─────
 transformers==4.31.0
 tokenizers==0.13.3
-huggingface_hub==0.19.4
+huggingface_hub==0.22.2
 faiss-cpu==1.11.0
 sentence-transformers==2.2.2
 accelerate==0.27.2
