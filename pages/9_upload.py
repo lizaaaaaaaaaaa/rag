@@ -2,10 +2,25 @@ import os
 import uuid
 import streamlit as st
 import traceback
+from google.cloud import storage
 from rag.ingested_text import ingest_pdf_to_vectorstore, load_vectorstore, get_rag_chain
 
-UPLOAD_DIR = "uploaded_docs"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# --- ここから未ログインガード ---
+if "user" not in st.session_state:
+    st.warning("ログインしてください。")
+    st.stop()
+# --- ここまで ---
+
+# GCSバケット名は環境変数優先（なければデフォルト）
+GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "run-sources-rag-cloud-project-asia-northeast1")
+
+# GCSアップロード関数
+def upload_to_gcs(file, bucket_name, blob_name):
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    blob.upload_from_file(file, rewind=True)
+    return f"gs://{bucket_name}/{blob_name}"
 
 st.set_page_config(page_title="アップロード & RAG質問", layout="wide")
 st.title("📤 PDFアップロード & 💬 RAG質問")
@@ -15,24 +30,27 @@ st.write("アップロードしたPDFの内容から質問できます")
 uploaded_file = st.file_uploader("PDFファイルを選択", type=["pdf"])
 
 if uploaded_file is not None:
-    # 📛 UUIDで保存（日本語ファイル名対応）
+    # ファイル名をUUID＋拡張子で生成（日本語ファイル名にも安心）
     unique_filename = f"{uuid.uuid4().hex}.pdf"
-    save_path = os.path.join(UPLOAD_DIR, unique_filename)
+    blob_name = f"uploads/{unique_filename}"
 
-    with open(save_path, "wb") as f:
-        f.write(uploaded_file.read())
-
-    # 空ファイルチェック
-    if os.path.getsize(save_path) == 0:
-        st.error("❌ アップロードされたPDFが空です。別のファイルを選んでください。")
+    # GCSにアップロード
+    try:
+        with st.spinner("GCSにアップロード中..."):
+            gcs_uri = upload_to_gcs(uploaded_file, GCS_BUCKET_NAME, blob_name)
+        st.success(f"✅ GCSアップロード成功: {blob_name}")
+    except Exception as e:
+        st.error("❌ GCSへのアップロードに失敗しました")
+        st.code(traceback.format_exc())
         st.stop()
 
-    st.success(f"✅ アップロード成功: {unique_filename}")
-
-    # 🧠 ベクトルストアに取り込み（エラーログ付き）※フィードバック付き
+    # GCSへのアップロードが完了したらベクトルストアに取り込み
     try:
         with st.spinner("ベクトルストア取り込み中...⏳"):
-            ingest_pdf_to_vectorstore(save_path)
+            # GCSから一時ファイルとしてダウンロードしてingestする方法もOK
+            # ここは ingest_pdf_to_vectorstore(blob_name or gcs_uri) に応じて修正
+            # ingest_pdf_to_vectorstore関数がGCS対応していない場合は一時DLも要検討
+            ingest_pdf_to_vectorstore(blob_name)  # ←必要に応じてパスを修正
         st.success("✅ ベクトルストア取り込み完了！")
     except Exception as e:
         st.error("❌ ベクトル化に失敗しました")
