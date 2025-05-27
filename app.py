@@ -1,3 +1,10 @@
+import os
+
+# ローカル環境だけ .env を読み込み
+if os.getenv("ENV") != "production":
+    from dotenv import load_dotenv
+    load_dotenv()
+
 import streamlit as st
 from utils.auth import get_user_role, create_users_table
 
