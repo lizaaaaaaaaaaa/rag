@@ -1,13 +1,10 @@
 # api.py
 
 import os
-from dotenv import load_dotenv
 import requests
 
-# ローカル時のみ .env を読む
-load_dotenv()
-
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+# Cloud Run本番環境なら --set-env-vars でAPI_URLを注入するので .env不要
+API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
 def post_chat(question, user):
     """チャットAPI（/chat）にPOSTリクエストして返却"""

@@ -68,11 +68,11 @@ steps:
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
-      - --memory=2Gi
-      - --cpu=2
+      - --memory=4Gi
+      - --cpu=4
       - --timeout=300s
       - --min-instances=1
-      - --max-instances=10
+      - --max-instances=30
       - --concurrency=80
       - --port=8080
       - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app

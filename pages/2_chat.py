@@ -1,5 +1,5 @@
 import streamlit as st
-from api import post_chat  # ← 追加ポイント！
+from api import post_chat
 import psycopg2
 import os
 from datetime import datetime
@@ -25,9 +25,9 @@ role = st.session_state.get("role", "user")
 user_input = st.text_input("メッセージを入力", "")
 
 if st.button("送信") and user_input:
-    # ↓ここをAPI経由のRAG応答に置き換え！
+    # ↓API経由のRAG応答
     api_response = post_chat(user_input, username)
-    ai_response = api_response.get("result") or str(api_response)  # resultキーが無い場合も表示
+    ai_response = api_response.get("result") or str(api_response)
 
     # 履歴に追加
     st.session_state["messages"].append(("ユーザー", user_input))
