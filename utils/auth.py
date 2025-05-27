@@ -1,7 +1,8 @@
-# ✅ 新しい構成：utils/auth.py（共通関数のみを残す）
+import os
 import sqlite3
 import bcrypt
 
+# ========== ローカル用（SQLite: ユーザー名＋パスワード認証） ==========
 DB_PATH = "users.db"
 
 def create_users_table():
@@ -36,16 +37,58 @@ def login_user(username, password):
     cursor.execute("SELECT password FROM users WHERE username=?", (username,))
     result = cursor.fetchone()
     conn.close()
-
     if result and bcrypt.checkpw(password.encode(), result[0]):
         return True
     else:
         return False
 
 def get_user_role(username):
+    # ローカル認証ユーザーは一律 "user"
     return "user"
 
+def get_current_user():
+    # ローカル用の仮ユーザーID返却
+    return "local-user"
+
+# ========== Google OAuth + Cloud SQL(PostgreSQL)対応 ==========
+
+def get_or_create_user(email):
+    """
+    Cloud SQL (PostgreSQL) 用。メールアドレスでユーザー管理。
+    - 存在すればそのまま返す
+    - なければ role を判定してINSERTして返す
+    """
+    import psycopg2
+    conn = psycopg2.connect(
+        dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT")
+    )
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            email TEXT PRIMARY KEY,
+            role TEXT
+        )
+    """)
+    c.execute("SELECT email, role FROM users WHERE email=%s", (email,))
+    row = c.fetchone()
+    if row:
+        conn.close()
+        return {"email": row[0], "role": row[1]}
+    else:
+        role = "admin" if email.endswith("@admin.com") else "user"
+        c.execute("INSERT INTO users (email, role) VALUES (%s, %s)", (email, role))
+        conn.commit()
+        conn.close()
+        return {"email": email, "role": role}
+
 def verify_google_token(id_token_str, client_id):
+    """
+    Google IDトークン検証。正しければemailアドレスを返す。
+    """
     from google.oauth2 import id_token
     from google.auth.transport import requests as google_requests
     try:
@@ -53,6 +96,3 @@ def verify_google_token(id_token_str, client_id):
         return id_info.get("email")
     except Exception:
         return None
-def get_current_user():
-    # ローカル用の仮ユーザーID返却
-    return "local-user"
