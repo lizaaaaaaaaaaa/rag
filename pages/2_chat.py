@@ -6,7 +6,6 @@ from datetime import datetime
 st.set_page_config(page_title="チャット", layout="wide")
 st.title("チャット")
 
-
 # DB接続情報（環境変数から取得）
 db_host = os.environ.get("DB_HOST", "127.0.0.1")
 db_port = int(os.environ.get("DB_PORT", "5432"))

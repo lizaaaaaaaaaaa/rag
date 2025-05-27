@@ -18,3 +18,4 @@ if st.button("登録する"):
 
 if st.button("ログインページへ戻る"):
     st.switch_page("0_login.py")
+
