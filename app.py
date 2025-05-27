@@ -8,7 +8,7 @@ if os.getenv("ENV") != "production":
     load_dotenv()
 
 st.set_page_config(page_title="ログイン | RAG Fullstack App", layout="wide")
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+API_URL = os.getenv("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
 
 # 1. 未ログイン時：Googleログイン案内
 if "user" not in st.session_state:
