@@ -1,0 +1,12 @@
+# direnv
+.envrc
+
+# IDEs
+.idea/
+.vscode/
+
+/cloud-sql-proxy
+/cloud-sql-proxy.exe
+
+/key.json
+/logs/
