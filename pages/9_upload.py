@@ -1,31 +1,27 @@
 import streamlit as st
-st.set_page_config(page_title="アップロード & RAG質問", page_icon="📤", layout="wide")
-
 import os
 import uuid
 import traceback
 from google.cloud import storage
 from rag.ingested_text import ingest_pdf_to_vectorstore, load_vectorstore, get_rag_chain
 
+st.set_page_config(page_title="アップロード & RAG質問", page_icon="📤", layout="wide")
+
 # --- 未ログインガード ---
 if "user" not in st.session_state:
     st.warning("ログインしてください。")
     st.stop()
-# --- ここまで ---
 
 st.title("📤 PDFアップロード & 💬 RAG質問")
 st.write("""
-このページでは、PDFファイルをアップロードして、その内容に対してRAG（検索拡張生成）質問ができます。
+このページでは、PDFファイルをアップロードして、その内容に対してRAG（検索拡張生成）質問ができます。  
 アップロードしたPDFは自動的にGCSへ保存され、ベクトルストアに取り込まれます。
 """)
 
 GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "run-sources-rag-cloud-project-asia-northeast1")
-
-# === 必要なら "uploads" ディレクトリを作成 ===
 os.makedirs("uploads", exist_ok=True)
 
 def save_upload_to_local(uploaded_file, save_dir="uploads"):
-    # 拡張子安全化（例: .pdf 以外アップロード不可にしてる前提）
     unique_filename = f"{uuid.uuid4().hex}.pdf"
     save_path = os.path.join(save_dir, unique_filename)
     with open(save_path, "wb") as f:
@@ -40,40 +36,66 @@ def upload_to_gcs(local_path, bucket_name, blob_name):
         blob.upload_from_file(f, rewind=True)
     return f"gs://{bucket_name}/{blob_name}"
 
-uploaded_file = st.file_uploader("PDFファイルを選択", type=["pdf"])
+# === セッションステート管理 ===
+if "upload_status" not in st.session_state:
+    st.session_state.upload_status = "init"   # init, uploaded, ingesting, done
+if "local_path" not in st.session_state:
+    st.session_state.local_path = ""
+if "unique_filename" not in st.session_state:
+    st.session_state.unique_filename = ""
+if "blob_name" not in st.session_state:
+    st.session_state.blob_name = ""
 
-if uploaded_file is not None:
-    # 1. ローカル保存
-    try:
-        local_path, unique_filename = save_upload_to_local(uploaded_file)
-        st.success(f"✅ ローカル保存成功: {local_path}")
-    except Exception as e:
-        st.error("❌ ローカル保存に失敗しました")
-        st.code(traceback.format_exc())
-        st.stop()
+# === 1. アップロードフェーズ ===
+if st.session_state.upload_status == "init":
+    uploaded_file = st.file_uploader("PDFファイルを選択", type=["pdf"])
+    if uploaded_file is not None:
+        try:
+            # 1. ローカル保存
+            local_path, unique_filename = save_upload_to_local(uploaded_file)
+            st.session_state.local_path = local_path
+            st.session_state.unique_filename = unique_filename
+            st.success(f"✅ ローカル保存成功: {local_path}")
+            # 2. GCSアップロード
+            blob_name = f"uploads/{unique_filename}"
+            upload_to_gcs(local_path, GCS_BUCKET_NAME, blob_name)
+            st.session_state.blob_name = blob_name
+            st.success(f"✅ GCSアップロード成功: {blob_name}")
+            st.session_state.upload_status = "uploaded"
+            st.rerun()
+        except Exception as e:
+            st.error("❌ アップロード失敗")
+            st.code(traceback.format_exc())
 
-    # 2. GCSにアップロード
-    blob_name = f"uploads/{unique_filename}"
-    try:
-        with st.spinner("GCSにアップロード中..."):
-            gcs_uri = upload_to_gcs(local_path, GCS_BUCKET_NAME, blob_name)
-        st.success(f"✅ GCSアップロード成功: {blob_name}")
-    except Exception as e:
-        st.error("❌ GCSへのアップロードに失敗しました")
-        st.code(traceback.format_exc())
-        st.stop()
+# === 2. 取り込み開始フェーズ ===
+elif st.session_state.upload_status == "uploaded":
+    st.success("アップロード完了！")
+    if st.button("このPDFをベクトルストアに取り込む"):
+        st.session_state.upload_status = "ingesting"
+        st.rerun()
+    st.info("※ベクトルストアへの取り込みには数秒～数十秒かかる場合があります")
 
-    # 3. ベクトルストアに取り込み（ローカルパスで！）
+# === 3. 取り込み中フェーズ ===
+elif st.session_state.upload_status == "ingesting":
     try:
-        with st.spinner("ベクトルストア取り込み中...⏳"):
-            ingest_pdf_to_vectorstore(local_path)  # ここは「ローカルパス」
+        with st.spinner("ベクトルストアに取り込み中...⏳"):
+            ingest_pdf_to_vectorstore(st.session_state.local_path)
         st.success("✅ ベクトルストア取り込み完了！")
+        st.session_state.upload_status = "done"
+        st.rerun()
     except Exception as e:
         st.error("❌ ベクトル化に失敗しました")
         st.code(traceback.format_exc())
-        st.stop()
+        st.session_state.upload_status = "uploaded"  # 戻す
 
-    # 4. 💬 質問UI
+# === 4. チャットフェーズ ===
+elif st.session_state.upload_status == "done":
+    st.success("取り込み完了！このPDFの内容で質問できます")
+    if st.button("最初からやり直す"):
+        for key in ["upload_status", "local_path", "unique_filename", "blob_name"]:
+            st.session_state.pop(key, None)
+        st.rerun()
+
     st.subheader("💬 質問してみよう！")
     question = st.text_input("アップロードしたPDFの内容について質問")
 

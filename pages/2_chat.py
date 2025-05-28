@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 
 # --- RAG APIのエンドポイント ---
-API_URL = os.environ.get("RAG_API_URL", "http://localhost:8000/chat")  # 必要なら環境変数に
+API_URL = os.environ.get("https://rag-api-190389115361.asia-northeast1.run.app")  # 必要なら環境変数に
 
 def post_chat(user_input, username):
     payload = {"question": user_input}

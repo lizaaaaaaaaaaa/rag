@@ -1,9 +1,10 @@
 import streamlit as st
-st.set_page_config(page_title="ダッシュボード", page_icon="📊", layout="wide")  # ←import直後
-
 import psycopg2
 import pandas as pd
 import os
+from datetime import datetime, timedelta
+
+st.set_page_config(page_title="ダッシュボード", page_icon="📊", layout="wide")
 
 # 🔒 ログインチェック
 if "user" not in st.session_state:
@@ -11,7 +12,7 @@ if "user" not in st.session_state:
     st.stop()
 
 username = st.session_state["user"]
-is_admin = username == "admin"  # 管理者判定
+is_admin = username == "admin"
 
 # === ページタイトルと説明 ===
 st.title("📊 チャット履歴ダッシュボード")
@@ -20,85 +21,96 @@ st.write("""
 タグや顧客で絞り込みも可能です。エクスポートボタンからCSV/JSON形式でダウンロードもできます。
 """)
 
-# === DB接続設定（環境変数から取得／なければデフォルト値） ===
+# === DB接続設定 ===
 db_host = os.environ.get("DB_HOST", "10.19.80.4")
 db_port = int(os.environ.get("DB_PORT", "5432"))
 db_name = os.environ.get("DB_NAME", "rag_db")
 db_user = os.environ.get("DB_USER", "raguser")
-db_password = os.environ.get("DB_PASSWORD", "yourpassword")  # 必ず環境変数で本番値を上書きすること
+db_password = os.environ.get("DB_PASSWORD", "yourpassword")  # 環境変数推奨
+
+# === フィルタ用値取得 ===
+conn = psycopg2.connect(
+    host=db_host,
+    port=db_port,
+    dbname=db_name,
+    user=db_user,
+    password=db_password
+)
+cursor = conn.cursor()
+
+# タグリスト
+cursor.execute("SELECT DISTINCT タグ FROM chat_logs WHERE タグ IS NOT NULL ORDER BY タグ")
+tag_list = [row[0] for row in cursor.fetchall()]
+tag_list_disp = ["全て"] + tag_list
+
+# 顧客リスト
+cursor.execute("SELECT DISTINCT 顧客 FROM chat_logs WHERE 顧客 IS NOT NULL ORDER BY 顧客")
+customer_list = [row[0] for row in cursor.fetchall()]
+customer_list_disp = ["全て"] + customer_list
+
+# 期間フィルタ（初期値: 直近30日）
+today = datetime.today().date()
+default_from = today - timedelta(days=30)
+date_from = st.date_input("表示開始日", default_from)
+date_to = st.date_input("表示終了日", today)
+
+tag_filter = st.selectbox("タグで絞り込み", tag_list_disp)
+customer_filter = st.selectbox("顧客で絞り込み", customer_list_disp)
+
+# ページネーション（1ページ20件）
+PAGE_SIZE = 20
+page = st.number_input("ページ番号", 1, step=1)
+
+# === SQL組み立て ===
+base_sql = "SELECT * FROM chat_logs WHERE timestamp BETWEEN %s AND %s"
+params = [date_from, date_to + timedelta(days=1)]  # 終了日は翌日0時まで
+
+if not is_admin:
+    base_sql += " AND username = %s"
+    params.append(username)
+if tag_filter != "全て":
+    base_sql += " AND タグ = %s"
+    params.append(tag_filter)
+if customer_filter != "全て":
+    base_sql += " AND 顧客 = %s"
+    params.append(customer_filter)
+
+# 件数カウント
+count_sql = "SELECT COUNT(*) FROM (" + base_sql + ") AS sub"
+cursor.execute(count_sql, params)
+total = cursor.fetchone()[0]
+
+# ページネーション用SQL
+base_sql += " ORDER BY timestamp DESC LIMIT %s OFFSET %s"
+params += [PAGE_SIZE, (page - 1) * PAGE_SIZE]
 
 try:
-    conn = psycopg2.connect(
-        host=db_host,
-        port=db_port,
-        dbname=db_name,
-        user=db_user,
-        password=db_password
-    )
-    cursor = conn.cursor()
-
-    # クエリ
-    if is_admin:
-        st.success("✅ 管理者モード：すべてのユーザーの履歴を表示中")
-        cursor.execute("SELECT * FROM chat_logs ORDER BY timestamp DESC")
-    else:
-        st.info(f"👤 ユーザーモード：{username} さんの履歴のみ表示中")
-        cursor.execute("SELECT * FROM chat_logs WHERE username = %s ORDER BY timestamp DESC", (username,))
-
+    cursor.execute(base_sql, params)
     rows = cursor.fetchall()
     colnames = [desc[0] for desc in cursor.description]
     conn.close()
 
     if rows:
-        # DataFrame化（DBのカラム名そのまま使う）
         df = pd.DataFrame(rows, columns=colnames)
-
-        # --- タグ・顧客での絞り込みUI追加 ---
-        filter_cols = []
-        if "タグ" in df.columns:
-            tag_list = ["全て"] + sorted([x for x in df["タグ"].unique() if pd.notnull(x)])
-            tag_filter = st.selectbox("タグで絞り込み", tag_list, key="tag_filter")
-            if tag_filter != "全て":
-                df = df[df["タグ"] == tag_filter]
-                filter_cols.append(f"タグ: {tag_filter}")
-
-        if "顧客" in df.columns:
-            customer_list = ["全て"] + sorted([x for x in df["顧客"].unique() if pd.notnull(x)])
-            customer_filter = st.selectbox("顧客で絞り込み", customer_list, key="customer_filter")
-            if customer_filter != "全て":
-                df = df[df["顧客"] == customer_filter]
-                filter_cols.append(f"顧客: {customer_filter}")
-
-        # --- 絞り込み状態の表示 ---
-        if filter_cols:
-            st.info("絞り込み中: " + " / ".join(filter_cols))
-
-        # --- ページネーションを追加 ---
-        PAGE_SIZE = 20
-        total = len(df)
-        if total > 0:
-            page = st.number_input("ページ番号", 1, max(1, (total // PAGE_SIZE) + (1 if total % PAGE_SIZE else 0)), 1)
-            start = (page - 1) * PAGE_SIZE
-            end = start + PAGE_SIZE
-            st.dataframe(df.iloc[start:end], use_container_width=True)
-            st.caption(f"{start + 1}～{min(end, total)}件目を表示（全{total}件）")
-        else:
-            st.info("該当データがありません。")
-
-        # --- エクスポート機能 ---
-        st.download_button(
-            "📥 CSVダウンロード",
-            df.to_csv(index=False),
-            file_name="chat_logs.csv"
-        )
-        st.download_button(
-            "📥 JSONダウンロード",
-            df.to_json(orient="records", force_ascii=False),
-            file_name="chat_logs.json"
-        )
-
+        st.dataframe(df, use_container_width=True)
+        st.caption(f"{(page-1)*PAGE_SIZE+1}～{min(page*PAGE_SIZE, total)}件目を表示（全{total}件）")
     else:
-        st.info("履歴がまだありません。")
+        st.info("該当データがありません。")
+
+    # エクスポート
+    st.download_button(
+        "📥 CSVダウンロード",
+        df.to_csv(index=False),
+        file_name="chat_logs.csv"
+    )
+    st.download_button(
+        "📥 JSONダウンロード",
+        df.to_json(orient="records", force_ascii=False),
+        file_name="chat_logs.json"
+    )
 
 except Exception as e:
     st.error(f"エラーが発生しました: {e}")
+finally:
+    if conn:
+        conn.close()
