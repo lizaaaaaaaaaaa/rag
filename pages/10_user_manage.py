@@ -48,7 +48,7 @@ with st.form(key="add_user_form"):
             )
             conn.commit()
             st.success(f"{new_username} を追加しました！")
-            st.experimental_rerun()
+            st.rerun()  # ←ここだけ変更！
         except Exception as e:
             st.error(f"追加失敗: {e}")
 
@@ -58,7 +58,7 @@ if st.button("ユーザー削除（注意！）"):
     cursor.execute("DELETE FROM users WHERE username = ?", (del_user,))
     conn.commit()
     st.success(f"{del_user} を削除しました。")
-    st.experimental_rerun()
+    st.rerun()  # ←ここも変更！
 
 # パスワード変更
 st.subheader("【パスワード変更】")

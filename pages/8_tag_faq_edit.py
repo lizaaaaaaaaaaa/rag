@@ -1,5 +1,5 @@
 import streamlit as st
-st.set_page_config(page_title="タグ・FAQ編集", page_icon="✏️", layout="wide")  # ←import直後
+st.set_page_config(page_title="タグ・FAQ編集", page_icon="✏️", layout="wide")
 
 import pandas as pd
 import sqlite3
@@ -46,7 +46,7 @@ with st.form(key="add_tag_form"):
         )
         conn.commit()
         st.success(f"タグ「{new_tag}」を追加しました。")
-        st.experimental_rerun()
+        st.rerun()   # ← ここを修正
 
 # タグ削除
 if not tag_df.empty:
@@ -55,7 +55,7 @@ if not tag_df.empty:
         cursor.execute("UPDATE chat_logs SET タグ = NULL WHERE タグ = ?", (del_tag,))
         conn.commit()
         st.success(f"タグ「{del_tag}」を全データから削除しました。")
-        st.experimental_rerun()
+        st.rerun()   # ← ここも修正
 
 # --- FAQ管理（サンプル） ---
 st.subheader("❓ FAQナレッジ管理（サンプル）")
@@ -73,7 +73,7 @@ with st.form(key="add_faq_form"):
         )
         conn.commit()
         st.success("FAQを追加しました！")
-        st.experimental_rerun()
+        st.rerun()   # ← ここも修正
 
 # FAQ一覧表示（サンプル：role=assistantかつQ/A/タグあり）
 faq_df = pd.read_sql_query(

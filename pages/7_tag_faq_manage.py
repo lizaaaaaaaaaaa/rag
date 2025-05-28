@@ -35,7 +35,7 @@ with st.form("add_faq"):
         conn.execute(f"INSERT INTO {FAQ_TABLE} (question, answer) VALUES (?, ?)", (new_q, new_a))
         conn.commit()
         st.success("追加されました！")
-        st.experimental_rerun()
+        st.rerun()   # ←ここを修正！
 
 # タグ表示・追加
 st.subheader("🏷️ タグ管理")
@@ -52,5 +52,5 @@ with st.form("add_tag"):
         conn.execute(f"INSERT INTO {TAG_TABLE} (tag) VALUES (?)", (new_tag,))
         conn.commit()
         st.success("タグ追加！")
-        st.experimental_rerun()
+        st.rerun()   # ←ここも修正！
 conn.close()

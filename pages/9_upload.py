@@ -1,5 +1,5 @@
 import streamlit as st
-st.set_page_config(page_title="アップロード & RAG質問", page_icon="📤", layout="wide")  # ←import直後
+st.set_page_config(page_title="アップロード & RAG質問", page_icon="📤", layout="wide")
 
 import os
 import uuid
@@ -13,53 +13,67 @@ if "user" not in st.session_state:
     st.stop()
 # --- ここまで ---
 
-# === ページタイトル・説明 ===
 st.title("📤 PDFアップロード & 💬 RAG質問")
 st.write("""
 このページでは、PDFファイルをアップロードして、その内容に対してRAG（検索拡張生成）質問ができます。
 アップロードしたPDFは自動的にGCSへ保存され、ベクトルストアに取り込まれます。
 """)
 
-# GCSバケット名（環境変数優先／なければデフォルト）
 GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "run-sources-rag-cloud-project-asia-northeast1")
 
-# GCSアップロード関数
-def upload_to_gcs(file, bucket_name, blob_name):
+# === 必要なら "uploads" ディレクトリを作成 ===
+os.makedirs("uploads", exist_ok=True)
+
+def save_upload_to_local(uploaded_file, save_dir="uploads"):
+    # 拡張子安全化（例: .pdf 以外アップロード不可にしてる前提）
+    unique_filename = f"{uuid.uuid4().hex}.pdf"
+    save_path = os.path.join(save_dir, unique_filename)
+    with open(save_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return save_path, unique_filename
+
+def upload_to_gcs(local_path, bucket_name, blob_name):
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_name)
-    blob.upload_from_file(file, rewind=True)
+    with open(local_path, "rb") as f:
+        blob.upload_from_file(f, rewind=True)
     return f"gs://{bucket_name}/{blob_name}"
 
-# ファイルアップロード
 uploaded_file = st.file_uploader("PDFファイルを選択", type=["pdf"])
 
 if uploaded_file is not None:
-    # ファイル名をUUID＋拡張子で生成（日本語ファイル名にも安心）
-    unique_filename = f"{uuid.uuid4().hex}.pdf"
-    blob_name = f"uploads/{unique_filename}"
+    # 1. ローカル保存
+    try:
+        local_path, unique_filename = save_upload_to_local(uploaded_file)
+        st.success(f"✅ ローカル保存成功: {local_path}")
+    except Exception as e:
+        st.error("❌ ローカル保存に失敗しました")
+        st.code(traceback.format_exc())
+        st.stop()
 
-    # GCSにアップロード
+    # 2. GCSにアップロード
+    blob_name = f"uploads/{unique_filename}"
     try:
         with st.spinner("GCSにアップロード中..."):
-            gcs_uri = upload_to_gcs(uploaded_file, GCS_BUCKET_NAME, blob_name)
+            gcs_uri = upload_to_gcs(local_path, GCS_BUCKET_NAME, blob_name)
         st.success(f"✅ GCSアップロード成功: {blob_name}")
     except Exception as e:
         st.error("❌ GCSへのアップロードに失敗しました")
         st.code(traceback.format_exc())
         st.stop()
 
-    # GCSへのアップロードが完了したらベクトルストアに取り込み
+    # 3. ベクトルストアに取り込み（ローカルパスで！）
     try:
         with st.spinner("ベクトルストア取り込み中...⏳"):
-            ingest_pdf_to_vectorstore(blob_name)  # 必要に応じてパス修正
+            ingest_pdf_to_vectorstore(local_path)  # ここは「ローカルパス」
         st.success("✅ ベクトルストア取り込み完了！")
     except Exception as e:
         st.error("❌ ベクトル化に失敗しました")
         st.code(traceback.format_exc())
         st.stop()
 
-    # 💬 質問UI
+    # 4. 💬 質問UI
     st.subheader("💬 質問してみよう！")
     question = st.text_input("アップロードしたPDFの内容について質問")
 
