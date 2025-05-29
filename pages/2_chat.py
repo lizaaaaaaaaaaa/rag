@@ -1,12 +1,10 @@
 import streamlit as st
 import requests
 import os
-from datetime import datetime
 
 st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
 
 API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app/chat")
-
 if API_URL.endswith("/"):
     API_URL = API_URL.rstrip("/")
 
@@ -36,7 +34,7 @@ if "messages" not in st.session_state:
 username = st.session_state["user"]
 
 st.title("💬 チャット")
-st.write("Chatページ動いてるよ")  # ← デバッグ用！
+st.write("Chatページ動いてるよ")  # ← デバッグ用
 
 user_input = st.text_input("メッセージを入力してください", "")
 

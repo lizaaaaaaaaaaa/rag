@@ -18,9 +18,8 @@ history_logs = []
 
 class ChatRequest(BaseModel):
     question: str
-    username: str = None  # ← 追加！
+    username: str | None = None  # 型ヒントも追加 (Python3.10以降なら)
 
-# prefix="/chat" なら、ここは "/" だけでOK
 @router.post("/", summary="AIチャット")
 async def chat_endpoint(req: ChatRequest):
     query = req.question
@@ -33,7 +32,6 @@ async def chat_endpoint(req: ChatRequest):
         rag_chain = get_rag_chain(vectorstore=vectorstore, return_source=True, question=query)
         result = rag_chain.invoke({"query": query})
         answer = result.get("result", "")
-        # 出典情報の構造化
         sources = []
         for doc in result.get("source_documents", []):
             meta = {k: str(v) for k, v in doc.metadata.items()}
@@ -46,7 +44,7 @@ async def chat_endpoint(req: ChatRequest):
     log = {
         "id": str(uuid4()),
         "question": query,
-        "username": user,   # ← 追加！
+        "username": user,
         "answer": answer,
         "timestamp": now,
         "sources": sources,
@@ -54,22 +52,20 @@ async def chat_endpoint(req: ChatRequest):
     history_logs.append(log)
     return {"answer": answer, "sources": sources}
 
-# --- チャット履歴取得 ---
 @router.get("/history", summary="チャット履歴取得")
 def get_history():
     return {"logs": history_logs}
 
-# --- CSVエクスポート ---
 @router.get("/export/csv", summary="チャット履歴CSVダウンロード")
 def export_csv():
     si = io.StringIO()
     writer = csv.writer(si)
-    writer.writerow(["id", "question", "username", "answer", "timestamp"])  # username追加
+    writer.writerow(["id", "question", "username", "answer", "timestamp"])
     for log in history_logs:
         writer.writerow([
             log.get("id", ""),
             log.get("question", ""),
-            log.get("username", ""),  # username追加
+            log.get("username", ""),
             log.get("answer", ""),
             log.get("timestamp", ""),
         ])
@@ -80,7 +76,6 @@ def export_csv():
         headers={"Content-Disposition": "attachment; filename=chat_history.csv"}
     )
 
-# --- JSONエクスポート ---
 @router.get("/export/json", summary="チャット履歴JSONダウンロード")
 def export_json():
     return JSONResponse(
