@@ -1,9 +1,12 @@
-from fastapi import APIRouter, Request, HTTPException, Response
+from fastapi import APIRouter, Request, HTTPException, Response, Depends
 from fastapi.responses import RedirectResponse
 import os
 import requests
+import jwt
+from datetime import datetime, timedelta
+
 from utils import auth  # utils/auth.py の verify_google_token を利用
-from utils.auth import get_or_create_user, get_user_role  # 追加
+from utils.auth import get_or_create_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -11,7 +14,15 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
 
-# Googleログイン画面へリダイレクト
+# --- JWT設定 ---
+JWT_SECRET = os.getenv("JWT_SECRET", "supersecret")  # 本番は.envやSecret Managerで必ず管理
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRES = 2  # トークン有効時間（時間）
+
+# フロントエンドURL（本番用に合わせてね！）
+FRONTEND_URL = "https://rag-frontend-190389115361.asia-northeast1.run.app"
+
+# --- Googleログイン画面へリダイレクト ---
 @router.get("/login/google")
 def login():
     redirect_uri = (
@@ -25,14 +36,13 @@ def login():
     )
     return RedirectResponse(redirect_uri)
 
-# Googleからのコールバック
+# --- Googleからのコールバック（JWTセット） ---
 @router.get("/callback")
-def callback(request: Request, response: Response):
+def callback(request: Request):
     code = request.query_params.get("code")
     if not code:
-        raise HTTPException(status_code=400, detail="Code not found")
+        return RedirectResponse(url=f"{FRONTEND_URL}/?login=error&reason=no_code")
 
-    # アクセストークン取得
     token_resp = requests.post(
         "https://oauth2.googleapis.com/token",
         data={
@@ -45,24 +55,56 @@ def callback(request: Request, response: Response):
     )
     token_json = token_resp.json()
     id_token_str = token_json.get("id_token")
-
     if not id_token_str:
-        raise HTTPException(status_code=400, detail="No ID token returned")
+        return RedirectResponse(url=f"{FRONTEND_URL}/?login=error&reason=no_id_token")
 
-    # Google IDトークン検証 → emailを取得
     email = auth.verify_google_token(id_token_str, GOOGLE_CLIENT_ID)
     if email:
-        # [1] ユーザーDB連携（初回なら自動登録、既存なら取得）
-        user = get_or_create_user(email)  # utils.auth 側で実装
-        # [2] ロール分岐（例：@admin.comは管理者）
-        if email.endswith("@admin.com"):
-            role = "admin"
-        else:
-            role = "user"
-        # [3] ロールもDBに保存しておく場合はここで更新
-        # user["role"] = role  # 保存処理も必要なら追加
+        user = get_or_create_user(email)
+        role = "admin" if email.endswith("@admin.com") else "user"
+        payload = {
+            "email": email,
+            "role": role,
+            "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRES)
+        }
+        jwt_token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-        # [4] レスポンス
-        return {"message": "ログイン成功", "email": email, "role": role}
+        response = RedirectResponse(url=f"{FRONTEND_URL}/?login=success")
+        response.set_cookie(
+            key="access_token",
+            value=jwt_token,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=JWT_EXPIRES * 3600
+        )
+        return response
     else:
-        raise HTTPException(status_code=401, detail="無効なトークン")
+        return RedirectResponse(url=f"{FRONTEND_URL}/?login=error&reason=invalid_token")
+
+
+# --- JWT認証Depends（ミドルウェア関数） ---
+def get_current_user(request: Request):
+    token = request.cookies.get("access_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="No token")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload  # 例: {'email': ..., 'role': ..., 'exp': ...}
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+# --- 認証済み限定APIサンプル ---
+@router.get("/me")
+def get_me(user=Depends(get_current_user)):
+    # フロントからGET /auth/me で「自分のユーザー情報」を取得できる！
+    return {"email": user["email"], "role": user["role"]}
+
+# --- ログアウトAPI（Cookie即削除） ---
+@router.get("/logout")
+def logout():
+    response = RedirectResponse(url=f"{FRONTEND_URL}/?logout=success")
+    response.delete_cookie("access_token")
+    return response

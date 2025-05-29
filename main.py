@@ -9,10 +9,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-# --- ★ここで環境変数の値をデバッグ出力する！（Cloud Runのログに必ず出る） ---
+# --- ★Cloud Runログ用に主要環境変数をデバッグ出力 ---
 print("==== GOOGLE_CLIENT_ID:", os.environ.get("GOOGLE_CLIENT_ID"), "====")
 print("==== GOOGLE_CLIENT_SECRET:", os.environ.get("GOOGLE_CLIENT_SECRET"), "====")
 print("==== GOOGLE_REDIRECT_URI:", os.environ.get("GOOGLE_REDIRECT_URI"), "====")
+print("==== JWT_SECRET:", os.environ.get("JWT_SECRET"), "====")  # JWTもチェック
+
+# --- 本番フロントURLを1か所で管理 ---
+FRONTEND_URL = "https://rag-frontend-190389115361.asia-northeast1.run.app"
 
 # --- FastAPIアプリ ---
 app = FastAPI(
@@ -24,34 +28,34 @@ app = FastAPI(
 # --- CORS設定（本番はallow_origins推奨ドメインに絞ってね！）---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://rag-frontend-190389115361.asia-northeast1.run.app"],  # ここに本番のフロントURL
-    allow_credentials=True,
+    allow_origins=[FRONTEND_URL],  # ← 本番はフロントURLだけ厳守！
+    allow_credentials=True,        # Cookie認証時は必須
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- ルーター分割（import順は好みだけど一応コメントで可視化！）---
+# --- ルーター分割 ---
 print("=== before healthz import ===")
 from api.routers import upload, chat, google_oauth, healthz
 print("=== after healthz import ===")
 
 # --- ルーター登録 ---
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
-app.include_router(chat.router, prefix="/chat", tags=["chat"])  # <--- ココが重要！
-app.include_router(google_oauth.router, tags=["auth"])
-app.include_router(healthz.router, prefix="", tags=["healthz"])  # prefix=""で直下（/healthz）
+app.include_router(chat.router, prefix="/chat", tags=["chat"])    # POST /chat でRAG
+app.include_router(google_oauth.router, tags=["auth"])            # Google OAuth
+app.include_router(healthz.router, prefix="", tags=["healthz"])   # /healthz
 
 # --- 静的ファイル（PDF公開用） ---
 pdf_dir = os.path.join("rag", "vectorstore", "pdfs")
 if os.path.isdir(pdf_dir):
     app.mount("/pdfs", StaticFiles(directory=pdf_dir), name="pdfs")
 
-# --- ルートテスト（任意・Swagger以外にも） ---
+# --- ルートテスト ---
 @app.get("/")
 def read_root():
     return {"message": "Hello from FastAPI on Cloud Run!"}
 
-# --- ローカル実行用（Cloud Runだと不要だけど、デバッグには◎） ---
+# --- ローカル実行用（Cloud Runでは不要） ---
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8080))
