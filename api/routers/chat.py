@@ -20,7 +20,9 @@ history_logs = []
 class ChatRequest(BaseModel):
     question: str
 
-@router.post("/", summary="AIチャット", response_description="RAG回答（出典付き）")
+# --- / でも /chat でも同じ処理が呼ばれる！ ---
+@router.post("/", summary="AIチャット")
+@router.post("/chat", summary="AIチャット（エイリアス）")
 async def chat_endpoint(req: ChatRequest):
     query = req.question
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -54,10 +56,6 @@ async def chat_endpoint(req: ChatRequest):
 @router.get("/history", summary="チャット履歴取得")
 def get_history():
     return {"logs": history_logs}
-
-# ===========================
-# チャット履歴のエクスポートAPI
-# ===========================
 
 @router.get("/export/csv", summary="チャット履歴CSVダウンロード")
 def export_csv():

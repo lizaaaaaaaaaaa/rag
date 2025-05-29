@@ -6,8 +6,10 @@ from datetime import datetime
 
 st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
 
-# --- RAG APIのエンドポイント（環境変数必須に変更） ---
-API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app/chat")
+# --- RAG APIのエンドポイント（環境変数） ---
+API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
+if not API_URL.rstrip("/").endswith("/chat"):
+    API_URL = API_URL.rstrip("/") + "/chat"
 
 def post_chat(user_input, username):
     payload = {"question": user_input, "username": username}
@@ -29,12 +31,12 @@ if "user" not in st.session_state:
     st.warning("ログインしてください。")
     st.stop()
 
-# --- DB接続情報（環境変数吸収） ---
+# --- DB接続情報 ---
 DB_HOST = os.environ.get("DB_HOST", "127.0.0.1")
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME = os.environ.get("DB_NAME", "rag_db")
 DB_USER = os.environ.get("DB_USER", "raguser")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "yourpassword")  # 本番は必ず環境変数！
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "yourpassword")
 
 # --- チャット履歴管理 ---
 if "messages" not in st.session_state:
@@ -89,8 +91,4 @@ st.markdown("---")
 st.subheader("チャット履歴")
 
 for r, msg in st.session_state["messages"]:
-    if r == "アシスタント" and "ソース" in msg:
-        st.markdown(f"**{r}**: {msg['text']}")
-        st.caption(f"参照: {msg['sources']}")
-    else:
-        st.markdown(f"**{r}**: {msg}")
+    st.markdown(f"**{r}**: {msg}")
