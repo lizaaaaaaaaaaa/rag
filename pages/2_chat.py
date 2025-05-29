@@ -7,7 +7,7 @@ from datetime import datetime
 st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
 
 # --- RAG APIのエンドポイント（環境変数必須に変更） ---
-API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
+API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app/chat")
 
 def post_chat(user_input, username):
     payload = {"question": user_input, "username": username}
