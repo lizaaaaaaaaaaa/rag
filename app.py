@@ -9,7 +9,7 @@ if os.getenv("ENV") != "production":
 
 # 日本語タイトル＋ページアイコン（🏠）で設定
 st.set_page_config(page_title="ホーム | RAG Fullstack アプリ", page_icon="🏠", layout="wide")
-API_URL = os.getenv("API_URL", "https://rag-frontend-190389115361.asia-northeast1.run.app")
+API_URL = os.getenv("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
 
 # 1. 未ログイン時：Googleログイン案内
 if "user" not in st.session_state:
