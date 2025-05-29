@@ -13,8 +13,14 @@ if not API_URL.rstrip("/").endswith("/chat"):
 
 def post_chat(user_input, username):
     payload = {"question": user_input, "username": username}
+    # デバッグ用print
+    print("========== [APIリクエストDebug] ==========")
+    print("API_URL:", API_URL)
+    print("payload:", payload)
     try:
         r = requests.post(API_URL, json=payload, timeout=30)
+        print("status_code:", r.status_code)
+        print("text:", r.text)
         if r.status_code == 200:
             res = r.json()
             return {
@@ -24,6 +30,7 @@ def post_chat(user_input, username):
         else:
             return {"result": f"APIエラー: {r.status_code} / {r.text}", "sources": []}
     except Exception as e:
+        print("リクエスト失敗:", e)
         return {"result": f"通信エラー: {e}", "sources": []}
 
 # --- 未ログインガード ---
