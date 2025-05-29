@@ -19,7 +19,7 @@ history_logs = []
 class ChatRequest(BaseModel):
     question: str
 
-# --- /chat POSTだけを許可する！（エイリアス不要） ---
+# === ★ここだけは絶対「/」のみで！ prefix=/chat の場合は "/"で/post（これが「/chat」POSTになる）===
 @router.post("/", summary="AIチャット")
 async def chat_endpoint(req: ChatRequest):
     query = req.question
