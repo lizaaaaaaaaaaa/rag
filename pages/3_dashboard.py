@@ -20,7 +20,7 @@ st.write("""
 タグや顧客で絞り込みも可能です。エクスポートボタンからCSV/JSON形式でダウンロードもできます。
 """)
 
-DB_HOST = os.environ.get("DB_HOST", "127.0.0.1")
+DB_HOST = os.environ.get("DB_HOST", "/cloudsql/rag-cloud-project:asia-northeast1:rag-postgres")
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME = os.environ.get("DB_NAME", "rag_db")
 DB_USER = os.environ.get("DB_USER", "raguser")
