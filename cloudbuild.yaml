@@ -44,12 +44,12 @@ steps:
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
-      - --memory=16Gi
-      - --cpu=4
+      - --memory=32Gi
+      - --cpu=8
       - --timeout=600s
       - --min-instances=1
       - --max-instances=20
-      - --concurrency=80
+      - --concurrency=100
       - --port=8080
       # --- セキュアな運用のためAPI_URLなど平文情報だけenv、DB系はSecret Managerで管理！ ---
       - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=127.0.0.1,DB_PORT=5432

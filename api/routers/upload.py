@@ -47,7 +47,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"GCSアップロード失敗: {e}")
 
-    # GCSから一時ローカルへダウンロードしベクトル化
+    # GCSから一時ローカルへダウンロードしてベクトル化
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp_path = tmp.name
