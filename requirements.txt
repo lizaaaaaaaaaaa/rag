@@ -40,3 +40,4 @@ google-cloud-storage
 matplotlib
 
 seaborn
+PyJWT==2.8.0
