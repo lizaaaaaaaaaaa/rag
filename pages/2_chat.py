@@ -1,101 +1,89 @@
-import streamlit as st
-import requests
-import psycopg2
-import os
+import logging
+from pathlib import Path
 from datetime import datetime
+from uuid import uuid4
 
-st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
+from fastapi import APIRouter
+from pydantic import BaseModel
+from rag.ingested_text import load_vectorstore, get_rag_chain
 
-# --- RAG APIのエンドポイント（環境変数） ---
-API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app/chat")
-if API_URL.endswith("/"):
-    API_URL = API_URL.rstrip("/")
+from fastapi.responses import StreamingResponse, JSONResponse
+import csv
+import io
 
-def post_chat(user_input):
-    payload = {"question": user_input}
-    print("========== [APIリクエストDebug] ==========")
-    print("API_URL:", API_URL)
-    print("payload:", payload)
+router = APIRouter()
+
+# グローバル履歴（MVP用、運用時はDB化が◎）
+history_logs = []
+
+class ChatRequest(BaseModel):
+    question: str
+    username: str = None  # ← 追加！
+
+# prefix="/chat" なら、ここは "/" だけでOK
+@router.post("/", summary="AIチャット")
+async def chat_endpoint(req: ChatRequest):
+    query = req.question
+    user = req.username or "guest"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    answer = ""
+    sources = []
     try:
-        r = requests.post(API_URL, json=payload, timeout=30)
-        print("status_code:", r.status_code)
-        print("text:", r.text)
-        if r.status_code == 200:
-            res = r.json()
-            return {
-                "result": res.get("answer") or res.get("result"),
-                "sources": res.get("sources", []),
-            }
-        else:
-            return {"result": f"APIエラー: {r.status_code} / {r.text}", "sources": []}
+        vectorstore = load_vectorstore()
+        rag_chain = get_rag_chain(vectorstore=vectorstore, return_source=True, question=query)
+        result = rag_chain.invoke({"query": query})
+        answer = result.get("result", "")
+        # 出典情報の構造化
+        sources = []
+        for doc in result.get("source_documents", []):
+            meta = {k: str(v) for k, v in doc.metadata.items()}
+            meta["source"] = Path(meta.get("source", "unknown")).name
+            meta.setdefault("page", "?")
+            sources.append({"metadata": meta})
     except Exception as e:
-        print("リクエスト失敗:", e)
-        return {"result": f"通信エラー: {e}", "sources": []}
+        answer = f"【エラー】RAG回答に失敗しました: {e}"
 
-# --- 未ログインガード ---
-if "user" not in st.session_state:
-    st.warning("ログインしてください。")
-    st.stop()
+    log = {
+        "id": str(uuid4()),
+        "question": query,
+        "username": user,   # ← 追加！
+        "answer": answer,
+        "timestamp": now,
+        "sources": sources,
+    }
+    history_logs.append(log)
+    return {"answer": answer, "sources": sources}
 
-# --- DB接続情報 ---
-DB_HOST = os.environ.get("DB_HOST", "/cloudsql/rag-cloud-project:asia-northeast1:rag-postgres")
-DB_PORT = int(os.environ.get("DB_PORT", "5432"))
-DB_NAME = os.environ.get("DB_NAME", "rag_db")
-DB_USER = os.environ.get("DB_USER", "raguser")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "yourpassword")
+# --- チャット履歴取得 ---
+@router.get("/history", summary="チャット履歴取得")
+def get_history():
+    return {"logs": history_logs}
 
-# --- チャット履歴管理 ---
-if "messages" not in st.session_state:
-    st.session_state["messages"] = []
+# --- CSVエクスポート ---
+@router.get("/export/csv", summary="チャット履歴CSVダウンロード")
+def export_csv():
+    si = io.StringIO()
+    writer = csv.writer(si)
+    writer.writerow(["id", "question", "username", "answer", "timestamp"])  # username追加
+    for log in history_logs:
+        writer.writerow([
+            log.get("id", ""),
+            log.get("question", ""),
+            log.get("username", ""),  # username追加
+            log.get("answer", ""),
+            log.get("timestamp", ""),
+        ])
+    si.seek(0)
+    return StreamingResponse(
+        si,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=chat_history.csv"}
+    )
 
-username = st.session_state["user"]
-role = st.session_state.get("role", "user")
-
-st.title("💬 チャット")
-
-user_input = st.text_input("メッセージを入力してください", "")
-
-if st.button("送信") and user_input.strip():
-    api_response = post_chat(user_input)
-    ai_response = api_response.get("result") or "応答エラー"
-    sources = api_response.get("sources", [])
-
-    # 履歴に追加
-    st.session_state["messages"].append(("ユーザー", user_input))
-    st.session_state["messages"].append(("アシスタント", ai_response))
-
-    # --- DBに履歴保存 ---
-    conn = None
-    cursor = None
-    try:
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-        )
-        cursor = conn.cursor()
-        # chat_logsテーブルに sourcesカラムが「なければ」sources抜きのINSERTにする
-        cursor.execute(
-            """
-            INSERT INTO chat_logs (timestamp, username, role, question, answer)
-            VALUES (%s, %s, %s, %s, %s)
-            """,
-            (datetime.now(), username, role, user_input, ai_response),
-        )
-        conn.commit()
-    except Exception as e:
-        st.error(f"DB保存エラー: {e}")
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-# --- チャット履歴の表示 ---
-st.markdown("---")
-st.subheader("チャット履歴")
-
-for r, msg in st.session_state["messages"]:
-    st.markdown(f"**{r}**: {msg}")
+# --- JSONエクスポート ---
+@router.get("/export/json", summary="チャット履歴JSONダウンロード")
+def export_json():
+    return JSONResponse(
+        content=history_logs,
+        headers={"Content-Disposition": "attachment; filename=chat_history.json"}
+    )

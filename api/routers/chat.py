@@ -18,11 +18,13 @@ history_logs = []
 
 class ChatRequest(BaseModel):
     question: str
+    username: str = None  # ← 追加！
 
-# === ★ここだけは絶対「/」のみで！ prefix=/chat の場合は "/"で/post（これが「/chat」POSTになる）===
+# prefix="/chat" なら、ここは "/" だけでOK
 @router.post("/", summary="AIチャット")
 async def chat_endpoint(req: ChatRequest):
     query = req.question
+    user = req.username or "guest"
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     answer = ""
     sources = []
@@ -44,6 +46,7 @@ async def chat_endpoint(req: ChatRequest):
     log = {
         "id": str(uuid4()),
         "question": query,
+        "username": user,   # ← 追加！
         "answer": answer,
         "timestamp": now,
         "sources": sources,
@@ -61,11 +64,12 @@ def get_history():
 def export_csv():
     si = io.StringIO()
     writer = csv.writer(si)
-    writer.writerow(["id", "question", "answer", "timestamp"])
+    writer.writerow(["id", "question", "username", "answer", "timestamp"])  # username追加
     for log in history_logs:
         writer.writerow([
             log.get("id", ""),
             log.get("question", ""),
+            log.get("username", ""),  # username追加
             log.get("answer", ""),
             log.get("timestamp", ""),
         ])
