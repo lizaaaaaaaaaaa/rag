@@ -1,89 +1,54 @@
-import logging
-from pathlib import Path
+import streamlit as st
+import requests
+import os
 from datetime import datetime
-from uuid import uuid4
 
-from fastapi import APIRouter
-from pydantic import BaseModel
-from rag.ingested_text import load_vectorstore, get_rag_chain
+st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
 
-from fastapi.responses import StreamingResponse, JSONResponse
-import csv
-import io
+API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app/chat")
 
-router = APIRouter()
+if API_URL.endswith("/"):
+    API_URL = API_URL.rstrip("/")
 
-# グローバル履歴（MVP用、運用時はDB化が◎）
-history_logs = []
-
-class ChatRequest(BaseModel):
-    question: str
-    username: str = None  # ← 追加！
-
-# prefix="/chat" なら、ここは "/" だけでOK
-@router.post("/", summary="AIチャット")
-async def chat_endpoint(req: ChatRequest):
-    query = req.question
-    user = req.username or "guest"
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    answer = ""
-    sources = []
+def post_chat(user_input, username):
+    payload = {"question": user_input, "username": username}
     try:
-        vectorstore = load_vectorstore()
-        rag_chain = get_rag_chain(vectorstore=vectorstore, return_source=True, question=query)
-        result = rag_chain.invoke({"query": query})
-        answer = result.get("result", "")
-        # 出典情報の構造化
-        sources = []
-        for doc in result.get("source_documents", []):
-            meta = {k: str(v) for k, v in doc.metadata.items()}
-            meta["source"] = Path(meta.get("source", "unknown")).name
-            meta.setdefault("page", "?")
-            sources.append({"metadata": meta})
+        r = requests.post(API_URL, json=payload, timeout=30)
+        if r.status_code == 200:
+            res = r.json()
+            return {
+                "result": res.get("answer") or res.get("result"),
+                "sources": res.get("sources", []),
+            }
+        else:
+            return {"result": f"APIエラー: {r.status_code} / {r.text}", "sources": []}
     except Exception as e:
-        answer = f"【エラー】RAG回答に失敗しました: {e}"
+        return {"result": f"通信エラー: {e}", "sources": []}
 
-    log = {
-        "id": str(uuid4()),
-        "question": query,
-        "username": user,   # ← 追加！
-        "answer": answer,
-        "timestamp": now,
-        "sources": sources,
-    }
-    history_logs.append(log)
-    return {"answer": answer, "sources": sources}
+# --- 未ログインガード ---
+if "user" not in st.session_state:
+    st.warning("ログインしてください。")
+    st.stop()
 
-# --- チャット履歴取得 ---
-@router.get("/history", summary="チャット履歴取得")
-def get_history():
-    return {"logs": history_logs}
+if "messages" not in st.session_state:
+    st.session_state["messages"] = []
 
-# --- CSVエクスポート ---
-@router.get("/export/csv", summary="チャット履歴CSVダウンロード")
-def export_csv():
-    si = io.StringIO()
-    writer = csv.writer(si)
-    writer.writerow(["id", "question", "username", "answer", "timestamp"])  # username追加
-    for log in history_logs:
-        writer.writerow([
-            log.get("id", ""),
-            log.get("question", ""),
-            log.get("username", ""),  # username追加
-            log.get("answer", ""),
-            log.get("timestamp", ""),
-        ])
-    si.seek(0)
-    return StreamingResponse(
-        si,
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=chat_history.csv"}
-    )
+username = st.session_state["user"]
 
-# --- JSONエクスポート ---
-@router.get("/export/json", summary="チャット履歴JSONダウンロード")
-def export_json():
-    return JSONResponse(
-        content=history_logs,
-        headers={"Content-Disposition": "attachment; filename=chat_history.json"}
-    )
+st.title("💬 チャット")
+st.write("Chatページ動いてるよ")  # ← デバッグ用！
+
+user_input = st.text_input("メッセージを入力してください", "")
+
+if st.button("送信") and user_input.strip():
+    st.write("API呼び出し直前！")  # ← デバッグ用
+    api_response = post_chat(user_input, username)
+    ai_response = api_response.get("result") or "応答エラー"
+    sources = api_response.get("sources", [])
+    st.session_state["messages"].append(("ユーザー", user_input))
+    st.session_state["messages"].append(("アシスタント", ai_response))
+
+st.markdown("---")
+st.subheader("チャット履歴")
+for r, msg in st.session_state["messages"]:
+    st.markdown(f"**{r}**: {msg}")
