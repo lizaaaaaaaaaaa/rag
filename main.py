@@ -9,6 +9,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+# --- ★ここで環境変数の値をデバッグ出力する！（Cloud Runのログに必ず出る） ---
+print("==== GOOGLE_CLIENT_ID:", os.environ.get("GOOGLE_CLIENT_ID"), "====")
+print("==== GOOGLE_CLIENT_SECRET:", os.environ.get("GOOGLE_CLIENT_SECRET"), "====")
+print("==== GOOGLE_REDIRECT_URI:", os.environ.get("GOOGLE_REDIRECT_URI"), "====")
+
 # --- FastAPIアプリ ---
 app = FastAPI(
     title="RAG FastAPI Backend",
