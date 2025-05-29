@@ -76,7 +76,7 @@ steps:
       - --max-instances=30
       - --concurrency=80
       - --port=8080
-      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app/chat,DB_HOST=/cloudsql/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432,DB_USER=raguser,DB_NAME=rag_db
+      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app/chat/,DB_HOST=/cloudsql/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432,DB_USER=raguser,DB_NAME=rag_db
       - --set-secrets=DB_PASSWORD=db-password:latest
       - --add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres
 

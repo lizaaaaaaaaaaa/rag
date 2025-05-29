@@ -8,12 +8,11 @@ st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
 
 # --- RAG APIのエンドポイント（環境変数） ---
 API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app/chat")
-if not API_URL.rstrip("/").endswith("/chat"):
-    API_URL = API_URL.rstrip("/") + "/chat"
+if API_URL.endswith("/"):
+    API_URL = API_URL.rstrip("/")
 
-def post_chat(user_input, username):
-    payload = {"question": user_input, "username": username}
-    # デバッグ用print
+def post_chat(user_input):
+    payload = {"question": user_input}
     print("========== [APIリクエストDebug] ==========")
     print("API_URL:", API_URL)
     print("payload:", payload)
@@ -39,7 +38,7 @@ if "user" not in st.session_state:
     st.stop()
 
 # --- DB接続情報 ---
-DB_HOST = os.environ.get("DB_HOST", "127.0.0.1")
+DB_HOST = os.environ.get("DB_HOST", "/cloudsql/rag-cloud-project:asia-northeast1:rag-postgres")
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME = os.environ.get("DB_NAME", "rag_db")
 DB_USER = os.environ.get("DB_USER", "raguser")
@@ -57,7 +56,7 @@ st.title("💬 チャット")
 user_input = st.text_input("メッセージを入力してください", "")
 
 if st.button("送信") and user_input.strip():
-    api_response = post_chat(user_input, username)
+    api_response = post_chat(user_input)
     ai_response = api_response.get("result") or "応答エラー"
     sources = api_response.get("sources", [])
 
@@ -65,7 +64,7 @@ if st.button("送信") and user_input.strip():
     st.session_state["messages"].append(("ユーザー", user_input))
     st.session_state["messages"].append(("アシスタント", ai_response))
 
-    # DBに履歴保存
+    # --- DBに履歴保存 ---
     conn = None
     cursor = None
     try:
@@ -77,12 +76,13 @@ if st.button("送信") and user_input.strip():
             password=DB_PASSWORD,
         )
         cursor = conn.cursor()
+        # chat_logsテーブルに sourcesカラムが「なければ」sources抜きのINSERTにする
         cursor.execute(
             """
-            INSERT INTO chat_logs (timestamp, username, role, question, answer, sources)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO chat_logs (timestamp, username, role, question, answer)
+            VALUES (%s, %s, %s, %s, %s)
             """,
-            (datetime.now(), username, role, user_input, ai_response, str(sources)),
+            (datetime.now(), username, role, user_input, ai_response),
         )
         conn.commit()
     except Exception as e:

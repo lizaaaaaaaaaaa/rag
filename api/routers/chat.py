@@ -7,22 +7,20 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from rag.ingested_text import load_vectorstore, get_rag_chain
 
-# === エクスポート用 ===
 from fastapi.responses import StreamingResponse, JSONResponse
 import csv
 import io
 
 router = APIRouter()
 
-# グローバル履歴（MVP用）/本番はDB化
+# グローバル履歴（MVP用、運用時はDB化が◎）
 history_logs = []
 
 class ChatRequest(BaseModel):
     question: str
 
-# --- / でも /chat でも同じ処理が呼ばれる！ ---
+# --- /chat POSTだけを許可する！（エイリアス不要） ---
 @router.post("/", summary="AIチャット")
-@router.post("/chat", summary="AIチャット（エイリアス）")
 async def chat_endpoint(req: ChatRequest):
     query = req.question
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -53,17 +51,17 @@ async def chat_endpoint(req: ChatRequest):
     history_logs.append(log)
     return {"answer": answer, "sources": sources}
 
+# --- チャット履歴取得 ---
 @router.get("/history", summary="チャット履歴取得")
 def get_history():
     return {"logs": history_logs}
 
+# --- CSVエクスポート ---
 @router.get("/export/csv", summary="チャット履歴CSVダウンロード")
 def export_csv():
     si = io.StringIO()
     writer = csv.writer(si)
-    # CSVヘッダー
     writer.writerow(["id", "question", "answer", "timestamp"])
-    # データ行
     for log in history_logs:
         writer.writerow([
             log.get("id", ""),
@@ -78,6 +76,7 @@ def export_csv():
         headers={"Content-Disposition": "attachment; filename=chat_history.csv"}
     )
 
+# --- JSONエクスポート ---
 @router.get("/export/json", summary="チャット履歴JSONダウンロード")
 def export_json():
     return JSONResponse(
