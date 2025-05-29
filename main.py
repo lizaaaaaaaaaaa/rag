@@ -19,7 +19,7 @@ app = FastAPI(
 # --- CORS設定（本番はallow_origins推奨ドメインに絞ってね！）---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],    # ← 本番は ["https://your-frontend-url"] 推奨
+    allow_origins=["https://rag-frontend-190389115361.asia-northeast1.run.app"],  # ここに本番のフロントURL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
