@@ -30,7 +30,9 @@ export default function HistoryPage() {
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/history",);
+      const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/history", {
+        credentials: "include",  // ★追加
+      });
       if (!res.ok) throw new Error(`API Error: ${res.status}`);
       const data = await res.json();
       setHistory(Array.isArray(data.logs) ? data.logs : []);
@@ -59,6 +61,7 @@ export default function HistoryPage() {
     const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/upload_pdf", {
       method: "POST",
       body: formData,
+      credentials: "include",  // ★追加
     });
     const data = await res.json();
     setUploadResult(data.message);
@@ -68,7 +71,9 @@ export default function HistoryPage() {
 
   // --- エクスポートボタン ---
   const downloadCSV = async () => {
-    const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/export/csv");
+    const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/export/csv", {
+      credentials: "include",  // ★追加
+    });
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -80,7 +85,9 @@ export default function HistoryPage() {
     window.URL.revokeObjectURL(url);
   };
   const downloadJSON = async () => {
-    const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/export/json");
+    const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/export/json", {
+      credentials: "include",  // ★追加
+    });
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");

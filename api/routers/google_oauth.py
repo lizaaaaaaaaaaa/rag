@@ -19,7 +19,6 @@ JWT_SECRET = os.getenv("JWT_SECRET", "supersecret")  # 本番は.envやSecret Ma
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRES = 2  # トークン有効時間（時間）
 
-# フロントエンドURL（本番用に合わせてね！）
 FRONTEND_URL = "https://rag-frontend-190389115361.asia-northeast1.run.app"
 
 # --- Googleログイン画面へリダイレクト ---
@@ -36,13 +35,14 @@ def login():
     )
     return RedirectResponse(redirect_uri)
 
-# --- Googleからのコールバック（JWTセット） ---
+# --- Googleからのコールバック（JWTをクエリでフロントに返す） ---
 @router.get("/callback")
 def callback(request: Request):
     code = request.query_params.get("code")
     if not code:
         return RedirectResponse(url=f"{FRONTEND_URL}/?login=error&reason=no_code")
 
+    # アクセストークン取得
     token_resp = requests.post(
         "https://oauth2.googleapis.com/token",
         data={
@@ -69,37 +69,34 @@ def callback(request: Request):
         }
         jwt_token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-        response = RedirectResponse(url=f"{FRONTEND_URL}/?login=success")
-        response.set_cookie(
-            key="access_token",
-            value=jwt_token,
-            httponly=True,
-            secure=True,
-            samesite="lax",
-            max_age=JWT_EXPIRES * 3600
-        )
-        return response
+        # ★クエリパラメータでtokenとemailを返す
+        return RedirectResponse(url=f"{FRONTEND_URL}/?login=success&token={jwt_token}&email={email}")
     else:
         return RedirectResponse(url=f"{FRONTEND_URL}/?login=error&reason=invalid_token")
 
 
-# --- JWT認証Depends（ミドルウェア関数） ---
+# --- JWT認証Depends（API保護用） ---
 def get_current_user(request: Request):
+    # フロントでCookieじゃなくtokenをAuthorizationヘッダで送る場合はここ修正
     token = request.cookies.get("access_token")
     if not token:
-        raise HTTPException(status_code=401, detail="No token")
+        # Authorizationヘッダも見る
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.replace("Bearer ", "")
+        else:
+            raise HTTPException(status_code=401, detail="No token")
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload  # 例: {'email': ..., 'role': ..., 'exp': ...}
+        return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-# --- 認証済み限定APIサンプル ---
+# --- ユーザー情報API ---
 @router.get("/me")
 def get_me(user=Depends(get_current_user)):
-    # フロントからGET /auth/me で「自分のユーザー情報」を取得できる！
     return {"email": user["email"], "role": user["role"]}
 
 # --- ログアウトAPI（Cookie即削除） ---
