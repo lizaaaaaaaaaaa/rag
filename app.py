@@ -25,14 +25,28 @@ if "user" not in st.session_state:
 
     # Google認証コールバック
     query_params = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
-    if "code" in query_params:
+
+    # ------ 新フロー：token/email 受け取り ------
+    if "token" in query_params and "email" in query_params:
+        st.session_state["token"] = query_params["token"][0]
+        st.session_state["user"] = query_params["email"][0]
+        st.session_state["role"] = query_params.get("role", ["user"])[0]  # もしroleも返ってきてたら
+        # クエリパラメータ消去
+        if hasattr(st, "query_params"):
+            st.query_params.clear()
+        else:
+            st.experimental_set_query_params()
+        st.experimental_rerun()
+
+    # ------ 旧フロー（code→APIコールバック）も一応残す ------
+    elif "code" in query_params:
         code = query_params["code"][0]
-        # st.write(f"DEBUG: Google認証code={code}")  # ←本番ならコメントアウト可
+        st.write(f"DEBUG: Google認証 code = {code}")  # デバッグ用（不要なら消してOK）
         try:
             r = requests.get(f"{API_URL}/auth/callback", params={"code": code}, timeout=10)
-            # st.write(f"DEBUG: callback レスポンス: {r.status_code} / {r.text}")  # デバッグ
+            st.write(f"DEBUG: callback レスポンス: {r.status_code} / {r.text}")  # デバッグ用
             data = r.json()
-            # st.write(f"DEBUG: data: {data}")  # デバッグ
+            st.write("DEBUG: callback data", data)  # ←ここで中身確認！
         except Exception as e:
             st.error(f"API通信エラー: {e}")
             st.stop()
@@ -64,6 +78,7 @@ if user:
     if st.sidebar.button("🔓 ログアウト"):
         del st.session_state["user"]
         st.session_state.pop("role", None)
+        st.session_state.pop("token", None)
         st.rerun()
 else:
     st.stop()
