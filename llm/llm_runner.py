@@ -72,6 +72,11 @@ def load_llm() -> Tuple[Any, Any | None, int]:
     max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", 256))
     api_key = os.environ.get("OPENAI_API_KEY")  # 明示的に取得
 
+    # OpenAI系モデル利用時はAPIキーが正しくセットされていないと異常終了
+    if preset in ("auto", "heavy"):
+        if not api_key or not api_key.startswith("sk-"):
+            raise RuntimeError("OPENAI_API_KEYが未設定、または形式が不正です！（sk- から始まる値が必要）")
+
     if preset == "light":
         llm, tokenizer, max_new_tokens = _load_local_rinna()
         return llm, tokenizer, max_new_tokens
