@@ -100,6 +100,7 @@ elif st.session_state.upload_status == "done":
     question = st.text_input("アップロードしたPDFの内容について質問")
 
     if question:
+        # 1. ベクトルストア読み込み
         try:
             with st.spinner("ベクトルストア読込中..."):
                 vectorstore = load_vectorstore()
@@ -108,14 +109,26 @@ elif st.session_state.upload_status == "done":
             st.code(traceback.format_exc())
             st.stop()
 
+        # 2. RAGチェーン構築（認証エラー対応）
         try:
             with st.spinner("RAGチェーン構築中..."):
                 rag_chain = get_rag_chain(vectorstore, return_source=True, question=question)
         except Exception as e:
-            st.error("❌ RAGチェーンの構築に失敗しました")
-            st.code(traceback.format_exc())
-            st.stop()
+            tb = traceback.format_exc()
+            is_auth_error = any(
+                s in tb.lower() for s in ["401", "403", "unauthorized", "forbidden", "認証"]
+            )
+            if is_auth_error:
+                st.error("認証エラーのため再ログインが必要です")
+                st.session_state.pop("user", None)
+                st.session_state.pop("role", None)
+                st.rerun()
+            else:
+                st.error("❌ RAGチェーンの構築に失敗しました")
+                st.code(tb)
+                st.stop()
 
+        # 3. 回答生成（認証エラー対応）
         try:
             with st.spinner("回答生成中..."):
                 result = rag_chain.invoke({"question": question})
@@ -127,5 +140,15 @@ elif st.session_state.upload_status == "done":
                     page = doc.metadata.get("page", "?")
                     st.write(f"- {source} (p{page})")
         except Exception as e:
-            st.error("❌ 回答生成中にエラーが発生しました")
-            st.code(traceback.format_exc())
+            tb = traceback.format_exc()
+            is_auth_error = any(
+                s in tb.lower() for s in ["401", "403", "unauthorized", "forbidden", "認証"]
+            )
+            if is_auth_error:
+                st.error("認証エラーのため再ログインが必要です")
+                st.session_state.pop("user", None)
+                st.session_state.pop("role", None)
+                st.rerun()
+            else:
+                st.error("❌ 回答生成中にエラーが発生しました")
+                st.code(tb)
