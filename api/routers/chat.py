@@ -30,7 +30,7 @@ async def chat_endpoint(req: ChatRequest):
     try:
         vectorstore = load_vectorstore()
         rag_chain = get_rag_chain(vectorstore=vectorstore, return_source=True, question=query)
-        result = rag_chain.invoke({"query": query})
+        result = rag_chain.invoke({"question": query})
         answer = result.get("result", "")
         sources = []
         for doc in result.get("source_documents", []):
