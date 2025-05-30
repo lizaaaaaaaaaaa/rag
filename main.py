@@ -1,5 +1,13 @@
 import os
 
+# --- Cloud Run環境変数デバッグ出力 ---
+print("==== DEBUG: OPENAI_API_KEY =", (os.environ.get("OPENAI_API_KEY") or "")[:10], "**** ====")
+print("==== DEBUG: USE_LOCAL_LLM =", os.environ.get("USE_LOCAL_LLM"))
+print("==== GOOGLE_CLIENT_ID:", os.environ.get("GOOGLE_CLIENT_ID"))
+print("==== GOOGLE_CLIENT_SECRET:", os.environ.get("GOOGLE_CLIENT_SECRET"))
+print("==== GOOGLE_REDIRECT_URI:", os.environ.get("GOOGLE_REDIRECT_URI"))
+print("==== JWT_SECRET:", os.environ.get("JWT_SECRET"))
+
 # --- ローカルだけ .env を読む ---
 if os.getenv("ENV") != "production":
     from dotenv import load_dotenv
@@ -9,14 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-# --- ★Cloud Runログ用に主要環境変数をデバッグ出力 ---
-print("==== GOOGLE_CLIENT_ID:", os.environ.get("GOOGLE_CLIENT_ID"), "====")
-print("==== GOOGLE_CLIENT_SECRET:", os.environ.get("GOOGLE_CLIENT_SECRET"), "====")
-print("==== GOOGLE_REDIRECT_URI:", os.environ.get("GOOGLE_REDIRECT_URI"), "====")
-print("==== JWT_SECRET:", os.environ.get("JWT_SECRET"), "====")  # JWTもチェック
-print("==== OPENAI_API_KEY:", (os.environ.get("OPENAI_API_KEY") or "")[:5], "**** ====")
-
-# --- 本番フロントURLを1か所で管理 ---
+# --- 本番フロントURL ---
 FRONTEND_URL = "https://rag-frontend-190389115361.asia-northeast1.run.app"
 
 # --- FastAPIアプリ ---
@@ -26,11 +27,11 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# --- CORS設定（本番はallow_origins推奨ドメインに絞ってね！）---
+# --- CORS設定 ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],  # ← 本番はフロントURLだけ厳守！
-    allow_credentials=True,        # Cookie認証時は必須
+    allow_origins=[FRONTEND_URL],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -42,11 +43,11 @@ print("=== after healthz import ===")
 
 # --- ルーター登録 ---
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
-app.include_router(chat.router, prefix="/chat", tags=["chat"], trailing_slash=False)   
-app.include_router(google_oauth.router, tags=["auth"])            # Google OAuth
-app.include_router(healthz.router, prefix="", tags=["healthz"])   # /healthz
+app.include_router(chat.router, prefix="/chat", tags=["chat"], trailing_slash=False)
+app.include_router(google_oauth.router, tags=["auth"])
+app.include_router(healthz.router, prefix="", tags=["healthz"])
 
-# --- 静的ファイル（PDF公開用） ---
+# --- 静的ファイル ---
 pdf_dir = os.path.join("rag", "vectorstore", "pdfs")
 if os.path.isdir(pdf_dir):
     app.mount("/pdfs", StaticFiles(directory=pdf_dir), name="pdfs")
@@ -56,7 +57,7 @@ if os.path.isdir(pdf_dir):
 def read_root():
     return {"message": "Hello from FastAPI on Cloud Run!"}
 
-# --- ローカル実行用（Cloud Runでは不要） ---
+# --- ローカル実行用 ---
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8080))
