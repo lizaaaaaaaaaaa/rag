@@ -20,19 +20,18 @@ if Path(".env").exists():
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# --- OpenAI APIキー環境変数デバッグ＆未設定時エラーハンドリング ---
-import openai
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if OPENAI_API_KEY:
-    openai.api_key = OPENAI_API_KEY
-    print("[DEBUG] rag/ingested_text.py: OPENAI_API_KEY =", OPENAI_API_KEY[:5], "****")
-else:
-    print("[ERROR] rag/ingested_text.py: OPENAI_API_KEYが未設定です！")
-    # 必要に応じて強制停止（運用に慣れてきたらアンコメントで有効化）
-    # raise RuntimeError("OPENAI_API_KEYが未設定のままです")
-
 VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"
+
+# ---- NEW: 必要な時だけAPIキー取得 ----
+def get_openai_api_key():
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        print("[ERROR] rag/ingested_text.py: OPENAI_API_KEYが未設定です！")
+        # raise RuntimeError("OPENAI_API_KEYが未設定のままです")  # 必要なら強制停止
+    else:
+        print("[DEBUG] rag/ingested_text.py: OPENAI_API_KEY =", key[:5], "****")
+    return key
 
 class MyEmbedding(Embeddings):
     def __init__(self, model_name: str):
@@ -73,6 +72,9 @@ def load_vectorstore():
     )
 
 def get_rag_chain(vectorstore, return_source: bool = True, question: str = ""):
+    # ---- 必要な時だけAPIキー取得・セット ----
+    import openai
+    openai.api_key = get_openai_api_key()
     llm, tokenizer, max_tokens = load_llm()
     logger.info("🔍 get_rag_chain - preset LLM = %s", type(llm).__name__)
 
