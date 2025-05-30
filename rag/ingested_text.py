@@ -13,15 +13,20 @@ from sentence_transformers import SentenceTransformer
 
 from llm.llm_runner import load_llm
 
+# --- .env読み込み（ローカル用） ---
 if Path(".env").exists():
     load_dotenv()
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# --- OpenAI APIキー環境変数デバッグ出力 ---
 import openai
 if (OPENAI_API_KEY := os.getenv("OPENAI_API_KEY")):
     openai.api_key = OPENAI_API_KEY
+    print("[DEBUG] rag/ingested_text.py: OPENAI_API_KEY =", OPENAI_API_KEY[:5], "****")
+else:
+    print("[DEBUG] rag/ingested_text.py: OPENAI_API_KEY not set")
 
 VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"

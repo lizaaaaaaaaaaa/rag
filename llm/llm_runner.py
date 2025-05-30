@@ -14,6 +14,9 @@ from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
+# --- OPENAI_API_KEY デバッグ出力 ---
+print("[DEBUG] llm/llm_runner.py: OPENAI_API_KEY =", (os.environ.get("OPENAI_API_KEY") or "")[:5], "****")
+
 def _load_local_rinna() -> Tuple[Any, Any, int]:
     """
     ローカルLLM（rinna 3.6B）を8bit優先で起動し、失敗時はfloat16で起動。
@@ -67,13 +70,14 @@ def load_llm() -> Tuple[Any, Any | None, int]:
     """
     preset = os.getenv("MODEL_PRESET", "auto").lower()
     max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", 256))
+    api_key = os.environ.get("OPENAI_API_KEY")  # 明示的に取得
 
     if preset == "light":
         llm, tokenizer, max_new_tokens = _load_local_rinna()
         return llm, tokenizer, max_new_tokens
 
     if preset == "heavy":
-        return ChatOpenAI(model="gpt-4o", temperature=0), None, max_new_tokens
+        return ChatOpenAI(model="gpt-4o", temperature=0, api_key=api_key), None, max_new_tokens
 
     # auto（デフォルト：gpt-3.5-turbo）
-    return ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0), None, max_new_tokens
+    return ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0, api_key=api_key), None, max_new_tokens

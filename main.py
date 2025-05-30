@@ -14,6 +14,7 @@ print("==== GOOGLE_CLIENT_ID:", os.environ.get("GOOGLE_CLIENT_ID"), "====")
 print("==== GOOGLE_CLIENT_SECRET:", os.environ.get("GOOGLE_CLIENT_SECRET"), "====")
 print("==== GOOGLE_REDIRECT_URI:", os.environ.get("GOOGLE_REDIRECT_URI"), "====")
 print("==== JWT_SECRET:", os.environ.get("JWT_SECRET"), "====")  # JWTもチェック
+print("==== OPENAI_API_KEY:", (os.environ.get("OPENAI_API_KEY") or "")[:5], "**** ====")
 
 # --- 本番フロントURLを1か所で管理 ---
 FRONTEND_URL = "https://rag-frontend-190389115361.asia-northeast1.run.app"
