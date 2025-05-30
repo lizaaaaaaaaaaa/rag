@@ -40,7 +40,7 @@ steps:
       - run
       - deploy
       - rag-api
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.101
+      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
