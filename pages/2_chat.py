@@ -4,16 +4,19 @@ import os
 
 st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
 
-# .envのAPI_URLは「https://rag-api-190389115361.asia-northeast1.run.app」みたいなベースURLのみ！
+# .envのAPI_URLはベースURLのみ
 API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
 if API_URL.endswith("/"):
     API_URL = API_URL.rstrip("/")
 
 def post_chat(user_input, username):
     payload = {"question": user_input, "username": username}
+    url = f"{API_URL}/chat"
+    # === ここでAPI URLをprint & st.writeで表示 ===
+    print("=== APIにPOSTするURL:", url)
+    st.write(f"APIにPOSTするURL: {url}")
     try:
-        # ★ここで必ず「/chat」を付ける！
-        r = requests.post(f"{API_URL}/chat", json=payload, timeout=30)
+        r = requests.post(url, json=payload, timeout=30)
         if r.status_code == 200:
             res = r.json()
             return {
@@ -36,12 +39,12 @@ if "messages" not in st.session_state:
 username = st.session_state["user"]
 
 st.title("💬 チャット")
-st.write("Chatページ動いてるよ")  # ← デバッグ用
+st.write("Chatページ動いてるよ")  # デバッグ用
 
 user_input = st.text_input("メッセージを入力してください", "")
 
 if st.button("送信") and user_input.strip():
-    st.write("API呼び出し直前！")  # ← デバッグ用
+    st.write("API呼び出し直前！")  # デバッグ用
     api_response = post_chat(user_input, username)
     ai_response = api_response.get("result") or "応答エラー"
     sources = api_response.get("sources", [])
