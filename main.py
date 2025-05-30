@@ -42,7 +42,7 @@ print("=== after healthz import ===")
 
 # --- ルーター登録 ---
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
-app.include_router(chat.router, prefix="/chat", tags=["chat"])    # POST /chat でRAG
+app.include_router(chat.router, prefix="/chat", tags=["chat"], trailing_slash=False)   
 app.include_router(google_oauth.router, tags=["auth"])            # Google OAuth
 app.include_router(healthz.router, prefix="", tags=["healthz"])   # /healthz
 
