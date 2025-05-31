@@ -28,8 +28,11 @@ async def chat_endpoint(req: ChatRequest):
     answer = ""
     sources = []
     try:
+        # ベクトルストア読み込み
         vectorstore = load_vectorstore()
+        # RAGチェーン取得
         rag_chain = get_rag_chain(vectorstore=vectorstore, return_source=True, question=query)
+        # 必ず "question" キーで渡す（※ここが本質の修正点！）
         result = rag_chain.invoke({"question": query})
         answer = result.get("result", "")
         sources = []
@@ -40,6 +43,8 @@ async def chat_endpoint(req: ChatRequest):
             sources.append({"metadata": meta})
     except Exception as e:
         answer = f"【エラー】RAG回答に失敗しました: {e}"
+        # 必要ならログ出力も
+        logging.exception("RAG回答エラー")
 
     log = {
         "id": str(uuid4()),

@@ -23,8 +23,10 @@ logging.basicConfig(level=logging.INFO)
 VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"
 
-# ---- NEW: 必要な時だけAPIキー取得 ----
+# ---- NEW: 必要な時だけAPIキー取得（printでデバッグ追加！） ----
 def get_openai_api_key():
+    # ここで「os.environ.get」での値を必ずprint！（Cloud Runでもログ出る）
+    print("[DEBUG] get_openai_api_key: os.environ.get('OPENAI_API_KEY') =", os.environ.get('OPENAI_API_KEY'))
     key = os.getenv("OPENAI_API_KEY")
     if not key:
         print("[ERROR] rag/ingested_text.py: OPENAI_API_KEYが未設定です！")
