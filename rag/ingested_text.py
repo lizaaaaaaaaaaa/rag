@@ -1,5 +1,6 @@
 import os
 import logging
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -23,16 +24,29 @@ logging.basicConfig(level=logging.INFO)
 VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"
 
-# ---- NEW: 必要な時だけAPIキー取得（printでデバッグ追加！） ----
+# ---- 必要な時だけAPIキー取得（print＋flush＋logger） ----
 def get_openai_api_key():
-    # ここで「os.environ.get」での値を必ずprint！（Cloud Runでもログ出る）
-    print("[DEBUG] get_openai_api_key: os.environ.get('OPENAI_API_KEY') =", os.environ.get('OPENAI_API_KEY'))
+    # ←ここが「最初の行」！！
+    print("=" * 60)
+    print("[DEBUG] === GET OPENAI_API_KEY!!! ===", os.getenv("OPENAI_API_KEY"))
+    print("=" * 60)
+    sys.stdout.flush()
+    # --- ここからは今まで通り ---
+    key_env = os.environ.get('OPENAI_API_KEY')
+    print("[DEBUG] get_openai_api_key: os.environ.get('OPENAI_API_KEY') =", key_env)
+    sys.stdout.flush()
+    logger.warning(f"[DEBUG] get_openai_api_key: os.environ.get('OPENAI_API_KEY') = {key_env}")
+
     key = os.getenv("OPENAI_API_KEY")
     if not key:
         print("[ERROR] rag/ingested_text.py: OPENAI_API_KEYが未設定です！")
+        sys.stdout.flush()
+        logger.error("[ERROR] rag/ingested_text.py: OPENAI_API_KEYが未設定です！")
         # raise RuntimeError("OPENAI_API_KEYが未設定のままです")  # 必要なら強制停止
     else:
         print("[DEBUG] rag/ingested_text.py: OPENAI_API_KEY =", key[:5], "****")
+        sys.stdout.flush()
+        logger.info(f"[DEBUG] rag/ingested_text.py: OPENAI_API_KEY = {key[:5]} ****")
     return key
 
 class MyEmbedding(Embeddings):
