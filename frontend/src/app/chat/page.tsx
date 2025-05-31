@@ -30,8 +30,8 @@ export default function ChatPage() {
   // 履歴取得
   const fetchHistory = async () => {
     try {
-      const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat", {
-        credentials: "include",  // ★追加
+      const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/history", {
+        credentials: "include",  // ★GETは /chat/history
       });
       if (!res.ok) throw new Error(`API Error: ${res.status}`);
       const data = await res.json();
@@ -53,11 +53,11 @@ export default function ChatPage() {
     setSources([]);
     setError(null);
     try {
-      const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat/history", {
-        method: "POST",
+      const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat", {
+        method: "POST", // ← ここが重要！（/chatにPOST）
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),
-        credentials: "include",  // ★追加
+        credentials: "include",
       });
       const data = await res.json();
       setAnswer(data.answer);
