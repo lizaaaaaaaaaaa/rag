@@ -10,6 +10,7 @@ from rag.ingested_text import load_vectorstore, get_rag_chain
 from fastapi.responses import StreamingResponse, JSONResponse
 import csv
 import io
+import sys  # ← flushのために追加
 
 router = APIRouter()
 
@@ -22,6 +23,11 @@ class ChatRequest(BaseModel):
 
 @router.post("/", summary="AIチャット")
 async def chat_endpoint(req: ChatRequest):
+    # ★ここで必ずログ出力（Cloud Runで検知用）
+    print("=== chat_endpoint called ===", req.question, req.username)
+    sys.stdout.flush()
+    logging.warning("=== chat_endpoint called === %s %s", req.question, req.username)
+
     query = req.question
     user = req.username or "guest"
     now = datetime.now().strftime("%Y-%m-%d %H:%M")

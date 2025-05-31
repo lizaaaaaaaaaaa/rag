@@ -24,14 +24,12 @@ logging.basicConfig(level=logging.INFO)
 VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"
 
-# ---- 必要な時だけAPIキー取得（print＋flush＋logger） ----
 def get_openai_api_key():
-    # ←ここが「最初の行」！！
-    print("=" * 60)
-    print("[DEBUG] === GET OPENAI_API_KEY!!! ===", os.getenv("OPENAI_API_KEY"))
-    print("=" * 60)
+    # ★ここで必ずログ＆フラッシュ！
+    print("=== get_openai_api_keyが呼ばれた ===", os.getenv("OPENAI_API_KEY"))
     sys.stdout.flush()
-    # --- ここからは今まで通り ---
+    logger.warning("=== get_openai_api_keyが呼ばれた === %s", os.getenv("OPENAI_API_KEY"))
+
     key_env = os.environ.get('OPENAI_API_KEY')
     print("[DEBUG] get_openai_api_key: os.environ.get('OPENAI_API_KEY') =", key_env)
     sys.stdout.flush()
@@ -88,9 +86,19 @@ def load_vectorstore():
     )
 
 def get_rag_chain(vectorstore, return_source: bool = True, question: str = ""):
-    # ---- 必要な時だけAPIキー取得・セット ----
-    import openai
-    openai.api_key = get_openai_api_key()
+    # ★ここで呼び出しログ＋例外をキャッチ！
+    print("=== get_rag_chainが呼ばれた ===")
+    sys.stdout.flush()
+    logger.warning("=== get_rag_chainが呼ばれた ===")
+    try:
+        import openai
+        openai.api_key = get_openai_api_key()
+    except Exception as e:
+        print("!!! get_rag_chain内で例外:", e)
+        sys.stdout.flush()
+        logger.error("get_rag_chain内で例外: %s", e)
+        raise
+
     llm, tokenizer, max_tokens = load_llm()
     logger.info("🔍 get_rag_chain - preset LLM = %s", type(llm).__name__)
 
