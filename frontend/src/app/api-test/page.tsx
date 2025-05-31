@@ -6,11 +6,11 @@ export default function ApiTest() {
   const [result, setResult] = useState("");
 
   const ask = async () => {
-    const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/page", {
+    const res = await fetch("https://rag-api-190389115361.asia-northeast1.run.app/chat", { // ←修正！
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query }),
-      credentials: "include",  // ★追加！
+      body: JSON.stringify({ question: query }), // ←修正！
+      credentials: "include",
     });
     const data = await res.json();
     setResult(data.answer ?? JSON.stringify(data));
