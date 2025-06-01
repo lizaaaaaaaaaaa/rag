@@ -1,4 +1,5 @@
 # api/routers/chat.py
+
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -12,8 +13,9 @@ import csv
 import io
 import sys  # ← flush のために追加
 
-# --- RAG 用のユーティリティ関数を読み込む ---
-from rag.ingested_text import load_vectorstore, get_rag_chain
+# ここでは、startup イベントで作成済みの rag_chain_template を利用するため、
+# main.py からグローバル変数をインポートします。
+import main  # ただし、main.py で vectorstore / rag_chain_template をロード済みである必要があります
 
 router = APIRouter()
 
@@ -23,20 +25,22 @@ history_logs: list[dict] = []
 
 class ChatRequest(BaseModel):
     question: str
-    username: str | None = None  # 型ヒントも追加 (Python 3.10 以降なら)
+    username: str | None = None  # 型ヒント (Python 3.10 以降なら)
 
 
 @router.post("/", summary="AI チャット")
 async def chat_endpoint(req: ChatRequest):
     """
     クライアントから { "question": "...", "username": "..." } を受け取り、
-    RAG チェーンを呼び出して { "answer": "...", "sources": [...] } を返す。
+    事前にロード済みの 'rag_chain_template' をコピーして invoke() を呼び出し、
+    { "answer": "...", "sources": [...] } を返します。
     """
-    # ★ ログを出力（Cloud Run のログで検知するため）
+
+    # --- ログを出力（Cloud Run のログで検知するため）---
     print("=== chat_endpoint called ===", req.question, req.username)
     print("=== Request received ===")
     print("Method: POST")
-    print("Path: /chat")
+    print("Path: /chat/")
     print("Question:", req.question)
     print("Username:", req.username)
     sys.stdout.flush()
@@ -50,16 +54,18 @@ async def chat_endpoint(req: ChatRequest):
     sources: list[dict] = []
 
     try:
-        # 1) ベクトルストアを読み込む
-        vectorstore = load_vectorstore()
+        # --- 事前にロード済みの rag_chain_template と vectorstore を使いまわす ---
 
-        # 2) RAG チェーンを取得（内部で load_llm() → ChatOpenAI を呼ぶ）
-        #    get_rag_chain() は引数に question を取りますが、実際の問い合わせは
-        #    invoke({"query": ...}) で行う。
-        rag_chain = get_rag_chain(vectorstore=vectorstore, return_source=True, question=query)
+        # 1) vectorstore は main.vectorstore、rag_chain_template は main.rag_chain_template から取得
+        vectorstore = main.vectorstore
+        rag_chain_template = main.rag_chain_template
 
-        # 3) invoke には必ず "query" キーを渡す
-        result = rag_chain.invoke({"query": query})
+        # 2) 起動時に作成した rag_chain_template をコピーし、クエリだけ差し替えて invoke() に渡す
+        #    ※ LangChain のチェーンは .copy() や .bind() などでクローンして使い回せます
+        chain = rag_chain_template.copy()  # または chain = rag_chain_template.bind({"query": query}) など
+        result = chain.invoke({"query": query})
+
+        # 3) レスポンスから答えだけ取り出す
         answer = result.get("result", "")
 
         # 4) 出典ドキュメントを整形
@@ -87,6 +93,15 @@ async def chat_endpoint(req: ChatRequest):
     history_logs.append(log)
 
     return {"answer": answer, "sources": sources}
+
+
+@router.post("", include_in_schema=False)
+async def chat_endpoint_slashless(req: ChatRequest):
+    """
+    スラッシュなし (/chat) で POST された場合も、同じ chat_endpoint を呼び出す。
+    これにより、クライアントが末尾スラッシュを付け忘れても 405 エラーになりません。
+    """
+    return await chat_endpoint(req)
 
 
 @router.get("/history", summary="チャット履歴取得")

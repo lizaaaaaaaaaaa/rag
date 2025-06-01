@@ -4,17 +4,21 @@ import os
 
 st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
 
-# .envのAPI_URLはベースURLのみ
+# .env の API_URL はベースURL（末尾スラッシュなし）で指定
 API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
 if API_URL.endswith("/"):
     API_URL = API_URL.rstrip("/")
 
 def post_chat(user_input, username):
     payload = {"question": user_input, "username": username}
-    url = f"{API_URL}/chat"
-    # === ここでAPI URLをprint & st.writeで表示 ===
+
+    # 末尾にスラッシュをつけて POST /chat/ を直接叩く
+    url = f"{API_URL}/chat/"
+
+    # === ここで API URL を print & st.write で表示 ===
     print("=== APIにPOSTするURL:", url)
     st.write(f"APIにPOSTするURL: {url}")
+
     try:
         r = requests.post(url, json=payload, timeout=30)
         if r.status_code == 200:
