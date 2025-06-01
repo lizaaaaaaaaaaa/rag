@@ -7,7 +7,9 @@ import os
 
 router = APIRouter()
 
-GCS_BUCKET_NAME = "run-sources-rag-cloud-project-asia-northeast1"
+GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME")
+if not GCS_BUCKET_NAME:
+    raise RuntimeError("GCS_BUCKET_NAME 環境変数が未設定です")
 
 def upload_file_to_gcs(file: UploadFile, dest_filename: str) -> str:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -33,7 +35,7 @@ def download_gcs_to_local(gs_path: str, local_path: str):
     blob.download_to_filename(local_path)
     return local_path
 
-@router.post("/ingest", summary="PDFファイルのアップロードとベクトル化")  # ★ここをingestに統一
+@router.post("/ingest", summary="PDFファイルのアップロードとベクトル化")
 async def ingest(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDFファイルのみ対応です。")

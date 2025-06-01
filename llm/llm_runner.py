@@ -3,7 +3,6 @@ from __future__ import annotations
 import os, logging
 from typing import Any, Tuple
 
-# --- OPENAI_API_KEY デバッグ出力 ---
 print("==== [llm_runner] DEBUG: OPENAI_API_KEY =", (os.environ.get("OPENAI_API_KEY") or "")[:10], "****")
 print("==== [llm_runner] DEBUG: USE_LOCAL_LLM =", os.environ.get("USE_LOCAL_LLM"))
 
@@ -14,7 +13,6 @@ from transformers import (
     pipeline,
 )
 from langchain_community.llms import HuggingFacePipeline
-# ↓ ここを langchain_openai.ChatOpenAI に切り替え
 from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
@@ -59,7 +57,6 @@ def _load_local_rinna() -> Tuple[Any, Any, int]:
     return llm, tokenizer, max_new_tokens
 
 def load_llm() -> Tuple[Any, Any | None, int]:
-    # デバッグ：どのクラスが呼び出されているか
     print(">>> [load_llm] ChatOpenAI is from:", ChatOpenAI)
 
     preset = os.getenv("MODEL_PRESET", "auto").lower()
@@ -78,4 +75,4 @@ def load_llm() -> Tuple[Any, Any | None, int]:
         return ChatOpenAI(model_name="gpt-4o", temperature=0, openai_api_key=api_key), None, max_new_tokens
 
     # auto（デフォルト：gpt-3.5-turbo）
-    return ChatOpenAI(model_name="gpt-3.5-turbo-0125", temperature=0, openai_api_key=api_key), None, max_new_tokens
+    return ChatOpenAI(model_name="gpt-3.5-turbo-0125", temperature=0, openai_api_key=api_key), None, max_new_tokens 
