@@ -43,8 +43,8 @@ async def chat_endpoint(req: ChatRequest):
         vectorstore = load_vectorstore()
         # RAGチェーン取得
         rag_chain = get_rag_chain(vectorstore=vectorstore, return_source=True, question=query)
-        # 必ず "question" キーで渡す（※ここが本質の修正点！）
-        result = rag_chain.invoke({"question": query})
+        # 正しくは "query" キーで渡す
+        result = rag_chain.invoke({"query": query})
         answer = result.get("result", "")
         sources = []
         for doc in result.get("source_documents", []):
