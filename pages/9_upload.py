@@ -1,9 +1,10 @@
+# 9_upload.py
 import streamlit as st
 import os
 import uuid
 import traceback
+import requests
 from google.cloud import storage
-from rag.ingested_text import ingest_pdf_to_vectorstore, load_vectorstore, get_rag_chain
 
 st.set_page_config(page_title="アップロード & RAG質問", page_icon="📤", layout="wide")
 
@@ -18,8 +19,14 @@ st.write("""
 アップロードしたPDFは自動的にGCSへ保存され、ベクトルストアに取り込まれます。
 """)
 
+# バックエンド API のベース URL
+API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
+if API_URL.endswith("/"):
+    API_URL = API_URL.rstrip("/")
+
 GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "run-sources-rag-cloud-project-asia-northeast1")
 os.makedirs("uploads", exist_ok=True)
+
 
 def save_upload_to_local(uploaded_file, save_dir="uploads"):
     unique_filename = f"{uuid.uuid4().hex}.pdf"
@@ -28,6 +35,7 @@ def save_upload_to_local(uploaded_file, save_dir="uploads"):
         f.write(uploaded_file.getbuffer())
     return save_path, unique_filename
 
+
 def upload_to_gcs(local_path, bucket_name, blob_name):
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -35,6 +43,7 @@ def upload_to_gcs(local_path, bucket_name, blob_name):
     with open(local_path, "rb") as f:
         blob.upload_from_file(f, rewind=True)
     return f"gs://{bucket_name}/{blob_name}"
+
 
 # === セッションステート管理 ===
 if "upload_status" not in st.session_state:
@@ -56,13 +65,17 @@ if st.session_state.upload_status == "init":
             st.session_state.local_path = local_path
             st.session_state.unique_filename = unique_filename
             st.success(f"✅ ローカル保存成功: {local_path}")
+
             # 2. GCSアップロード
             blob_name = f"uploads/{unique_filename}"
             upload_to_gcs(local_path, GCS_BUCKET_NAME, blob_name)
             st.session_state.blob_name = blob_name
             st.success(f"✅ GCSアップロード成功: {blob_name}")
+
+            # ステータスを「uploaded」に変えてリロード
             st.session_state.upload_status = "uploaded"
             st.rerun()
+
         except Exception as e:
             st.error("❌ アップロード失敗")
             st.code(traceback.format_exc())
@@ -79,14 +92,18 @@ elif st.session_state.upload_status == "uploaded":
 elif st.session_state.upload_status == "ingesting":
     try:
         with st.spinner("ベクトルストアに取り込み中...⏳"):
+            # ingest_pdf_to_vectorstore は rag.ingested_text に定義されている想定
+            from rag.ingested_text import ingest_pdf_to_vectorstore
             ingest_pdf_to_vectorstore(st.session_state.local_path)
+
         st.success("✅ ベクトルストア取り込み完了！")
         st.session_state.upload_status = "done"
         st.rerun()
+
     except Exception as e:
         st.error("❌ ベクトル化に失敗しました")
         st.code(traceback.format_exc())
-        st.session_state.upload_status = "uploaded"  # 戻す
+        st.session_state.upload_status = "uploaded"  # ステータスを戻す
 
 # === 4. チャットフェーズ ===
 elif st.session_state.upload_status == "done":
@@ -100,55 +117,30 @@ elif st.session_state.upload_status == "done":
     question = st.text_input("アップロードしたPDFの内容について質問")
 
     if question:
-        # 1. ベクトルストア読み込み
+        # ここでは「バックエンド API (/chat/) へ POST するだけ」に切り替え
         try:
-            with st.spinner("ベクトルストア読込中..."):
-                vectorstore = load_vectorstore()
+            with st.spinner("バックエンドへ質問を送信中...⏳"):
+                payload = {"question": question, "username": st.session_state["user"]}
+                url = f"{API_URL}/chat/"
+                # デバッグ用に URL を表示
+                print("=== APIにPOSTするURL:", url)
+                st.write(f"API に POST する URL: {url}")
+
+                r = requests.post(url, json=payload, timeout=60)
         except Exception as e:
-            st.error("❌ ベクトルストアの読み込みに失敗しました")
-            st.code(traceback.format_exc())
+            st.error(f"通信エラー: {e}")
             st.stop()
 
-        # 2. RAGチェーン構築（認証エラー対応）
-        try:
-            with st.spinner("RAGチェーン構築中..."):
-                rag_chain = get_rag_chain(vectorstore, return_source=True, question=question)
-        except Exception as e:
-            tb = traceback.format_exc()
-            is_auth_error = any(
-                s in tb.lower() for s in ["401", "403", "unauthorized", "forbidden", "認証"]
-            )
-            if is_auth_error:
-                st.error("認証エラーのため再ログインが必要です")
-                st.session_state.pop("user", None)
-                st.session_state.pop("role", None)
-                st.rerun()
-            else:
-                st.error("❌ RAGチェーンの構築に失敗しました")
-                st.code(tb)
-                st.stop()
-
-        # 3. 回答生成（認証エラー対応）
-        try:
-            with st.spinner("回答生成中..."):
-                result = rag_chain.invoke({"question": question})
-            st.write(f"📘 回答: {result.get('result', '❌ 回答が見つかりませんでした')}")
-            if result.get("source_documents"):
+        if r.status_code == 200:
+            res_json = r.json()
+            st.write(f"📘 回答: {res_json.get('answer') or '❌ 応答が見つかりませんでした'}")
+            sources = res_json.get("sources", [])
+            if sources:
                 st.write("📎 出典:")
-                for doc in result["source_documents"]:
-                    source = doc.metadata.get("source", "不明")
-                    page = doc.metadata.get("page", "?")
+                for entry in sources:
+                    meta = entry.get("metadata", {})
+                    source = meta.get("source", "不明")
+                    page = meta.get("page", "?")
                     st.write(f"- {source} (p{page})")
-        except Exception as e:
-            tb = traceback.format_exc()
-            is_auth_error = any(
-                s in tb.lower() for s in ["401", "403", "unauthorized", "forbidden", "認証"]
-            )
-            if is_auth_error:
-                st.error("認証エラーのため再ログインが必要です")
-                st.session_state.pop("user", None)
-                st.session_state.pop("role", None)
-                st.rerun()
-            else:
-                st.error("❌ 回答生成中にエラーが発生しました")
-                st.code(tb)
+        else:
+            st.error(f"API エラー: {r.status_code} / {r.text}")

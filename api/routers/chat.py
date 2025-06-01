@@ -1,3 +1,4 @@
+# api/routers/chat.py
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -5,58 +6,76 @@ from uuid import uuid4
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from rag.ingested_text import load_vectorstore, get_rag_chain
-
 from fastapi.responses import StreamingResponse, JSONResponse
+
 import csv
 import io
-import sys  # ← flushのために追加
+import sys  # ← flush のために追加
+
+# --- RAG 用のユーティリティ関数を読み込む ---
+from rag.ingested_text import load_vectorstore, get_rag_chain
 
 router = APIRouter()
 
-# グローバル履歴（MVP用、運用時はDB化が◎）
-history_logs = []
+# グローバル履歴（MVP 用。運用時は DB 化するのが望ましい）
+history_logs: list[dict] = []
+
 
 class ChatRequest(BaseModel):
     question: str
-    username: str | None = None  # 型ヒントも追加 (Python3.10以降なら)
+    username: str | None = None  # 型ヒントも追加 (Python 3.10 以降なら)
 
-@router.post("/", summary="AIチャット")
+
+@router.post("/", summary="AI チャット")
 async def chat_endpoint(req: ChatRequest):
-    # ★ここで必ずログ出力（Cloud Runで検知用）
+    """
+    クライアントから { "question": "...", "username": "..." } を受け取り、
+    RAG チェーンを呼び出して { "answer": "...", "sources": [...] } を返す。
+    """
+    # ★ ログを出力（Cloud Run のログで検知するため）
     print("=== chat_endpoint called ===", req.question, req.username)
-    print(f"=== Request received ===")
-    print(f"Method: POST")
-    print(f"Path: /chat")
-    print(f"Question: {req.question}")
-    print(f"Username: {req.username}")
+    print("=== Request received ===")
+    print("Method: POST")
+    print("Path: /chat")
+    print("Question:", req.question)
+    print("Username:", req.username)
     sys.stdout.flush()
     logging.warning("=== chat_endpoint called === %s %s", req.question, req.username)
 
     query = req.question
     user = req.username or "guest"
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
     answer = ""
-    sources = []
+    sources: list[dict] = []
+
     try:
-        # ベクトルストア読み込み
+        # 1) ベクトルストアを読み込む
         vectorstore = load_vectorstore()
-        # RAGチェーン取得
+
+        # 2) RAG チェーンを取得（内部で load_llm() → ChatOpenAI を呼ぶ）
+        #    get_rag_chain() は引数に question を取りますが、実際の問い合わせは
+        #    invoke({"query": ...}) で行う。
         rag_chain = get_rag_chain(vectorstore=vectorstore, return_source=True, question=query)
-        # 正しくは "query" キーで渡す
+
+        # 3) invoke には必ず "query" キーを渡す
         result = rag_chain.invoke({"query": query})
         answer = result.get("result", "")
-        sources = []
+
+        # 4) 出典ドキュメントを整形
         for doc in result.get("source_documents", []):
             meta = {k: str(v) for k, v in doc.metadata.items()}
+            # ファイル名だけに絞る
             meta["source"] = Path(meta.get("source", "unknown")).name
             meta.setdefault("page", "?")
             sources.append({"metadata": meta})
-    except Exception as e:
-        answer = f"【エラー】RAG回答に失敗しました: {e}"
-        # 必要ならログ出力も
-        logging.exception("RAG回答エラー")
 
+    except Exception as e:
+        # 例外時はエラーメッセージを返す
+        answer = f"【エラー】RAG 回答に失敗しました: {e}"
+        logging.exception("RAG 回答エラー")
+
+    # 5) 履歴に追加しておく（MVP 用）
     log = {
         "id": str(uuid4()),
         "question": query,
@@ -66,13 +85,16 @@ async def chat_endpoint(req: ChatRequest):
         "sources": sources,
     }
     history_logs.append(log)
+
     return {"answer": answer, "sources": sources}
+
 
 @router.get("/history", summary="チャット履歴取得")
 def get_history():
     return {"logs": history_logs}
 
-@router.get("/export/csv", summary="チャット履歴CSVダウンロード")
+
+@router.get("/export/csv", summary="チャット履歴 CSV ダウンロード")
 def export_csv():
     si = io.StringIO()
     writer = csv.writer(si)
@@ -92,7 +114,8 @@ def export_csv():
         headers={"Content-Disposition": "attachment; filename=chat_history.csv"}
     )
 
-@router.get("/export/json", summary="チャット履歴JSONダウンロード")
+
+@router.get("/export/json", summary="チャット履歴 JSON ダウンロード")
 def export_json():
     return JSONResponse(
         content=history_logs,
