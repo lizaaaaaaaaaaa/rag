@@ -72,8 +72,8 @@ def load_llm() -> Tuple[Any, Any | None, int]:
         return llm, tokenizer, max_new_tokens
 
     if preset == "heavy":
-        # 古いバージョン用のパラメータ指定
+        # langchain-openai==0.0.8 用のパラメータ
         return ChatOpenAI(model_name="gpt-4o", temperature=0, openai_api_key=api_key), None, max_new_tokens
 
-    # auto（デフォルト：gpt-3.5-turbo）- 古いバージョン用
+    # auto（デフォルト：gpt-3.5-turbo）- langchain-openai==0.0.8 用
     return ChatOpenAI(model_name="gpt-3.5-turbo-0125", temperature=0, openai_api_key=api_key), None, max_new_tokens
