@@ -71,7 +71,7 @@ def load_llm() -> Tuple[Any, Any | None, int]:
         return llm, tokenizer, max_new_tokens
 
     if preset == "heavy":
-        return ChatOpenAI(model="gpt-4o", temperature=0, api_key=api_key), None, max_new_tokens
+        return ChatOpenAI(model_name="gpt-4o", temperature=0, openai_api_key=api_key), None, max_new_tokens
 
     # auto（デフォルト：gpt-3.5-turbo）
-    return ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0, api_key=api_key), None, max_new_tokens
+    return ChatOpenAI(model_name="gpt-3.5-turbo-0125", temperature=0, openai_api_key=api_key), None, max_new_tokens

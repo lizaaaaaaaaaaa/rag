@@ -25,6 +25,11 @@ class ChatRequest(BaseModel):
 async def chat_endpoint(req: ChatRequest):
     # ★ここで必ずログ出力（Cloud Runで検知用）
     print("=== chat_endpoint called ===", req.question, req.username)
+    print(f"=== Request received ===")
+    print(f"Method: POST")
+    print(f"Path: /chat")
+    print(f"Question: {req.question}")
+    print(f"Username: {req.username}")
     sys.stdout.flush()
     logging.warning("=== chat_endpoint called === %s %s", req.question, req.username)
 
