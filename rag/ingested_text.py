@@ -104,7 +104,7 @@ def get_openai_api_key():
     key = os.getenv("OPENAI_API_KEY")
     if not key:
         print("[ERROR] rag/ingested_text.py: OPENAI_API_KEYが未設定です！")
-        sys.stdout.flush()
+        sys.stdout.flush()  
         logger.error("[ERROR] rag/ingested_text.py: OPENAI_API_KEYが未設定です！")
     else:
         print("[DEBUG] rag/ingested_text.py: OPENAI_API_KEY =", key[:5], "****")
@@ -145,6 +145,7 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
 
     if os.path.exists(index_path):
         # 既存インデックスがあれば読み込んで追加
+        # allow_dangerous_deserializationを明示的にTrueに設定
         vectorstore = FAISS.load_local(
             LOCAL_VECTOR_DIR, embeddings,
             index_name=INDEX_NAME,
@@ -166,6 +167,9 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
         logger.error("❌ GCS へのアップロード中に例外: %s", e)
         # 失敗しても処理を止めずにローカルのままにしておく
 
+    # 追加したドキュメント数を返す
+    return len(documents)
+
 
 def load_vectorstore():
     """
@@ -183,11 +187,23 @@ def load_vectorstore():
     # ── 存在チェック
     index_path = os.path.join(LOCAL_VECTOR_DIR, f"{INDEX_NAME}.faiss")
     if not os.path.exists(index_path):
-        # 例外を投げると FastAPI 側でキャッチできる
-        raise FileNotFoundError(f"ベクトルストア（{index_path}）が見つかりません。PDF取り込みしてください。")
+        # 初回起動時はベクトルストアが存在しないので、空のベクトルストアを作成
+        logger.warning("ベクトルストアが見つかりません。空のベクトルストアを作成します。")
+        embeddings = MyEmbedding("intfloat/multilingual-e5-small")
+        from langchain.schema import Document
+        dummy_doc = Document(page_content="初期化用ダミーテキスト", metadata={"source": "init", "page": 0})
+        vectorstore = FAISS.from_documents([dummy_doc], embeddings)
+        vectorstore.save_local(LOCAL_VECTOR_DIR, index_name=INDEX_NAME)
+        # GCSにもアップロード
+        try:
+            upload_vectorstore_to_gcs(LOCAL_VECTOR_DIR)
+        except Exception as e:
+            logger.error("初期ベクトルストアのGCSアップロードに失敗: %s", e)
+        return vectorstore
 
     # ── Embeddings を再構築
     embeddings = MyEmbedding("intfloat/multilingual-e5-small")
+    # allow_dangerous_deserializationを明示的にTrueに設定（重要！）
     return FAISS.load_local(
         LOCAL_VECTOR_DIR, embeddings,
         index_name=INDEX_NAME,
