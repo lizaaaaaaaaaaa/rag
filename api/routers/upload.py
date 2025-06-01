@@ -33,8 +33,8 @@ def download_gcs_to_local(gs_path: str, local_path: str):
     blob.download_to_filename(local_path)
     return local_path
 
-@router.post("/upload_pdf", summary="PDFファイルのアップロード")
-async def upload_pdf(file: UploadFile = File(...)):
+@router.post("/ingest", summary="PDFファイルのアップロードとベクトル化")  # ★ここをingestに統一
+async def ingest(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDFファイルのみ対応です。")
 
