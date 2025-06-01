@@ -65,3 +65,12 @@ async def ingest(file: UploadFile = File(...)):
         "added_docs": added,
         "message": "アップロード＆ベクトル化完了！"
     }
+
+# ===== ここから追加！ =====
+
+@router.post("/upload_pdf", summary="既存フロントエンド互換")
+async def upload_pdf_compat(file: UploadFile = File(...)):
+    """
+    既存フロントエンドとの互換用エンドポイント
+    """
+    return await ingest(file)
