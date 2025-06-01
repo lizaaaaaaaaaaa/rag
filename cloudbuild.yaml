@@ -33,7 +33,7 @@ steps:
       'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100'
     ]
 
-  # 5. APIサーバーをCloud Runにデプロイ
+  # 5. APIサーバーをCloud Runにデプロイ（★Gen2化！）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -43,6 +43,7 @@ steps:
       - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100
       - --region=asia-northeast1
       - --platform=managed
+      - --gen2
       - --allow-unauthenticated
       - --memory=32Gi
       - --cpu=8
@@ -58,7 +59,7 @@ steps:
       - --vpc-egress=private-ranges-only
       - --add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres
 
-  # 6. フロントエンドをCloud Runにデプロイ
+  # 6. フロントエンドをCloud Runにデプロイ（★Gen2化！）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -68,6 +69,7 @@ steps:
       - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100
       - --region=asia-northeast1
       - --platform=managed
+      - --gen2
       - --allow-unauthenticated
       - --memory=4Gi
       - --cpu=4
