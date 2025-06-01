@@ -2,6 +2,13 @@ import streamlit as st
 import requests
 import os
 
+# --- デバッグ用：環境変数 API_URL の中身を画面に表示 ---
+if "DEBUG_SHOW_API_URL" not in st.session_state:
+    api_url_debug = os.environ.get("API_URL", "API_URL が設定されていません")
+    st.write(f"DEBUG: API_URL = {api_url_debug}")
+    st.session_state["DEBUG_SHOW_API_URL"] = True
+# -----------------------------------------------------------
+
 st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
 
 # .env の API_URL は「末尾スラッシュなし」で指定する想定
