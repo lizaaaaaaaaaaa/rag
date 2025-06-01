@@ -14,7 +14,7 @@ from transformers import (
     pipeline,
 )
 from langchain_community.llms import HuggingFacePipeline
-from langchain_openai import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,9 @@ def _load_local_rinna() -> Tuple[Any, Any, int]:
     return llm, tokenizer, max_new_tokens
 
 def load_llm() -> Tuple[Any, Any | None, int]:
+    # デバッグ：どのモジュールの ChatOpenAI が使われているかを表示
+    print(">>> [load_llm] ChatOpenAI is from:", ChatOpenAI)
+
     preset = os.getenv("MODEL_PRESET", "auto").lower()
     max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", 256))
     api_key = os.environ.get("OPENAI_API_KEY")
