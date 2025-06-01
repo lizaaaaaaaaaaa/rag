@@ -7,6 +7,7 @@ import os
 
 VECTORSTORE_PATH = "rag/vectorstore"
 
+
 def ingest_pdf_to_vectorstore(pdf_path: str):
     """
     1つのPDFだけベクトル化して既存ベクトルストアに追記。
@@ -30,6 +31,7 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
 
     return len(split_docs)
 
+
 def main():
     """
     PDFディレクトリ内のすべてのPDFをベクトルストアに再構築
@@ -46,6 +48,7 @@ def main():
     embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-small")
     vectordb = FAISS.from_documents(split_docs, embeddings)
     vectordb.save_local(VECTORSTORE_PATH)
+
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,6 @@
 import streamlit as st
+st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
+
 import requests
 import os
 
@@ -9,12 +11,11 @@ if "DEBUG_SHOW_API_URL" not in st.session_state:
     st.session_state["DEBUG_SHOW_API_URL"] = True
 # -----------------------------------------------------------
 
-st.set_page_config(page_title="チャット", page_icon="💬", layout="wide")
-
 # .env の API_URL は「末尾スラッシュなし」で指定する想定
 API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
 if API_URL.endswith("/"):
     API_URL = API_URL.rstrip("/")
+
 
 def post_chat(user_input, username):
     payload = {"question": user_input, "username": username}

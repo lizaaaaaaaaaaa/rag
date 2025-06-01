@@ -26,6 +26,7 @@ logging.basicConfig(level=logging.INFO)
 LOCAL_VECTOR_DIR = "rag/vectorstore"
 INDEX_NAME = "index"
 
+
 def _get_gcs_client():
     """
     GCS クライアントを返すヘルパー。
@@ -33,6 +34,7 @@ def _get_gcs_client():
     GOOGLE_APPLICATION_CREDENTIALS が効いていれば、このままで OK。
     """
     return storage.Client()
+
 
 def upload_vectorstore_to_gcs(local_dir: str):
     """

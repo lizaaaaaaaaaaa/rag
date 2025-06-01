@@ -7,6 +7,7 @@ import traceback
 import requests
 from google.cloud import storage
 
+# ページ設定は必ず最初の Streamlit 呼び出しとして配置
 st.set_page_config(page_title="アップロード & RAG質問", page_icon="📤", layout="wide")
 
 # --- 未ログインガード ---
@@ -26,7 +27,7 @@ API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast
 if API_URL.endswith("/"):
     API_URL = API_URL.rstrip("/")
 
-# GCS バケット名を環境変数から 가져う (Cloud Run の環境変数に GCS_BUCKET_NAME を設定してください)
+# GCS バケット名を環境変数から取得 (Cloud Run の環境変数に GCS_BUCKET_NAME を設定してください)
 GCS_BUCKET_NAME = os.environ.get(
     "GCS_BUCKET_NAME",
     "run-sources-rag-cloud-project-asia-northeast1"
@@ -121,17 +122,7 @@ elif st.session_state.upload_status == "uploaded":
 elif st.session_state.upload_status == "ingesting":
     try:
         with st.spinner("ベクトルストアに取り込み中...⏳"):
-            # ここでは Cloud Run 上のバックエンド API（/upload/ingest）を呼び出す想定です。
-            # 先に main.py のバックエンドで「ingest_pdf_to_vectorstore」を実装しておき、
-            # そのエンドポイントをたたす流れに書き換えています。
-            #
-            # 例:
-            #   POST https://＜YOUR_API_URL＞/upload/ingest
-            #   body: { "gcs_uri": "gs://…/uploads/xxxxxxx.pdf" }
-            #
-            # もし、直接 Python 関数を呼びたい場合は import しても構いませんが、
-            # Cloud Run の「分散環境」を意識して「HTTP 経由でバックエンドに通知する」流れにしています。
-            #
+            # Cloud Run 上のバックエンド API（/upload/ingest）を呼び出す想定
             ingest_endpoint = f"{API_URL}/upload/ingest"
             payload = {"gcs_uri": f"gs://{GCS_BUCKET_NAME}/{st.session_state.blob_name}"}
 
