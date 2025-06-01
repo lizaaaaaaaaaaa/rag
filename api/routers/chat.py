@@ -1,3 +1,5 @@
+# api/routers/chat.py
+
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -11,10 +13,12 @@ from fastapi.responses import StreamingResponse, JSONResponse
 import csv
 import io
 
-# main.py で startup event が終わると vectorstore と rag_chain_template がセットされているはず
+# ─── main.py で startup event によってキャッシュされた vectorstore と rag_chain_template を参照 ───
 import main
 
 router = APIRouter()
+
+# グローバル履歴 (MVP 用、運用時はDB化するのが望ましい)
 history_logs: list[dict] = []
 
 
@@ -25,6 +29,11 @@ class ChatRequest(BaseModel):
 
 @router.post("/", summary="AI チャット")
 async def chat_endpoint(req: ChatRequest):
+    """
+    クライアントから { "question": "...", "username": "..." } を受け取り、
+    startup イベント時に作成・キャッシュされた
+    vectorstore & rag_chain_template を使って回答を返す。
+    """
     # ── デバッグログを全部出す ──
     print("=== chat_endpoint called ===", req.question, req.username)
     print("=== Request received ===")
@@ -43,11 +52,11 @@ async def chat_endpoint(req: ChatRequest):
     sources: list[dict] = []
 
     try:
-        # ① startup event でキャッシュされた vectorstore と rag_chain_template を参照
+        # ① startup event でキャッシュされた vectorstore と rag_chain_template を取得
         vectorstore = main.vectorstore
         rag_chain_template = main.rag_chain_template
 
-        # もし startup で失敗して　rag_chain_template が None　なら例外にする
+        # もし startup で失敗して rag_chain_template が None なら例外を発生させる
         if rag_chain_template is None:
             raise RuntimeError("RAG chain template is not initialized. Please try again later.")
 
@@ -60,6 +69,7 @@ async def chat_endpoint(req: ChatRequest):
         answer = result.get("result", "")
         for doc in result.get("source_documents", []):
             meta = {k: str(v) for k, v in doc.metadata.items()}
+            # ファイル名だけに絞る
             meta["source"] = Path(meta.get("source", "unknown")).name
             meta.setdefault("page", "?")
             sources.append({"metadata": meta})
@@ -86,7 +96,9 @@ async def chat_endpoint(req: ChatRequest):
 
 @router.post("", include_in_schema=False)
 async def chat_endpoint_slashless(req: ChatRequest):
-    # 「/chat/」の末尾スラッシュなしでも動くように
+    """
+    スラッシュなし (/chat) でも POST を受け付けるように。
+    """
     return await chat_endpoint(req)
 
 

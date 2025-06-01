@@ -1,4 +1,5 @@
 # 9_upload.py
+
 import streamlit as st
 import os
 import uuid
@@ -19,16 +20,28 @@ st.write("""
 アップロードしたPDFは自動的にGCSへ保存され、ベクトルストアに取り込まれます。
 """)
 
+# ─────────────────────────────────────────────────────────────────────
 # バックエンド API のベース URL
 API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
 if API_URL.endswith("/"):
     API_URL = API_URL.rstrip("/")
 
-GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "run-sources-rag-cloud-project-asia-northeast1")
+# GCS バケット名を環境変数から 가져う (Cloud Run の環境変数に GCS_BUCKET_NAME を設定してください)
+GCS_BUCKET_NAME = os.environ.get(
+    "GCS_BUCKET_NAME",
+    "run-sources-rag-cloud-project-asia-northeast1"
+)
+
+# ローカル保存用ディレクトリ (Streamlit 実行環境内)
 os.makedirs("uploads", exist_ok=True)
+# ─────────────────────────────────────────────────────────────────────
 
 
 def save_upload_to_local(uploaded_file, save_dir="uploads"):
+    """
+    Streamlit のファイルアップローダーから受け取ったPDFを一旦ローカルに保存し、
+    (ランダムなファイル名).pdf 形式で返す。
+    """
     unique_filename = f"{uuid.uuid4().hex}.pdf"
     save_path = os.path.join(save_dir, unique_filename)
     with open(save_path, "wb") as f:
@@ -37,6 +50,10 @@ def save_upload_to_local(uploaded_file, save_dir="uploads"):
 
 
 def upload_to_gcs(local_path, bucket_name, blob_name):
+    """
+    与えられたローカルパスのファイルをGCSバケットにアップロードする。
+    戻り値として GCS URI (gs://bucket_name/blob_name) を返す。
+    """
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_name)
@@ -45,34 +62,43 @@ def upload_to_gcs(local_path, bucket_name, blob_name):
     return f"gs://{bucket_name}/{blob_name}"
 
 
-# === セッションステート管理 ===
+# ─── セッションステート管理 ───
 if "upload_status" not in st.session_state:
-    st.session_state.upload_status = "init"   # init, uploaded, ingesting, done
+    # init → アップロード前
+    # uploaded → ローカル＆GCSにアップロード済
+    # ingesting → ベクトルストア取り込み中
+    # done → 取り込み完了→チャット可能
+    st.session_state.upload_status = "init"
+
 if "local_path" not in st.session_state:
     st.session_state.local_path = ""
+
 if "unique_filename" not in st.session_state:
     st.session_state.unique_filename = ""
+
 if "blob_name" not in st.session_state:
     st.session_state.blob_name = ""
+# ───────────────────────────────────────
 
-# === 1. アップロードフェーズ ===
+
+# === 1. アップロードフェーズ (/init) ===
 if st.session_state.upload_status == "init":
     uploaded_file = st.file_uploader("PDFファイルを選択", type=["pdf"])
     if uploaded_file is not None:
         try:
-            # 1. ローカル保存
+            # ── (1) ローカルに保存 ──
             local_path, unique_filename = save_upload_to_local(uploaded_file)
             st.session_state.local_path = local_path
             st.session_state.unique_filename = unique_filename
             st.success(f"✅ ローカル保存成功: {local_path}")
 
-            # 2. GCSアップロード
+            # ── (2) GCS にアップロード ──
             blob_name = f"uploads/{unique_filename}"
-            upload_to_gcs(local_path, GCS_BUCKET_NAME, blob_name)
+            gcs_uri = upload_to_gcs(local_path, GCS_BUCKET_NAME, blob_name)
             st.session_state.blob_name = blob_name
             st.success(f"✅ GCSアップロード成功: {blob_name}")
 
-            # ステータスを「uploaded」に変えてリロード
+            # 状態を「uploaded」に変更して再実行
             st.session_state.upload_status = "uploaded"
             st.rerun()
 
@@ -80,21 +106,39 @@ if st.session_state.upload_status == "init":
             st.error("❌ アップロード失敗")
             st.code(traceback.format_exc())
 
-# === 2. 取り込み開始フェーズ ===
+
+# === 2. 取り込み開始フェーズ (/uploaded) ===
 elif st.session_state.upload_status == "uploaded":
     st.success("アップロード完了！")
     if st.button("このPDFをベクトルストアに取り込む"):
+        # リクエストをベクトルストア取り込みモードへ
         st.session_state.upload_status = "ingesting"
         st.rerun()
     st.info("※ベクトルストアへの取り込みには数秒～数十秒かかる場合があります")
 
-# === 3. 取り込み中フェーズ ===
+
+# === 3. 取り込み中フェーズ (/ingesting) ===
 elif st.session_state.upload_status == "ingesting":
     try:
         with st.spinner("ベクトルストアに取り込み中...⏳"):
-            # ingest_pdf_to_vectorstore は rag.ingested_text に定義されている想定
-            from rag.ingested_text import ingest_pdf_to_vectorstore
-            ingest_pdf_to_vectorstore(st.session_state.local_path)
+            # ここでは Cloud Run 上のバックエンド API（/upload/ingest）を呼び出す想定です。
+            # 先に main.py のバックエンドで「ingest_pdf_to_vectorstore」を実装しておき、
+            # そのエンドポイントをたたす流れに書き換えています。
+            #
+            # 例:
+            #   POST https://＜YOUR_API_URL＞/upload/ingest
+            #   body: { "gcs_uri": "gs://…/uploads/xxxxxxx.pdf" }
+            #
+            # もし、直接 Python 関数を呼びたい場合は import しても構いませんが、
+            # Cloud Run の「分散環境」を意識して「HTTP 経由でバックエンドに通知する」流れにしています。
+            #
+            ingest_endpoint = f"{API_URL}/upload/ingest"
+            payload = {"gcs_uri": f"gs://{GCS_BUCKET_NAME}/{st.session_state.blob_name}"}
+
+            response = requests.post(ingest_endpoint, json=payload, timeout=600)
+            if response.status_code != 200:
+                # エラーが返ってきたら例外扱いにしてキャッチへ
+                raise RuntimeError(f"バックエンド取り込みエラー: {response.status_code} / {response.text}")
 
         st.success("✅ ベクトルストア取り込み完了！")
         st.session_state.upload_status = "done"
@@ -103,9 +147,11 @@ elif st.session_state.upload_status == "ingesting":
     except Exception as e:
         st.error("❌ ベクトル化に失敗しました")
         st.code(traceback.format_exc())
-        st.session_state.upload_status = "uploaded"  # ステータスを戻す
+        # ステータスを「uploaded」に戻して再挑戦できるように
+        st.session_state.upload_status = "uploaded"
 
-# === 4. チャットフェーズ ===
+
+# === 4. チャットフェーズ (/done) ===
 elif st.session_state.upload_status == "done":
     st.success("取り込み完了！このPDFの内容で質問できます")
     if st.button("最初からやり直す"):
@@ -117,16 +163,17 @@ elif st.session_state.upload_status == "done":
     question = st.text_input("アップロードしたPDFの内容について質問")
 
     if question:
-        # ここでは「バックエンド API (/chat/) へ POST するだけ」に切り替え
         try:
             with st.spinner("バックエンドへ質問を送信中...⏳"):
                 payload = {"question": question, "username": st.session_state["user"]}
-                url = f"{API_URL}/chat/"
+                # 頭に必ず末尾スラッシュを付与
+                chat_url = f"{API_URL}/chat/"
                 # デバッグ用に URL を表示
-                print("=== APIにPOSTするURL:", url)
-                st.write(f"API に POST する URL: {url}")
+                print("=== API に POST する URL:", chat_url)
+                st.write(f"API に POST する URL: {chat_url}")
 
-                r = requests.post(url, json=payload, timeout=60)
+                r = requests.post(chat_url, json=payload, timeout=60)
+
         except Exception as e:
             st.error(f"通信エラー: {e}")
             st.stop()
