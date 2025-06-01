@@ -1,87 +1,92 @@
+# cloudbuild.yaml
+
 steps:
   # 1. APIサーバー用イメージをビルド
   - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'build',
-      '--no-cache',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100',
-      '-f', 'Dockerfile.api',
-      '.'
-    ]
+    args:
+      [
+        'build',
+        '--no-cache',
+        '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100',
+        '-f', 'Dockerfile.api',
+        '.'
+      ]
 
   # 2. APIサーバーイメージをArtifact Registryにプッシュ
   - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100'
-    ]
+    args:
+      [
+        'push',
+        'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100'
+      ]
 
   # 3. フロントエンド用イメージをビルド
   - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'build',
-      '--no-cache',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100',
-      '-f', 'Dockerfile.front',
-      '.'
-    ]
+    args:
+      [
+        'build',
+        '--no-cache',
+        '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100',
+        '-f', 'Dockerfile.front',
+        '.'
+      ]
 
   # 4. フロントエンドイメージをArtifact Registryにプッシュ
   - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100'
-    ]
+    args:
+      [
+        'push',
+        'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100'
+      ]
 
-  # 5. APIサーバーをCloud Runにデプロイ（Gen2 & NFSボリュームマウント！）
+  # 5. 【Gen1】APIサーバーをCloud Runにデプロイ
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
-      - run
-      - deploy
-      - rag-api
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100
-      - --region=asia-northeast1
-      - --platform=managed
-      - --gen2
-      - --allow-unauthenticated
-      - --memory=32Gi
-      - --cpu=8
-      - --timeout=600s
-      - --min-instances=1
-      - --max-instances=20
-      - --concurrency=100
-      - --port=8080
-      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=/cloudsql/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432
-      - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest
-      - --service-account=190389115361-compute@developer.gserviceaccount.com
-      - --vpc-connector=cloudrun-to-sql
-      - --vpc-egress=private-ranges-only
-      - --add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres
-      - --volume=name=vectorstore-vol,path=/mnt/filestore,type=nfs,server=10.252.86.242,share=vol1
+      [
+        'run', 'deploy', 'rag-api',
+        '--image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100',
+        '--region=asia-northeast1',
+        '--platform=managed',
+        '--allow-unauthenticated',
+        '--memory=32Gi',
+        '--cpu=8',
+        '--timeout=600s',
+        '--min-instances=1',
+        '--max-instances=20',
+        '--concurrency=100',
+        '--port=8080',
+        # 環境変数に GCS_BUCKET_NAME を追加
+        '--set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=/cloudsql/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1',
+        '--set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest',
+        '--service-account=190389115361-compute@developer.gserviceaccount.com',
+        '--vpc-connector=cloudrun-to-sql',
+        '--vpc-egress=private-ranges-only',
+        '--add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres'
+      ]
 
-  # 6. フロントエンドをCloud Runにデプロイ
+  # 6. 【Gen1】フロントエンドをCloud Runにデプロイ
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
-      - run
-      - deploy
-      - rag-frontend
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100
-      - --region=asia-northeast1
-      - --platform=managed
-      - --gen2
-      - --allow-unauthenticated
-      - --memory=4Gi
-      - --cpu=4
-      - --timeout=300s
-      - --min-instances=1
-      - --max-instances=30
-      - --concurrency=80
-      - --port=8080
-      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,DB_HOST=/cloudsql/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432,DB_USER=raguser,DB_NAME=rag_db
-      - --set-secrets=DB_PASSWORD=db-password:latest
-      - --add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres
+      [
+        'run', 'deploy', 'rag-frontend',
+        '--image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100',
+        '--region=asia-northeast1',
+        '--platform=managed',
+        '--allow-unauthenticated',
+        '--memory=4Gi',
+        '--cpu=4',
+        '--timeout=300s',
+        '--min-instances=1',
+        '--max-instances=30',
+        '--concurrency=80',
+        '--port=8080',
+        # フロントはAPI_URLだけ環境変数にセット
+        '--set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,DB_HOST=/cloudsql/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432,DB_USER=raguser,DB_NAME=rag_db',
+        '--set-secrets=DB_PASSWORD=db-password:latest',
+        '--add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres'
+      ]
 
 images:
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100'
