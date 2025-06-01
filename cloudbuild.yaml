@@ -33,7 +33,7 @@ steps:
       'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100'
     ]
 
-  # 5. APIサーバーをCloud Runにデプロイ（★Gen2化！）
+  # 5. APIサーバーをCloud Runにデプロイ（Gen2 & NFSボリュームマウント！）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -58,8 +58,9 @@ steps:
       - --vpc-connector=cloudrun-to-sql
       - --vpc-egress=private-ranges-only
       - --add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres
+      - --volume=name=vectorstore-vol,path=/mnt/filestore,type=nfs,server=10.252.86.242,share=vol1
 
-  # 6. フロントエンドをCloud Runにデプロイ（★Gen2化！）
+  # 6. フロントエンドをCloud Runにデプロイ
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
