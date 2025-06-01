@@ -41,3 +41,5 @@ matplotlib
 
 seaborn
 PyJWT==2.8.0
+
+langchain==0.1.16

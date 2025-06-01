@@ -1,4 +1,5 @@
 # api/routers/chat.py
+
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -10,29 +11,20 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 import csv
 import io
-import sys  # ← flush のために追加
+import sys  # ← flush 用
 
-# --- RAG 用のユーティリティ関数を読み込む ---
-from rag.ingested_text import load_vectorstore, get_rag_chain
+# main.py で startup event が終わると vectorstore と rag_chain_template が格納されているはず
+import main
 
 router = APIRouter()
-
-# グローバル履歴（MVP 用。運用時は DB 化するのが望ましい）
 history_logs: list[dict] = []
-
 
 class ChatRequest(BaseModel):
     question: str
-    username: str | None = None  # 型ヒントも追加 (Python 3.10 以降なら)
-
+    username: str | None = None
 
 @router.post("/", summary="AI チャット")
 async def chat_endpoint(req: ChatRequest):
-    """
-    クライアントから { "question": "...", "username": "..." } を受け取り、
-    RAG チェーンを呼び出して { "answer": "...", "sources": [...] } を返す。
-    """
-    # ★ ログを出力（Cloud Run のログで検知するため）
     print("=== chat_endpoint called ===", req.question, req.username)
     print("=== Request received ===")
     print("Method: POST")
@@ -50,32 +42,30 @@ async def chat_endpoint(req: ChatRequest):
     sources: list[dict] = []
 
     try:
-        # 1) ベクトルストアを読み込む
-        vectorstore = load_vectorstore()
+        # ① startup event でキャッシュされた vectorstore があれば使う。
+        vectorstore = main.vectorstore
+        rag_chain_template = main.rag_chain_template
 
-        # 2) RAG チェーンを取得（内部で load_llm() → ChatOpenAI を呼ぶ）
-        #    get_rag_chain() は引数に question を取りますが、実際の問い合わせは
-        #    invoke({"query": ...}) で行う。
-        rag_chain = get_rag_chain(vectorstore=vectorstore, return_source=True, question=query)
+        # もし startup で失敗して rag_chain_template が None の場合は
+        # 「ここで再度読み込み or エラーを返す」など
+        if rag_chain_template is None:
+            raise RuntimeError("RAG chain template is not initialized. Please try again later.")
 
-        # 3) invoke には必ず "query" キーを渡す
-        result = rag_chain.invoke({"query": query})
+        # ② テンプレートをコピーして query を渡す
+        chain = rag_chain_template.copy()
+        result = chain.invoke({"query": query})
+
         answer = result.get("result", "")
-
-        # 4) 出典ドキュメントを整形
         for doc in result.get("source_documents", []):
             meta = {k: str(v) for k, v in doc.metadata.items()}
-            # ファイル名だけに絞る
             meta["source"] = Path(meta.get("source", "unknown")).name
             meta.setdefault("page", "?")
             sources.append({"metadata": meta})
 
     except Exception as e:
-        # 例外時はエラーメッセージを返す
         answer = f"【エラー】RAG 回答に失敗しました: {e}"
         logging.exception("RAG 回答エラー")
 
-    # 5) 履歴に追加しておく（MVP 用）
     log = {
         "id": str(uuid4()),
         "question": query,
@@ -88,20 +78,13 @@ async def chat_endpoint(req: ChatRequest):
 
     return {"answer": answer, "sources": sources}
 
-
 @router.post("", include_in_schema=False)
 async def chat_endpoint_slashless(req: ChatRequest):
-    """
-    スラッシュなし (/chat) で POST された場合も、同じ chat_endpoint を呼び出す。
-    これにより、クライアントが末尾スラッシュを付け忘れても 405 エラーにならない。
-    """
     return await chat_endpoint(req)
-
 
 @router.get("/history", summary="チャット履歴取得")
 def get_history():
     return {"logs": history_logs}
-
 
 @router.get("/export/csv", summary="チャット履歴 CSV ダウンロード")
 def export_csv():
@@ -122,7 +105,6 @@ def export_csv():
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=chat_history.csv"}
     )
-
 
 @router.get("/export/json", summary="チャット履歴 JSON ダウンロード")
 def export_json():
