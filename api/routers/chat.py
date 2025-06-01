@@ -13,7 +13,6 @@ import csv
 import io
 import sys  # flush 用
 
-# main.pyでstartup eventが終わるとvectorstore/rag_chain_templateが格納されている
 import main
 
 router = APIRouter()
@@ -42,36 +41,27 @@ async def chat_endpoint(req: ChatRequest):
     sources: list[dict] = []
 
     try:
-        # main.pyでキャッシュされたグローバル変数
         vectorstore = main.vectorstore
         rag_chain_template = main.rag_chain_template
 
-        # どちらかがNoneなら通常LLMのみで返答（システムが起動しきっていない状況など）
         if not vectorstore or not rag_chain_template:
-            print("!!! vectorstore or rag_chain_template is None: fallback to LLM only")
-            from llm.llm_runner import load_llm
-            llm, _, _ = load_llm()
-            if hasattr(llm, 'invoke'):
-                result = llm.invoke(f"質問: {query}\n\n上記の質問に日本語で簡潔に答えてください。")
-                answer = str(result) if result else "申し訳ございませんが、現在システムの準備中です。"
-            else:
-                answer = "現在システムの準備中です。しばらく時間をおいてから再度お試しください。"
+            print("!!! vectorstore or rag_chain_template is None: fallback to basic response")
+            answer = f"申し訳ございませんが、現在システムは準備中です。お問い合わせ内容「{query}」については、システム管理者にお問い合わせください。"
             sources = [{"metadata": {"source": "システム応答", "page": "N/A"}}]
         else:
-            # 通常のRAG応答
+            # 通常のRAG処理
             chain = rag_chain_template.copy()
             result = chain.invoke({"query": query})
-
-            answer = result.get("result", "")
+            answer = result.get("result", "回答を生成できませんでした。")
             for doc in result.get("source_documents", []):
                 meta = {k: str(v) for k, v in doc.metadata.items()}
                 meta["source"] = Path(meta.get("source", "unknown")).name
                 meta.setdefault("page", "?")
                 sources.append({"metadata": meta})
-
     except Exception as e:
-        answer = f"【エラー】RAG 回答に失敗しました: {e}"
-        logging.exception("RAG 回答エラー")
+        error_id = str(uuid4())[:8]
+        answer = f"【エラー】システムエラーが発生しました。しばらく時間をおいてから再度お試しください。（エラーID: {error_id}）"
+        logging.exception(f"Chat endpoint error [{error_id}]")
         sources = [{"metadata": {"source": "エラー応答", "page": "N/A"}}]
 
     log = {

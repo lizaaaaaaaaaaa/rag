@@ -1,4 +1,5 @@
 import os
+import traceback  # ← 追加！
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -47,34 +48,43 @@ async def load_models_on_startup():
 
     print("=== startup: begin loading vectorstore & rag_chain_template ===")
 
-    # 1) LLMロード
+    llm_loaded = False
     try:
         from llm.llm_runner import load_llm
         llm, tokenizer, max_tokens = load_llm()
         print(f">>> LLM loaded successfully: {type(llm).__name__}")
+        if hasattr(llm, 'invoke'):
+            test_result = llm.invoke("Hello")
+            print(f">>> LLM test successful: {str(test_result)[:50]}...")
+        llm_loaded = True
     except Exception as e:
         print(f"!!! LLM load failed: {e}")
-        return
+        print(f"!!! Full error: {traceback.format_exc()}")
 
-    # 2) ベクトルストア読み込み（失敗したら空で初期化）
     try:
         from rag.ingested_text import load_vectorstore
         vectorstore = load_vectorstore()
-        print(">>> vectorstore loaded successfully")
+        print(">>> vectorstore loaded successfully from GCS/local")
     except Exception as e:
         print(f"!!! WARNING: load_vectorstore() failed: {e}")
-        print(">>> Creating empty vectorstore for initial setup")
-        from rag.ingested_text import MyEmbedding
-        from langchain_community.vectorstores import FAISS
-        from langchain.schema import Document
-        embeddings = MyEmbedding("intfloat/multilingual-e5-small")
-        dummy_doc = Document(page_content="初期化用ダミーテキスト", metadata={"source": "init", "page": 1})
-        vectorstore = FAISS.from_documents([dummy_doc], embeddings)
-        print(">>> Empty vectorstore created")
+        if llm_loaded:
+            print(">>> Creating empty vectorstore for initial setup")
+            try:
+                from rag.ingested_text import MyEmbedding
+                from langchain_community.vectorstores import FAISS
+                from langchain.schema import Document
+                embeddings = MyEmbedding("intfloat/multilingual-e5-small")
+                dummy_doc = Document(page_content="初期化用ダミーテキスト", metadata={"source": "init", "page": 1})
+                vectorstore = FAISS.from_documents([dummy_doc], embeddings)
+                print(">>> Empty vectorstore created")
+            except Exception as e2:
+                print(f"!!! Failed to create empty vectorstore: {e2}")
+                vectorstore = None
+        else:
+            vectorstore = None
 
-    # 3) RAG チェーン構築
-    try:
-        if vectorstore:
+    if llm_loaded and vectorstore:
+        try:
             from rag.ingested_text import get_rag_chain
             rag_chain_template = get_rag_chain(
                 vectorstore=vectorstore,
@@ -82,20 +92,19 @@ async def load_models_on_startup():
                 question="DUMMY_QUESTION"
             )
             print(">>> rag_chain_template constructed successfully")
-        else:
-            print(">>> vectorstore is None, creating basic chain template")
+        except Exception as e:
+            print(f"!!! WARNING: get_rag_chain() failed: {e}")
             rag_chain_template = None
-    except Exception as e:
-        print(f"!!! WARNING: get_rag_chain() failed: {e}")
+    else:
+        print(">>> Skipping RAG chain construction (LLM or vectorstore failed)")
         rag_chain_template = None
 
-    print("=== startup: done ===")
+    print(f"=== startup: done (LLM: {llm_loaded}, VectorStore: {vectorstore is not None}, RAG: {rag_chain_template is not None}) ===")
 
 print("=== before router imports ===")
 from api.routers import upload, chat, google_oauth, healthz
 print("=== after router imports ===")
 
-# ルーターprefixそのまま運用！ 例: /upload/ingest
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(google_oauth.router, tags=["auth"])
