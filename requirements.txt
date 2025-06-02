@@ -2,8 +2,11 @@ fastapi==0.95.1
 uvicorn==0.22.0
 python-dotenv==1.0.1
 
-# LangChain関連 - 確実に動作するバージョンセット  
+# OpenAI関連 - 最新の安定版
 openai>=1.10.0
+langchain-openai>=0.1.0
+
+# LangChain関連 - 互換性のあるバージョンセット  
 langchain==0.1.20
 langchain-core>=0.1.52,<0.2.0
 langchain-community>=0.0.7

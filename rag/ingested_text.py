@@ -1,6 +1,7 @@
 import os
 import logging
 import sys
+import traceback
 from pathlib import Path
 
 from langchain_community.document_loaders.pdf import PyPDFLoader
@@ -207,7 +208,7 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
         raise
 
 def get_rag_chain(vectorstore, return_source: bool = True):
-    """RAGチェーンを作成"""
+    """RAGチェーンを作成（エラーハンドリング強化版）"""
     logger.info("Creating RAG chain...")
     
     try:
@@ -233,23 +234,59 @@ def get_rag_chain(vectorstore, return_source: bool = True):
             template=prompt_str
         )
         
-        # RAGチェーンを作成
+        # RAGチェーンを作成（シンプルな方法）
+        from langchain.chains import RetrievalQA
+        
         rag_chain = RetrievalQA.from_chain_type(
             llm=llm,
             chain_type="stuff",
             retriever=vectorstore.as_retriever(
-                search_kwargs={"k": 3}  # 上位3件を取得
+                search_kwargs={"k": 3}
             ),
             return_source_documents=return_source,
-            chain_type_kwargs={"prompt": prompt}
+            chain_type_kwargs={
+                "prompt": prompt,
+                "verbose": False  # デバッグ用
+            }
         )
+        
+        # callbacksエラーを回避するため、必要なら追加
+        if not hasattr(rag_chain, 'callbacks'):
+            rag_chain.callbacks = []
         
         logger.info("✅ RAG chain created successfully")
         return rag_chain
         
     except Exception as e:
         logger.error(f"Error creating RAG chain: {e}")
-        raise
+        logger.error(traceback.format_exc())
+        
+        # フォールバック: シンプルな検索のみのチェーンを返す
+        class SimpleSearchChain:
+            def __init__(self, vectorstore):
+                self.vectorstore = vectorstore
+                self.retriever = vectorstore.as_retriever()
+                self.callbacks = []  # callbacksエラー回避
+            
+            def invoke(self, inputs):
+                query = inputs.get("query", "")
+                docs = self.retriever.get_relevant_documents(query)
+                
+                if docs:
+                    result = "関連情報が見つかりました:\n\n"
+                    for i, doc in enumerate(docs[:3], 1):
+                        result += f"{i}. {doc.page_content[:200]}...\n"
+                        result += f"   出典: {doc.metadata.get('source', '不明')} (p{doc.metadata.get('page', '?')})\n\n"
+                else:
+                    result = "関連する情報が見つかりませんでした。"
+                
+                return {
+                    "result": result,
+                    "source_documents": docs[:3]
+                }
+        
+        logger.warning("Returning simple search chain as fallback")
+        return SimpleSearchChain(vectorstore)
 
 # OpenAI APIキー取得（後方互換性のため残す）
 def get_openai_api_key():
