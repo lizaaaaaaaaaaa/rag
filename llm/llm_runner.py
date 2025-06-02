@@ -1,7 +1,14 @@
 # llm/llm_runner.py
+
 from __future__ import annotations
-import os, logging
+import os
+import logging
 from typing import Any, Tuple
+
+# ── まずプロキシ環境変数をクリアしておく ─────────────────────────────────────────────
+os.environ.pop("HTTP_PROXY", None)
+os.environ.pop("HTTPS_PROXY", None)
+# ───────────────────────────────────────────────────────────────────────────────────
 
 print("==== [llm_runner] DEBUG: OPENAI_API_KEY =", (os.environ.get("OPENAI_API_KEY") or "")[:10], "****")
 print("==== [llm_runner] DEBUG: USE_LOCAL_LLM =", os.environ.get("USE_LOCAL_LLM"))
@@ -14,12 +21,24 @@ from transformers import (
 )
 from langchain_community.llms import HuggingFacePipeline
 
-# langchain 0.2.x 系では ChatOpenAI は langchain_community からインポートする
-from langchain_community.chat_models import ChatOpenAI
+# LangChain 0.2.x 系では langchain_community.chat_models からインポートするか、
+# または別途 pip install langchain-openai している場合は langchain_openai からインポートする
+# ここでは langchain-openai を使う想定で書いています。
+try:
+    # 優先： langchain_openai がインストールされている場合
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    # pip install langchain-openai を行っていない場合はこちら
+    from langchain_community.chat_models import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
+
 def _load_local_rinna() -> Tuple[Any, Any, int]:
+    """
+    rinna/japanese-gpt-neox-3.6b-instruction-ppo モデルを 8bit or float16 でロードし、
+    HuggingFacePipeline に変換して返す。
+    """
     model_name = "rinna/japanese-gpt-neox-3.6b-instruction-ppo"
     cache_dir = os.getenv("HF_HOME", "/tmp/huggingface")
     max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", 256))
@@ -46,6 +65,7 @@ def _load_local_rinna() -> Tuple[Any, Any, int]:
             trust_remote_code=True,
             cache_dir=cache_dir,
         )
+
     gen_pipe = pipeline(
         "text-generation",
         model=model,
@@ -58,16 +78,14 @@ def _load_local_rinna() -> Tuple[Any, Any, int]:
     llm = HuggingFacePipeline(pipeline=gen_pipe)
     return llm, tokenizer, max_new_tokens
 
+
 def load_llm() -> Tuple[Any, Any | None, int]:
     """
     USE_LOCAL_LLM と MODEL_PRESET に応じて LLM（OpenAI か Rinna）を返す。
-    まずは意図せず渡される proxies を消去してから ChatOpenAI をインスタンス化する。
+    プロキシ環境変数はすでにファイル冒頭でクリア済みなので、
+    ChatOpenAI のインスタンス化時に proxies が渡されることはありません。
     """
     print(">>> [load_llm] ChatOpenAI is from:", ChatOpenAI)
-
-    # １) プロキシ環境変数をクリア → ChatOpenAI に proxies が渡らないようにする
-    os.environ.pop("HTTP_PROXY", None)
-    os.environ.pop("HTTPS_PROXY", None)
 
     preset = os.getenv("MODEL_PRESET", "auto").lower()
     max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", 256))
@@ -76,7 +94,9 @@ def load_llm() -> Tuple[Any, Any | None, int]:
     # auto/heavy の場合、API キー必須チェック
     if preset in ("auto", "heavy"):
         if not api_key or not api_key.startswith("sk-"):
-            raise RuntimeError("OPENAI_API_KEY が未設定、または形式が不正です！（sk- から始まる値が必要）")
+            raise RuntimeError(
+                "OPENAI_API_KEY が未設定、または形式が不正です！（sk- から始まる値が必要）"
+            )
 
     # ローカルモデル（軽量版）を使いたい場合
     if preset == "light":
