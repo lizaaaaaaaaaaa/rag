@@ -1,7 +1,6 @@
 # llm/llm_runner.py
 from __future__ import annotations
-import os
-import logging
+import os, logging
 from typing import Any, Tuple
 
 print("==== [llm_runner] DEBUG: OPENAI_API_KEY =", (os.environ.get("OPENAI_API_KEY") or "")[:10], "****")
@@ -14,8 +13,9 @@ from transformers import (
     pipeline,
 )
 from langchain_community.llms import HuggingFacePipeline
-# ここを langchain_openai ではなく langchain.chat_models から import する
-from langchain.chat_models import ChatOpenAI
+
+# langchain 0.2.x 系では ChatOpenAI は langchain_community からインポートする
+from langchain_community.chat_models import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +61,13 @@ def _load_local_rinna() -> Tuple[Any, Any, int]:
 def load_llm() -> Tuple[Any, Any | None, int]:
     """
     USE_LOCAL_LLM と MODEL_PRESET に応じて LLM（OpenAI か Rinna）を返す。
-    ChatOpenAI は langchain.chat_models から読み込んでいて、不要な proxies 引数は一切渡さない。
+    まずは意図せず渡される proxies を消去してから ChatOpenAI をインスタンス化する。
     """
     print(">>> [load_llm] ChatOpenAI is from:", ChatOpenAI)
+
+    # １) プロキシ環境変数をクリア → ChatOpenAI に proxies が渡らないようにする
+    os.environ.pop("HTTP_PROXY", None)
+    os.environ.pop("HTTPS_PROXY", None)
 
     preset = os.getenv("MODEL_PRESET", "auto").lower()
     max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", 256))
@@ -72,7 +76,7 @@ def load_llm() -> Tuple[Any, Any | None, int]:
     # auto/heavy の場合、API キー必須チェック
     if preset in ("auto", "heavy"):
         if not api_key or not api_key.startswith("sk-"):
-            raise RuntimeError("OPENAI_API_KEYが未設定、または形式が不正です！(sk- から始まる値が必要)")
+            raise RuntimeError("OPENAI_API_KEY が未設定、または形式が不正です！（sk- から始まる値が必要）")
 
     # ローカルモデル（軽量版）を使いたい場合
     if preset == "light":
@@ -81,7 +85,6 @@ def load_llm() -> Tuple[Any, Any | None, int]:
 
     # heavy preset: GPT-4o など、OpenAI 使う場合
     if preset == "heavy":
-        # ※ obsolete なパラメータは渡さず、OpenAI API だけ渡す
         llm = ChatOpenAI(
             model_name="gpt-4o",
             temperature=0,
@@ -90,7 +93,6 @@ def load_llm() -> Tuple[Any, Any | None, int]:
         return llm, None, max_new_tokens
 
     # auto（デフォルト）: gpt-3.5-turbo
-    # 古い langchain-openai 依存ではなく、langchain.chat_models の ChatOpenAI を使う
     llm = ChatOpenAI(
         model_name="gpt-3.5-turbo-0125",
         temperature=0,
