@@ -48,7 +48,7 @@ steps:
       - --cpu=8
       - --timeout=600s
       - --min-instances=1
-      - --max-instances=100
+      - --max-instances=30
       - --concurrency=100
       - --port=8080
       - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=/cloudsql/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production
