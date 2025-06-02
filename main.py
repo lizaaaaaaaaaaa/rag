@@ -52,11 +52,12 @@ async def load_models_on_startup():
     llm_instance = None
     
     try:
+        # llm_runner.load_llm() を呼び出して LLM を取得
         from llm.llm_runner import load_llm
         llm, tokenizer, max_tokens = load_llm()
         llm_instance = llm  # LLMインスタンスを保存
         print(f">>> LLM loaded successfully: {type(llm).__name__}")
-        if hasattr(llm, 'invoke'):
+        if hasattr(llm, "invoke"):
             test_result = llm.invoke("Hello")
             print(f">>> LLM test successful: {str(test_result)[:50]}...")
         llm_loaded = True
@@ -88,7 +89,7 @@ async def load_models_on_startup():
 
     if llm_loaded and vectorstore:
         try:
-            # get_rag_chainを直接呼び出す（questionパラメータを削除）
+            # get_rag_chain を呼び出して RAG チェーンを構築
             from rag.ingested_text import get_rag_chain
             rag_chain_template = get_rag_chain(
                 vectorstore=vectorstore,

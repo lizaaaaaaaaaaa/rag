@@ -1,6 +1,7 @@
 # llm/llm_runner.py
 from __future__ import annotations
-import os, logging
+import os
+import logging
 from typing import Any, Tuple
 
 print("==== [llm_runner] DEBUG: OPENAI_API_KEY =", (os.environ.get("OPENAI_API_KEY") or "")[:10], "****")
@@ -13,7 +14,8 @@ from transformers import (
     pipeline,
 )
 from langchain_community.llms import HuggingFacePipeline
-from langchain_openai import ChatOpenAI
+# ここを langchain_openai ではなく langchain.chat_models から import する
+from langchain.chat_models import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -57,23 +59,41 @@ def _load_local_rinna() -> Tuple[Any, Any, int]:
     return llm, tokenizer, max_new_tokens
 
 def load_llm() -> Tuple[Any, Any | None, int]:
+    """
+    USE_LOCAL_LLM と MODEL_PRESET に応じて LLM（OpenAI か Rinna）を返す。
+    ChatOpenAI は langchain.chat_models から読み込んでいて、不要な proxies 引数は一切渡さない。
+    """
     print(">>> [load_llm] ChatOpenAI is from:", ChatOpenAI)
 
     preset = os.getenv("MODEL_PRESET", "auto").lower()
     max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", 256))
     api_key = os.environ.get("OPENAI_API_KEY")
 
+    # auto/heavy の場合、API キー必須チェック
     if preset in ("auto", "heavy"):
         if not api_key or not api_key.startswith("sk-"):
-            raise RuntimeError("OPENAI_API_KEYが未設定、または形式が不正です！（sk- から始まる値が必要）")
+            raise RuntimeError("OPENAI_API_KEYが未設定、または形式が不正です！(sk- から始まる値が必要)")
 
+    # ローカルモデル（軽量版）を使いたい場合
     if preset == "light":
         llm, tokenizer, max_new_tokens = _load_local_rinna()
         return llm, tokenizer, max_new_tokens
 
+    # heavy preset: GPT-4o など、OpenAI 使う場合
     if preset == "heavy":
-        # langchain-openai==0.0.8 用のパラメータ
-        return ChatOpenAI(model_name="gpt-4o", temperature=0, openai_api_key=api_key), None, max_new_tokens
+        # ※ obsolete なパラメータは渡さず、OpenAI API だけ渡す
+        llm = ChatOpenAI(
+            model_name="gpt-4o",
+            temperature=0,
+            openai_api_key=api_key
+        )
+        return llm, None, max_new_tokens
 
-    # auto（デフォルト：gpt-3.5-turbo）- langchain-openai==0.0.8 用
-    return ChatOpenAI(model_name="gpt-3.5-turbo-0125", temperature=0, openai_api_key=api_key), None, max_new_tokens
+    # auto（デフォルト）: gpt-3.5-turbo
+    # 古い langchain-openai 依存ではなく、langchain.chat_models の ChatOpenAI を使う
+    llm = ChatOpenAI(
+        model_name="gpt-3.5-turbo-0125",
+        temperature=0,
+        openai_api_key=api_key
+    )
+    return llm, None, max_new_tokens
