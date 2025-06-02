@@ -44,8 +44,8 @@ steps:
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
-      - --memory=64Gi
-      - --cpu=16
+      - --memory=32Gi
+      - --cpu=8
       - --timeout=600s
       - --min-instances=1
       - --max-instances=100
