@@ -30,6 +30,10 @@ async def chat_endpoint(req: ChatRequest):
     print("Path: /chat/")
     print("Question:", req.question)
     print("Username:", req.username)
+    print(f"=== DEBUG: vectorstore type: {type(main.vectorstore)}")
+    print(f"=== DEBUG: rag_chain_template type: {type(main.rag_chain_template)}")
+    print(f"=== DEBUG: vectorstore is None: {main.vectorstore is None}")
+    print(f"=== DEBUG: rag_chain_template is None: {main.rag_chain_template is None}")
     sys.stdout.flush()
     logging.warning("=== chat_endpoint called === %s %s", req.question, req.username)
 

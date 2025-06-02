@@ -49,9 +49,12 @@ async def load_models_on_startup():
     print("=== startup: begin loading vectorstore & rag_chain_template ===")
 
     llm_loaded = False
+    llm_instance = None
+    
     try:
         from llm.llm_runner import load_llm
         llm, tokenizer, max_tokens = load_llm()
+        llm_instance = llm  # LLMインスタンスを保存
         print(f">>> LLM loaded successfully: {type(llm).__name__}")
         if hasattr(llm, 'invoke'):
             test_result = llm.invoke("Hello")
@@ -85,16 +88,47 @@ async def load_models_on_startup():
 
     if llm_loaded and vectorstore:
         try:
+            # get_rag_chainを直接呼び出す（questionパラメータを削除）
             from rag.ingested_text import get_rag_chain
             rag_chain_template = get_rag_chain(
                 vectorstore=vectorstore,
-                return_source=True,
-                question="DUMMY_QUESTION"
+                return_source=True
             )
             print(">>> rag_chain_template constructed successfully")
+            print(f">>> rag_chain_template type: {type(rag_chain_template)}")
         except Exception as e:
             print(f"!!! WARNING: get_rag_chain() failed: {e}")
-            rag_chain_template = None
+            print(f"!!! Full error: {traceback.format_exc()}")
+            
+            # 代替案：シンプルなチェーンを作成
+            try:
+                from langchain.chains import RetrievalQA
+                from langchain.prompts import PromptTemplate
+                
+                prompt_template = """以下のコンテキストを使用して質問に答えてください。
+
+コンテキスト: {context}
+
+質問: {question}
+
+回答:"""
+                
+                prompt = PromptTemplate(
+                    template=prompt_template,
+                    input_variables=["context", "question"]
+                )
+                
+                rag_chain_template = RetrievalQA.from_chain_type(
+                    llm=llm_instance,
+                    chain_type="stuff",
+                    retriever=vectorstore.as_retriever(),
+                    return_source_documents=True,
+                    chain_type_kwargs={"prompt": prompt}
+                )
+                print(">>> Alternative rag_chain_template created successfully")
+            except Exception as e2:
+                print(f"!!! Failed to create alternative chain: {e2}")
+                rag_chain_template = None
     else:
         print(">>> Skipping RAG chain construction (LLM or vectorstore failed)")
         rag_chain_template = None

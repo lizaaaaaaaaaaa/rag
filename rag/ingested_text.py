@@ -211,9 +211,9 @@ def load_vectorstore():
     )
 
 
-def get_rag_chain(vectorstore, return_source: bool = True, question: str = ""):
+def get_rag_chain(vectorstore, return_source: bool = True):
     """
-    RAG チェーンを作成して返す。もともとの実装をそのまま使う。
+    RAG チェーンを作成して返す。
     """
     print("=== get_rag_chainが呼ばれた ===")
     sys.stdout.flush()
