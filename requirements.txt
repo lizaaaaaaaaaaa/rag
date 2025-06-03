@@ -3,14 +3,14 @@ uvicorn==0.22.0
 python-dotenv==1.0.1
 
 # OpenAI関連
-openai==0.28.1
-langchain-openai==0.0.5
+openai==1.82.1
+langchain-openai==0.0.8
 
 # LangChain関連 - 安定版のバージョンセット
-langchain==0.0.350
-langchain-core==0.0.13
-langchain-community==0.0.10
-langsmith==0.0.77
+langchain==0.1.20
+langchain-core==0.1.53
+langchain-community==0.0.38
+langsmith==0.1.21
 
 # ML/AI関連
 transformers==4.31.0
