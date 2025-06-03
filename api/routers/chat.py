@@ -80,14 +80,19 @@ async def chat_endpoint(req: ChatRequest):
             # 通常のRAG処理
             logger.info("Using RAG chain for processing")
             try:
-                # チェーンのコピーを作成（必要な場合）
-                if hasattr(rag_chain_template, 'copy'):
-                    chain = rag_chain_template.copy()
+                # 新しいLangChainの方法で実行
+                if hasattr(rag_chain_template, '__call__'):
+                    # 古いスタイル（callable chain）
+                    result = rag_chain_template({"query": query})
                 else:
-                    chain = rag_chain_template
-                
-                # チェーンを実行
-                result = chain.invoke({"query": query})
+                    # 新しいスタイル - invoke()の代わりに__call__を使用
+                    # または、runメソッドがある場合はそれを使用
+                    if hasattr(rag_chain_template, 'run'):
+                        answer = rag_chain_template.run(query)
+                        result = {"result": answer, "source_documents": []}
+                    else:
+                        # RetrievalQAの直接実行
+                        result = rag_chain_template({"query": query}, callbacks=[])
                 
                 # 結果を取得
                 answer = result.get("result", "")
@@ -104,9 +109,72 @@ async def chat_endpoint(req: ChatRequest):
             except Exception as e:
                 logger.error(f"RAG chain error: {e}")
                 logger.error(traceback.format_exc())
-                # エラー時はシンプルな回答を返す
-                answer = f"申し訳ございません。質問の処理中にエラーが発生しました。\n\n【エラー詳細】\n{str(e)[:200]}..."
-                sources = [{"metadata": {"source": "エラー応答", "page": "N/A"}}]
+                
+                # エラー詳細からより具体的な対処を試みる
+                error_msg = str(e)
+                if "callbacks" in error_msg:
+                    # callbacksエラーの場合、別の方法を試す
+                    try:
+                        # retrieverを直接使用してドキュメント検索
+                        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+                        docs = retriever.get_relevant_documents(query)
+                        
+                        if docs:
+                            # LLMが利用可能な場合
+                            if main.llm_instance:
+                                # コンテキストを作成
+                                context = "\n\n".join([doc.page_content for doc in docs[:3]])
+                                
+                                # プロンプトを構築
+                                prompt = f"""以下のコンテキストを使用して質問に答えてください。
+
+コンテキスト: {context}
+
+質問: {query}
+
+回答（日本語で分かりやすく）:"""
+                                
+                                # LLMを直接呼び出し
+                                if hasattr(main.llm_instance, 'invoke'):
+                                    llm_response = main.llm_instance.invoke(prompt)
+                                    answer = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+                                else:
+                                    answer = main.llm_instance(prompt)
+                                    if hasattr(answer, 'content'):
+                                        answer = answer.content
+                                    else:
+                                        answer = str(answer)
+                                
+                                # ソースドキュメントを追加
+                                for doc in docs[:3]:
+                                    meta = {k: str(v) for k, v in doc.metadata.items()}
+                                    meta["source"] = Path(meta.get("source", "unknown")).name
+                                    meta.setdefault("page", "?")
+                                    sources.append({"metadata": meta})
+                            else:
+                                # LLMがない場合は検索結果のみ返す
+                                answer = "関連情報が見つかりました:\n\n"
+                                for i, doc in enumerate(docs[:3], 1):
+                                    answer += f"{i}. {doc.page_content[:200]}...\n"
+                                    answer += f"   出典: {doc.metadata.get('source', '不明')} (p{doc.metadata.get('page', '?')})\n\n"
+                                
+                                for doc in docs[:3]:
+                                    meta = {k: str(v) for k, v in doc.metadata.items()}
+                                    meta["source"] = Path(meta.get("source", "unknown")).name
+                                    meta.setdefault("page", "?")
+                                    sources.append({"metadata": meta})
+                        else:
+                            answer = "関連する情報が見つかりませんでした。"
+                            sources = [{"metadata": {"source": "検索結果なし", "page": "N/A"}}]
+                            
+                    except Exception as e2:
+                        logger.error(f"Fallback error: {e2}")
+                        answer = f"申し訳ございません。質問の処理中にエラーが発生しました。"
+                        sources = [{"metadata": {"source": "エラー応答", "page": "N/A"}}]
+                else:
+                    # その他のエラー
+                    answer = f"申し訳ございません。質問の処理中にエラーが発生しました。"
+                    sources = [{"metadata": {"source": "エラー応答", "page": "N/A"}}]
                 
     except Exception as e:
         # 予期しないエラー
