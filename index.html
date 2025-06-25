@@ -1,0 +1,309 @@
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIチャット</title>
+    <style>
+        body {
+            background: #e5edf5;
+            min-height: 100vh;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', 'Hiragino Sans', 'Meiryo', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .chat-container {
+            width: 100%;
+            max-width: 420px;
+            height: 640px;
+            background: #fff;
+            border-radius: 20px;
+            box-shadow: 0 4px 32px rgba(0,0,0,0.12);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .chat-header {
+            background: #10c041;
+            color: #fff;
+            padding: 20px 16px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            text-align: center;
+            letter-spacing: 2px;
+        }
+        .chat-messages {
+            flex: 1;
+            padding: 18px 12px;
+            background: #e5edf5;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .message {
+            display: flex;
+            align-items: flex-end;
+        }
+        .message.user {
+            justify-content: flex-end;
+        }
+        .message.ai {
+            justify-content: flex-start;
+        }
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 16px;
+            font-size: 1rem;
+            line-height: 1.5;
+            word-break: break-word;
+            background: #10c041;
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+        .message.user .message-content {
+            background: #10c041;
+            color: #fff;
+            border-bottom-right-radius: 4px;
+            border-bottom-left-radius: 16px;
+        }
+        .message.ai .message-content {
+            background: #fff;
+            color: #222;
+            border: 1px solid #d2e7d9;
+            border-bottom-left-radius: 4px;
+            border-bottom-right-radius: 16px;
+        }
+        .chat-input-container {
+            background: #fafbfc;
+            padding: 12px;
+            border-top: 1px solid #e0e0e0;
+        }
+        .chat-input-wrapper {
+            display: flex;
+            gap: 8px;
+            align-items: flex-end;
+        }
+        .chat-input {
+            flex: 1;
+            min-height: 40px;
+            max-height: 120px;
+            padding: 10px 14px;
+            border: 1.5px solid #c6e2d7;
+            border-radius: 24px;
+            font-size: 1rem;
+            outline: none;
+            resize: none;
+            background: #fff;
+            transition: border-color 0.2s;
+        }
+        .chat-input:focus {
+            border-color: #10c041;
+        }
+        .send-button {
+            width: 44px;
+            height: 44px;
+            background: #10c041;
+            border: none;
+            border-radius: 50%;
+            color: #fff;
+            cursor: pointer;
+            font-size: 1.4rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: box-shadow 0.2s, transform 0.2s;
+        }
+        .send-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .typing-indicator {
+            margin: 0 0 8px 8px;
+            color: #666;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .dot {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #b6dab9;
+            margin-right: 2px;
+            animation: typing 1.2s infinite;
+        }
+        .dot:nth-child(2) {animation-delay: 0.2s;}
+        .dot:nth-child(3) {animation-delay: 0.4s;}
+        @keyframes typing {
+            0%, 80%, 100% {transform: translateY(0);}
+            40% {transform: translateY(-8px);}
+        }
+        .error-message {
+            background: #fff2f2;
+            color: #d32f2f;
+            padding: 10px 14px;
+            border-radius: 10px;
+            border-left: 4px solid #d32f2f;
+            margin: 6px 0;
+            font-size: 0.92rem;
+        }
+        /* モバイルレスポンシブ */
+        @media (max-width: 480px) {
+            .chat-container { height: 100vh; max-width: 100vw; border-radius: 0;}
+            .chat-header { padding: 14px 4px; font-size: 1.05rem;}
+            .chat-messages { padding: 8px 2px;}
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">AIチャット</div>
+        <div class="chat-messages" id="chatMessages">
+            <div class="message ai">
+                <div class="message-content">
+                    こんにちは！家づくりのことなら何でも聞いてください！
+                </div>
+            </div>
+        </div>
+        <div class="typing-indicator" id="typingIndicator" style="display:none;">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span>考え中...</span>
+        </div>
+        <div class="chat-input-container">
+            <div class="chat-input-wrapper">
+                <textarea class="chat-input" id="chatInput" placeholder="メッセージを入力..." rows="1"></textarea>
+                <button class="send-button" id="sendButton" type="button">➤</button>
+            </div>
+        </div>
+    </div>
+    <script>
+        class LineStyleChatUI {
+            constructor() {
+                // 必要に応じてAPIエンドポイントを変更
+                this.API_URL = 'https://rag-api-190389115361.asia-northeast1.run.app';
+
+                this.chatMessages = document.getElementById('chatMessages');
+                this.chatInput = document.getElementById('chatInput');
+                this.sendButton = document.getElementById('sendButton');
+                this.typingIndicator = document.getElementById('typingIndicator');
+
+                this.initializeEventListeners();
+                this.adjustTextareaHeight();
+            }
+
+            initializeEventListeners() {
+                this.sendButton.addEventListener('click', () => this.sendMessage());
+                this.chatInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        this.sendMessage();
+                    }
+                });
+                this.chatInput.addEventListener('input', () => this.adjustTextareaHeight());
+            }
+
+            adjustTextareaHeight() {
+                this.chatInput.style.height = 'auto';
+                this.chatInput.style.height = Math.min(this.chatInput.scrollHeight, 120) + 'px';
+            }
+
+            async sendMessage() {
+                const message = this.chatInput.value.trim();
+                if (!message) return;
+                this.addUserMessage(message);
+                this.chatInput.value = '';
+                this.adjustTextareaHeight();
+                this.setLoading(true);
+
+                try {
+                    const response = await this.callRAGAPI(message);
+                    this.addAIMessage(response.answer, response.sources);
+                } catch (error) {
+                    console.error('API Error:', error);
+                    this.showError('エラーが発生しました。時間を置いて再度お試しください。');
+                } finally {
+                    this.setLoading(false);
+                }
+            }
+
+            async callRAGAPI(question) {
+                const response = await fetch(`${this.API_URL}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question, username: 'web-user' })
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                return {
+                    answer: data.answer || 'すみません、回答できませんでした。',
+                    sources: data.sources || []
+                };
+            }
+
+            addUserMessage(message) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message user';
+                messageDiv.innerHTML = `<div class="message-content">${this.escapeHtml(message)}</div>`;
+                this.chatMessages.appendChild(messageDiv);
+                this.scrollToBottom();
+            }
+
+            addAIMessage(message, sources = []) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message ai';
+                let sourcesHtml = '';
+                if (sources && sources.length > 0) {
+                    const sourceLinks = sources.map(source => {
+                        const metadata = source.metadata || {};
+                        const sourceName = metadata.source || '資料';
+                        const page = metadata.page || '?';
+                        return `<span style="color:#10c041;">${this.escapeHtml(sourceName)}（p.${page}）</span>`;
+                    }).join('、 ');
+                    sourcesHtml = `<div style="font-size:0.9em;color:#666;margin-top:4px;">参考: ${sourceLinks}</div>`;
+                }
+                messageDiv.innerHTML = `<div class="message-content">${this.formatMessage(message)}${sourcesHtml}</div>`;
+                this.chatMessages.appendChild(messageDiv);
+                this.scrollToBottom();
+            }
+
+            formatMessage(message) {
+                return this.escapeHtml(message).replace(/\n/g, '<br>');
+            }
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+            setLoading(isLoading) {
+                this.sendButton.disabled = isLoading;
+                this.chatInput.disabled = isLoading;
+                this.typingIndicator.style.display = isLoading ? 'flex' : 'none';
+                if (isLoading) this.scrollToBottom();
+            }
+            showError(message) {
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error-message';
+                errorDiv.textContent = message;
+                this.chatMessages.appendChild(errorDiv);
+                this.scrollToBottom();
+                setTimeout(() => errorDiv.remove(), 4000);
+            }
+            scrollToBottom() {
+                this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => new LineStyleChatUI());
+    </script>
+</body>
+</html>
