@@ -1,32 +1,99 @@
 steps:
-  # APIサーバー用イメージのビルド＆プッシュ＆デプロイ
+  # 1. APIサーバー用イメージをビルド
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/rag-api', './api']
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/rag-api']
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    entrypoint: gcloud
     args: [
-      'run', 'deploy', 'rag-api',
-      '--image', 'gcr.io/$PROJECT_ID/rag-api',
-      '--region', 'asia-northeast1',
-      '--platform', 'managed',
-      '--allow-unauthenticated'
+      'build',
+      '--no-cache',
+      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100',
+      '-f', 'Dockerfile.api',
+      '.'
     ]
 
-  # フロントエンド用イメージのビルド＆プッシュ＆デプロイ
+
+  # 2. APIサーバーイメージをArtifact Registryにプッシュ
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/rag-front', './front']
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/rag-front']
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    entrypoint: gcloud
     args: [
-      'run', 'deploy', 'rag-front',
-      '--image', 'gcr.io/$PROJECT_ID/rag-front',
-      '--region', 'asia-northeast1',
-      '--platform', 'managed',
-      '--allow-unauthenticated'
+      'push',
+      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100'
     ]
 
-timeout: '1200s'
+
+  # 3. フロントエンド用イメージをビルド
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '--no-cache',
+      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100',
+      '-f', 'Dockerfile.front',
+      '.'
+    ]
+
+
+  # 4. フロントエンドイメージをArtifact Registryにプッシュ
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'push',
+      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100'
+    ]
+
+
+  # 5. APIサーバーをCloud Runにデプロイ（GCS_BUCKET_NAME追加済み＋ENV=production＋OPENAI_MODEL_NAME）
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - rag-api
+      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100
+      - --region=asia-northeast1
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=32Gi
+      - --cpu=8
+      - --timeout=600s
+      - --min-instances=1
+      - --max-instances=25
+      - --concurrency=100
+      - --port=8080
+      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo
+      - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest
+      - --service-account=190389115361-compute@developer.gserviceaccount.com
+      - --vpc-connector=cloudrun-to-sql
+      - --vpc-egress=private-ranges-only
+      - --add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres
+
+
+  # 6. フロントエンドをCloud Runにデプロイ
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - rag-frontend
+      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100
+      - --region=asia-northeast1
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=4Gi
+      - --cpu=4
+      - --timeout=300s
+      - --min-instances=1
+      - --max-instances=30
+      - --concurrency=80
+      - --port=8080
+      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,DB_HOST=/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432,DB_USER=raguser,DB_NAME=rag_db
+      - --set-secrets=DB_PASSWORD=db-password:latest
+      - --add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres
+
+
+images:
+  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100'
+  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100'
+
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+
+
+
