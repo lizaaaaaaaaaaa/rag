@@ -55,12 +55,10 @@ steps:
       - --max-instances=25
       - --concurrency=100
       - --port=8080
-      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo
+      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=256,DB_HOST=/DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo
       - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest
       - --service-account=190389115361-compute@developer.gserviceaccount.com
-      - --vpc-connector=cloudrun-to-sql
       - --vpc-egress=private-ranges-only
-      - --add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres
 
 
   # 6. フロントエンドをCloud Runにデプロイ
@@ -81,9 +79,8 @@ steps:
       - --max-instances=30
       - --concurrency=80
       - --port=8080
-      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,DB_HOST=/rag-cloud-project:asia-northeast1:rag-postgres,DB_PORT=5432,DB_USER=raguser,DB_NAME=rag_db
+      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,DB_HOST=/DB_PORT=5432,DB_USER=raguser,DB_NAME=rag_db
       - --set-secrets=DB_PASSWORD=db-password:latest
-      - --add-cloudsql-instances=rag-cloud-project:asia-northeast1:rag-postgres
 
 
 images:
