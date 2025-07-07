@@ -6,7 +6,6 @@ from fastapi.staticfiles import StaticFiles
 import logging
 import sys
 
-
 # ログ設定を最初に
 logging.basicConfig(
     level=logging.INFO,
@@ -17,12 +16,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 # 環境変数のデバッグログ
 logger.info("==== DEBUG: ENV = %s", os.environ.get("ENV"))
 logger.info("==== DEBUG: OPENAI_API_KEY = %s****", (os.environ.get("OPENAI_API_KEY") or "")[:10])
 logger.info("==== DEBUG: GCS_BUCKET_NAME = %s", os.environ.get("GCS_BUCKET_NAME"))
-
 
 if os.getenv("ENV") != "production":
     from dotenv import load_dotenv
@@ -31,66 +28,33 @@ if os.getenv("ENV") != "production":
 else:
     logger.info(">>> Running in production mode")
 
-# ★NetlifyやStudioのiframe埋め込み用にCORS許可するURLをリストアップ
-ALLOWED_ORIGINS = [
-    "https://leafy-kitsune-eb4566.netlify.app",  # ←Netlify公開URLに置き換え
-    "http://localhost:3000",
-    "http://localhost:8501"
-]
-
-
+# FastAPIアプリケーションの初期化
 app = FastAPI(
     title="RAG FastAPI Backend",
     description="RAG + LLM 連携 API (Cloud Run 対応)",
     version="1.0.0"
 )
 
-
-# ▼ここでCORSを許可！
+# ★★★ 修正: 正しいCORS設定（重複を削除し、正しいオリジンを追加）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,  # 本番は必要なドメインのみ
+    allow_origins=[
+        "https://leafy-kitsune-eb4566.netlify.app",  # Netlify URL
+        "https://preview.studio.site/live/EjOQljz1WJ",  # Studio preview domain
+        "http://localhost:3000",
+        "http://localhost:8501",
+        "*"  # 開発用（本番では削除推奨）
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-
-# グローバル変数
-vectorstore = None
-rag_chain_template = None
-llm_instance = None
-
-
-@app.on_event("startup")
-async def load_models_on_startup():
-    global vectorstore, rag_chain_template, llm_instance
-
-
-FRONTEND_URL = "https://rag-frontend-190389115361.asia-northeast1.run.app"
-
-
-app = FastAPI(
-    title="RAG FastAPI Backend",
-    description="RAG + LLM 連携 API (Cloud Run 対応)",
-    version="1.0.0"
-)
-
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000", "http://localhost:8501"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # OPTIONSを明示的に追加
     allow_headers=["*"],
+    expose_headers=["*"]
 )
-
 
 # グローバル変数
 vectorstore = None
 rag_chain_template = None
 llm_instance = None
-
 
 @app.on_event("startup")
 async def load_models_on_startup():
@@ -208,22 +172,18 @@ async def load_models_on_startup():
     logger.info(f"  - VectorStore: {'✅ Loaded' if vectorstore else '❌ Not loaded'}")
     logger.info(f"  - RAG Chain: {'✅ Created' if rag_chain_template else '❌ Not created'}")
 
-
 # ルーターをインポート
 from api.routers import upload, chat, google_oauth, healthz
-
 
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(google_oauth.router, tags=["auth"])
 app.include_router(healthz.router, prefix="", tags=["healthz"])
 
-
 # 静的ファイルマウント
 pdf_dir = os.path.join("rag", "vectorstore", "pdfs")
 if os.path.isdir(pdf_dir):
     app.mount("/pdfs", StaticFiles(directory=pdf_dir), name="pdfs")
-
 
 @app.get("/")
 def read_root():
@@ -236,7 +196,6 @@ def read_root():
         }
     }
 
-
 @app.get("/status")
 def get_status():
     """システムステータス確認用エンドポイント"""
@@ -248,6 +207,11 @@ def get_status():
         "gcs_bucket": os.environ.get("GCS_BUCKET_NAME", "Not set")
     }
 
+# ★★★ 追加: OPTIONS メソッドのハンドリング（明示的に）
+@app.options("/chat")
+@app.options("/chat/")
+async def chat_options():
+    return {"message": "OK"}
 
 if __name__ == "__main__":
     import uvicorn
