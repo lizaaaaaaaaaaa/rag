@@ -11,58 +11,6 @@ if os.getenv("ENV") != "production":
 st.set_page_config(page_title="ホーム | RAG Fullstack アプリ", page_icon="🏠", layout="wide")
 API_URL = os.getenv("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
 
-# 1. 未ログイン時：Googleログイン案内
-if "user" not in st.session_state:
-    st.title("🔐 RAG Fullstack アプリ ログインページ")
-    st.write("Googleログイン または左メニューから「新規登録」でユーザー作成もできます。")
-
-    # Google認証ボタン
-    login_url = f"{API_URL}/auth/login/google"
-    st.markdown(
-        f'<a href="{login_url}" target="_self"><button style="font-size: 1.1em;">Googleでログイン</button></a>',
-        unsafe_allow_html=True,
-    )
-
-    # Google認証コールバック
-    query_params = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
-
-    # ------ 新フロー：token/email 受け取り ------
-    if "token" in query_params and "email" in query_params:
-        st.session_state["token"] = query_params["token"][0]
-        st.session_state["user"] = query_params["email"][0]
-        st.session_state["role"] = query_params.get("role", ["user"])[0]  # もしroleも返ってきてたら
-        # クエリパラメータ消去
-        if hasattr(st, "query_params"):
-            st.query_params.clear()
-        else:
-            st.experimental_set_query_params()
-        st.experimental_rerun()
-
-    # ------ 旧フロー（code→APIコールバック）も一応残す ------
-    elif "code" in query_params:
-        code = query_params["code"][0]
-        st.write(f"DEBUG: Google認証 code = {code}")  # デバッグ用（不要なら消してOK）
-        try:
-            r = requests.get(f"{API_URL}/auth/callback", params={"code": code}, timeout=10)
-            st.write(f"DEBUG: callback レスポンス: {r.status_code} / {r.text}")  # デバッグ用
-            data = r.json()
-            st.write("DEBUG: callback data", data)  # ←ここで中身確認！
-        except Exception as e:
-            st.error(f"API通信エラー: {e}")
-            st.stop()
-        if "email" in data:
-            st.session_state["user"] = data["email"]
-            st.session_state["role"] = data.get("role", "user")
-            if hasattr(st, "query_params"):
-                st.query_params.clear()
-            else:
-                st.experimental_set_query_params()
-            st.experimental_rerun()
-        else:
-            st.error(data.get("detail", "ログインに失敗しました"))
-
-    st.stop()
-
 # 2. ログイン済みユーザー
 user = st.session_state.get('user')
 role = st.session_state.get('role', 'user')
