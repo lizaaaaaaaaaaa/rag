@@ -105,7 +105,10 @@ class GoogleSearcher:
 ユーザーの質問に対して、正確で分かりやすい回答を提供してください。
 重要：出典や参考文献については言及せず、自然な会話として回答してください。"""
 
-        user_prompt = f"""{f'【関連文書情報】\n{context}\n' if context else ''}
+        # f-string内のバックスラッシュを回避
+        context_section = f'【関連文書情報】\n{context}\n' if context else ''
+        
+        user_prompt = f"""{context_section}
 {web_context if web_context else ''}
 
 質問: {query}

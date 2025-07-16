@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse, JSONResponse
 
-import main
+# mainからのインポートを削除し、関数内で動的に取得するように変更
 from utils.web_search import GoogleSearcher as WebSearcher
 
 router = APIRouter()
@@ -82,6 +82,15 @@ def get_general_response_from_llm(query: str, llm_instance):
         else:
             return "申し訳ございません。もう一度お聞かせいただけますか？"
 
+def get_app_globals():
+    """mainモジュールからグローバル変数を動的に取得"""
+    import main
+    return {
+        'vectorstore': getattr(main, 'vectorstore', None),
+        'rag_chain_template': getattr(main, 'rag_chain_template', None),
+        'llm_instance': getattr(main, 'llm_instance', None)
+    }
+
 @router.post("/", summary="AI チャット")
 async def chat_endpoint(req: ChatRequest):
     logger.info(f"=== chat_endpoint called === question: {req.question}, username: {req.username}")
@@ -95,10 +104,11 @@ async def chat_endpoint(req: ChatRequest):
     web_searcher = WebSearcher()
     
     try:
-        # グローバル変数から取得
-        vectorstore = main.vectorstore
-        rag_chain_template = main.rag_chain_template
-        llm_instance = main.llm_instance
+        # グローバル変数を動的に取得
+        globals_dict = get_app_globals()
+        vectorstore = globals_dict['vectorstore']
+        rag_chain_template = globals_dict['rag_chain_template']
+        llm_instance = globals_dict['llm_instance']
         
         logger.info(f"Vectorstore: {vectorstore is not None}, RAG chain: {rag_chain_template is not None}, LLM: {llm_instance is not None}")
         
