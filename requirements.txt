@@ -40,4 +40,4 @@ seaborn
 PyJWT==2.10.1
 
 requests==2.31.0
-google-cloud-secret-manager==2.16.1google-cloud-secret-manager==2.24.0
+google-cloud-secret-manager==2.16.1
