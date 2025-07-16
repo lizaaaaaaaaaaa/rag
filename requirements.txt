@@ -38,3 +38,5 @@ google-cloud-storage
 matplotlib
 seaborn
 PyJWT==2.10.1
+
+requests==2.31.0

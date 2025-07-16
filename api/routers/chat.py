@@ -5,16 +5,14 @@ from pathlib import Path
 from datetime import datetime
 from uuid import uuid4
 import traceback
+import os
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse, JSONResponse
 
-import csv
-import io
-import sys
-
 import main
+from utils.web_search import GoogleSearcher as WebSearcher
 
 router = APIRouter()
 history_logs: list[dict] = []
@@ -26,6 +24,64 @@ class ChatRequest(BaseModel):
     question: str
     username: str | None = None
 
+def is_general_greeting_or_chat(query: str) -> bool:
+    """一般的な挨拶や雑談かどうかを判定"""
+    greetings = [
+        "こんにちは", "こんばんは", "おはよう", "はじめまして",
+        "hello", "hi", "hey", "ありがとう", "さようなら",
+        "元気", "調子はどう", "お疲れ様", "よろしく"
+    ]
+    
+    # クエリを小文字に変換して判定
+    query_lower = query.lower()
+    
+    # 挨拶パターンのチェック
+    for greeting in greetings:
+        if greeting in query_lower:
+            return True
+    
+    # 短い質問（5文字以下）は雑談として扱う
+    if len(query.strip()) <= 5:
+        return True
+    
+    # 質問っぽくない文章（疑問詞がない）も雑談として扱う可能性
+    question_words = ["何", "どう", "いつ", "どこ", "誰", "なぜ", "どんな", "どの", "？", "?"]
+    has_question = any(word in query for word in question_words)
+    
+    # 20文字以下で疑問詞がない場合は雑談の可能性が高い
+    if len(query) <= 20 and not has_question:
+        return True
+    
+    return False
+
+def get_general_response_from_llm(query: str, llm_instance):
+    """LLMを使って一般的な応答を生成"""
+    try:
+        prompt = f"""あなたは親切で丁寧な日本語のAIアシスタントです。
+以下のユーザーの入力に対して、自然で親しみやすい日本語で応答してください。
+技術的な内容ではなく、一般的な会話として応答してください。
+
+ユーザー: {query}
+
+アシスタント:"""
+
+        if hasattr(llm_instance, 'invoke'):
+            response = llm_instance.invoke(prompt)
+            return response.content if hasattr(response, 'content') else str(response)
+        else:
+            response = llm_instance(prompt)
+            return response if isinstance(response, str) else str(response)
+            
+    except Exception as e:
+        logger.error(f"Error generating general response: {e}")
+        # フォールバック応答
+        if "こんにちは" in query:
+            return "こんにちは！今日はどのようなご用件でしょうか？お手伝いできることがあれば、お気軽にお尋ねください。"
+        elif "ありがとう" in query:
+            return "どういたしまして！他にもご質問がございましたら、いつでもお聞きください。"
+        else:
+            return "申し訳ございません。もう一度お聞かせいただけますか？"
+
 @router.post("/", summary="AI チャット")
 async def chat_endpoint(req: ChatRequest):
     logger.info(f"=== chat_endpoint called === question: {req.question}, username: {req.username}")
@@ -36,153 +92,87 @@ async def chat_endpoint(req: ChatRequest):
     
     answer = ""
     sources: list[dict] = []
+    web_searcher = WebSearcher()
     
     try:
         # グローバル変数から取得
         vectorstore = main.vectorstore
         rag_chain_template = main.rag_chain_template
+        llm_instance = main.llm_instance
         
-        logger.info(f"Vectorstore: {vectorstore is not None}, RAG chain: {rag_chain_template is not None}")
+        logger.info(f"Vectorstore: {vectorstore is not None}, RAG chain: {rag_chain_template is not None}, LLM: {llm_instance is not None}")
         
-        if not vectorstore:
-            # ベクトルストアがない場合
-            answer = "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
-            sources = [{"metadata": {"source": "システムメッセージ", "page": "N/A"}}]
+        # 一般的な挨拶や雑談の判定
+        if is_general_greeting_or_chat(query):
+            logger.info("Detected general chat/greeting - using direct LLM response")
             
-        elif not rag_chain_template:
-            # RAGチェーンがない場合、直接検索を試みる
-            logger.info("RAG chain not available, trying direct search")
-            try:
-                retriever = vectorstore.as_retriever()
-                docs = retriever.get_relevant_documents(query)
-                
-                if docs:
-                    answer = "以下の関連情報が見つかりました：\n\n"
-                    for i, doc in enumerate(docs[:3], 1):
-                        answer += f"{i}. {doc.page_content[:200]}...\n"
-                        answer += f"   出典: {doc.metadata.get('source', '不明')} (p{doc.metadata.get('page', '?')})\n\n"
-                    
-                    for doc in docs[:3]:
-                        meta = {k: str(v) for k, v in doc.metadata.items()}
-                        meta["source"] = Path(meta.get("source", "unknown")).name
-                        meta.setdefault("page", "?")
-                        sources.append({"metadata": meta})
+            if llm_instance:
+                answer = get_general_response_from_llm(query, llm_instance)
+                # 一般的な会話の場合、ソースは不要
+                sources = []
+            else:
+                # LLMがない場合のフォールバック
+                if "こんにちは" in query:
+                    answer = "こんにちは！ご質問をお聞かせください。"
                 else:
-                    answer = "関連する情報が見つかりませんでした。別の質問をお試しください。"
-                    sources = [{"metadata": {"source": "検索結果なし", "page": "N/A"}}]
-                    
-            except Exception as e:
-                logger.error(f"Direct search error: {e}")
-                answer = f"検索中にエラーが発生しました。もう一度お試しください。"
-                sources = [{"metadata": {"source": "エラー", "page": "N/A"}}]
-                
-        else:
-            # 通常のRAG処理
-            logger.info("Using RAG chain for processing")
+                    answer = "申し訳ございません。お手伝いできることがあれば、お気軽にお尋ねください。"
+                sources = []
+        
+        # RAG検索が必要な質問の場合
+        elif vectorstore and rag_chain_template:
+            logger.info("Using RAG chain for technical/document-based query")
+            
             try:
-                # 新しいLangChainの方法で実行
+                # RAGチェーンで回答生成
                 if hasattr(rag_chain_template, '__call__'):
-                    # 古いスタイル（callable chain）
                     result = rag_chain_template({"query": query})
+                elif hasattr(rag_chain_template, 'invoke'):
+                    result = rag_chain_template.invoke({"query": query})
                 else:
-                    # 新しいスタイル - invoke()の代わりに__call__を使用
-                    # または、runメソッドがある場合はそれを使用
-                    if hasattr(rag_chain_template, 'run'):
-                        answer = rag_chain_template.run(query)
-                        result = {"result": answer, "source_documents": []}
-                    else:
-                        # RetrievalQAの直接実行
-                        result = rag_chain_template({"query": query}, callbacks=[])
+                    result = rag_chain_template({"query": query}, callbacks=[])
                 
-                # 結果を取得
                 answer = result.get("result", "")
-                if not answer:
-                    answer = "申し訳ございません。回答を生成できませんでした。"
                 
-                # ソースドキュメントを処理
-                for doc in result.get("source_documents", []):
-                    meta = {k: str(v) for k, v in doc.metadata.items()}
-                    meta["source"] = Path(meta.get("source", "unknown")).name
-                    meta.setdefault("page", "?")
-                    sources.append({"metadata": meta})
-                    
+                # ソースドキュメントの処理（表示しない設定）
+                # sources = [] とすることで出典情報を非表示にする
+                sources = []
+                
+                # 回答が見つからない場合、Web検索を含む強化された応答を生成
+                if not answer or "関連する情報が見つかりませんでした" in answer:
+                    logger.info("No relevant documents found, trying enhanced response with web search")
+                    answer = web_searcher.get_enhanced_answer(query, context="", use_web_search=True)
+                else:
+                    # RAGで回答が見つかった場合も、Web検索が必要かチェック
+                    if web_searcher.should_search_web(query):
+                        logger.info("Enhancing RAG answer with web search")
+                        # RAGの回答をコンテキストとして使用
+                        answer = web_searcher.get_enhanced_answer(query, context=answer, use_web_search=True)
+                        
             except Exception as e:
                 logger.error(f"RAG chain error: {e}")
-                logger.error(traceback.format_exc())
-                
-                # エラー詳細からより具体的な対処を試みる
-                error_msg = str(e)
-                if "callbacks" in error_msg:
-                    # callbacksエラーの場合、別の方法を試す
-                    try:
-                        # retrieverを直接使用してドキュメント検索
-                        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-                        docs = retriever.get_relevant_documents(query)
-                        
-                        if docs:
-                            # LLMが利用可能な場合
-                            if main.llm_instance:
-                                # コンテキストを作成
-                                context = "\n\n".join([doc.page_content for doc in docs[:3]])
-                                
-                                # プロンプトを構築
-                                prompt = f"""以下のコンテキストを使用して質問に答えてください。
-
-コンテキスト: {context}
-
-質問: {query}
-
-回答（日本語で分かりやすく）:"""
-                                
-                                # LLMを直接呼び出し
-                                if hasattr(main.llm_instance, 'invoke'):
-                                    llm_response = main.llm_instance.invoke(prompt)
-                                    answer = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
-                                else:
-                                    answer = main.llm_instance(prompt)
-                                    if hasattr(answer, 'content'):
-                                        answer = answer.content
-                                    else:
-                                        answer = str(answer)
-                                
-                                # ソースドキュメントを追加
-                                for doc in docs[:3]:
-                                    meta = {k: str(v) for k, v in doc.metadata.items()}
-                                    meta["source"] = Path(meta.get("source", "unknown")).name
-                                    meta.setdefault("page", "?")
-                                    sources.append({"metadata": meta})
-                            else:
-                                # LLMがない場合は検索結果のみ返す
-                                answer = "関連情報が見つかりました:\n\n"
-                                for i, doc in enumerate(docs[:3], 1):
-                                    answer += f"{i}. {doc.page_content[:200]}...\n"
-                                    answer += f"   出典: {doc.metadata.get('source', '不明')} (p{doc.metadata.get('page', '?')})\n\n"
-                                
-                                for doc in docs[:3]:
-                                    meta = {k: str(v) for k, v in doc.metadata.items()}
-                                    meta["source"] = Path(meta.get("source", "unknown")).name
-                                    meta.setdefault("page", "?")
-                                    sources.append({"metadata": meta})
-                        else:
-                            answer = "関連する情報が見つかりませんでした。"
-                            sources = [{"metadata": {"source": "検索結果なし", "page": "N/A"}}]
-                            
-                    except Exception as e2:
-                        logger.error(f"Fallback error: {e2}")
-                        answer = f"申し訳ございません。質問の処理中にエラーが発生しました。"
-                        sources = [{"metadata": {"source": "エラー応答", "page": "N/A"}}]
+                # エラー時は一般的なLLM応答を試みる
+                if llm_instance:
+                    answer = get_general_response_from_llm(query, llm_instance)
                 else:
-                    # その他のエラー
-                    answer = f"申し訳ございません。質問の処理中にエラーが発生しました。"
-                    sources = [{"metadata": {"source": "エラー応答", "page": "N/A"}}]
-                
+                    answer = "申し訳ございません。質問の処理中にエラーが発生しました。"
+                sources = []
+        
+        # ベクトルストアまたはRAGチェーンがない場合
+        else:
+            if llm_instance:
+                # LLMだけで応答
+                answer = get_general_response_from_llm(query, llm_instance)
+            else:
+                answer = "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
+            sources = []
+            
     except Exception as e:
         # 予期しないエラー
         error_id = str(uuid4())[:8]
         logger.error(f"Unexpected error [{error_id}]: {e}")
         logger.error(traceback.format_exc())
         answer = f"システムエラーが発生しました。管理者にお問い合わせください。（エラーID: {error_id}）"
-        sources = [{"metadata": {"source": "システムエラー", "page": "N/A"}}]
+        sources = []
     
     # ログを記録
     log = {
@@ -195,10 +185,10 @@ async def chat_endpoint(req: ChatRequest):
     }
     history_logs.append(log)
     
-    # レスポンスを返す
+    # レスポンスを返す（sourcesは空にして出典情報を非表示）
     response = {
         "answer": answer,
-        "sources": sources,
+        "sources": [],  # 常に空の配列を返すことで出典情報を非表示
         "status": "ok"
     }
     
@@ -216,6 +206,9 @@ def get_history():
 
 @router.get("/export/csv", summary="チャット履歴 CSV ダウンロード")
 def export_csv():
+    import csv
+    import io
+    
     si = io.StringIO()
     writer = csv.writer(si)
     writer.writerow(["id", "question", "username", "answer", "timestamp"])
