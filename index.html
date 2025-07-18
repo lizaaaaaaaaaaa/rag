@@ -159,7 +159,7 @@
             .chat-header { padding: 14px 4px; font-size: 1.05rem;}
             .chat-messages { padding: 8px 2px;}
         }
-    </style>
+ </style>
 </head>
 <body>
     <div class="chat-container">
@@ -187,7 +187,6 @@
     <script>
         class LineStyleChatUI {
             constructor() {
-                // 必要に応じてAPIエンドポイントを変更
                 this.API_URL = 'https://rag-api-190389115361.asia-northeast1.run.app';
 
                 this.chatMessages = document.getElementById('chatMessages');
@@ -258,20 +257,12 @@
                 this.scrollToBottom();
             }
 
+            // === 修正版ここ！出典部分削除 ===
             addAIMessage(message, sources = []) {
                 const messageDiv = document.createElement('div');
                 messageDiv.className = 'message ai';
-                let sourcesHtml = '';
-                if (sources && sources.length > 0) {
-                    const sourceLinks = sources.map(source => {
-                        const metadata = source.metadata || {};
-                        const sourceName = metadata.source || '資料';
-                        const page = metadata.page || '?';
-                        return `<span style="color:#10c041;">${this.escapeHtml(sourceName)}（p.${page}）</span>`;
-                    }).join('、 ');
-                    sourcesHtml = `<div style="font-size:0.9em;color:#666;margin-top:4px;">参考: ${sourceLinks}</div>`;
-                }
-                messageDiv.innerHTML = `<div class="message-content">${this.formatMessage(message)}${sourcesHtml}</div>`;
+                // sourcesの表示を完全に削除
+                messageDiv.innerHTML = `<div class="message-content">${this.formatMessage(message)}</div>`;
                 this.chatMessages.appendChild(messageDiv);
                 this.scrollToBottom();
             }
