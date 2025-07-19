@@ -3,25 +3,53 @@ import os
 import logging
 from typing import Any, Tuple
 
-# ── LangSmith（LangChain Tracing v2）追加 ────────────────
-from langsmith import traceable
-
-# LangSmithトレース用の環境変数をセット（起動時に自動設定）
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_PROJECT"] = "rag-chat-evaluation"
-# ────────────────────────────────────────────────
-
 # ── 先頭で必ず proxies 関連の環境変数を消す ──────────────
 os.environ.pop("HTTP_PROXY", None)
 os.environ.pop("HTTPS_PROXY", None)
 # ────────────────────────────────────────────────
 
+# ── ロガーを最初に定義 ────────────────
 logger = logging.getLogger(__name__)
+
+# ── LangSmith設定を確実に読み込み ────────────────
+def setup_langsmith():
+    """LangSmith設定を確実に初期化"""
+    # 環境変数の確認
+    langsmith_api_key = os.environ.get("LANGSMITH_API_KEY")
+    
+    if langsmith_api_key:
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGCHAIN_PROJECT"] = os.environ.get("LANGCHAIN_PROJECT", "rag-chat-evaluation")
+        os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
+        logger.info(f"✅ LangSmith enabled with API key: {langsmith_api_key[:8]}...")
+        return True
+    else:
+        logger.warning("⚠️ LANGSMITH_API_KEY not found, tracing disabled")
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        return False
+
+# LangSmith設定を実行
+setup_langsmith()
+
+# ── LangSmithトレース関連のimport ────────────────
+try:
+    from langsmith import traceable
+    HAS_LANGSMITH = True
+    logger.info("✅ LangSmith library loaded successfully")
+except ImportError:
+    logger.warning("⚠️ LangSmith library not available")
+    # LangSmithがない場合のダミーデコレータ
+    def traceable(name=None):
+        def decorator(func):
+            return func
+        return decorator
+    HAS_LANGSMITH = False
 
 # langchain-openaiを使用（より安定）
 from langchain_openai import ChatOpenAI
 
 
+@traceable(name="load_llm_trace")
 def load_llm() -> Tuple[Any, None, int]:
     """
     langchain-openai の ChatOpenAI クラスを使って OpenAI の ChatCompletion を呼び出す。

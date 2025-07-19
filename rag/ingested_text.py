@@ -208,10 +208,14 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
         raise
 
 def get_rag_chain(vectorstore, return_source: bool = True):
-    """RAGチェーンを作成（エラーハンドリング強化版）"""
-    logger.info("Creating RAG chain...")
+    """RAGチェーンを作成（LangSmithトレース対応版）"""
+    logger.info("Creating RAG chain with LangSmith tracing...")
     
     try:
+        # LangSmith設定確認
+        langsmith_enabled = os.environ.get("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+        logger.info(f"LangSmith tracing enabled: {langsmith_enabled}")
+        
         # LLMをロード
         from llm.llm_runner import load_llm
         llm, _, _ = load_llm()
@@ -234,8 +238,24 @@ def get_rag_chain(vectorstore, return_source: bool = True):
             template=prompt_str
         )
         
-        # RAGチェーンを作成（シンプルな方法）
+        # RAGチェーンを作成
         from langchain.chains import RetrievalQA
+        
+        # LangSmithトレース用の設定
+        chain_kwargs = {
+            "prompt": prompt,
+            "verbose": False
+        }
+        
+        # LangSmithが有効な場合はcallbacksを設定
+        if langsmith_enabled:
+            try:
+                from langchain.callbacks import LangChainTracer
+                tracer = LangChainTracer(project_name="rag-chat-evaluation")
+                chain_kwargs["callbacks"] = [tracer]
+                logger.info("✅ LangSmith tracer added to RAG chain")
+            except ImportError:
+                logger.warning("LangChain tracer not available")
         
         rag_chain = RetrievalQA.from_chain_type(
             llm=llm,
@@ -244,17 +264,14 @@ def get_rag_chain(vectorstore, return_source: bool = True):
                 search_kwargs={"k": 3}
             ),
             return_source_documents=return_source,
-            chain_type_kwargs={
-                "prompt": prompt,
-                "verbose": False  # デバッグ用
-            }
+            chain_type_kwargs=chain_kwargs
         )
         
         # callbacksエラーを回避するため、必要なら追加
         if not hasattr(rag_chain, 'callbacks'):
             rag_chain.callbacks = []
         
-        logger.info("✅ RAG chain created successfully")
+        logger.info("✅ RAG chain created successfully with LangSmith tracing")
         return rag_chain
         
     except Exception as e:
@@ -287,7 +304,7 @@ def get_rag_chain(vectorstore, return_source: bool = True):
         
         logger.warning("Returning simple search chain as fallback")
         return SimpleSearchChain(vectorstore)
-
+    
 # OpenAI APIキー取得（後方互換性のため残す）
 def get_openai_api_key():
     key = os.getenv("OPENAI_API_KEY")
