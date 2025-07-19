@@ -1,7 +1,16 @@
 # evaluation/ragas_eval.py (新規作成)
-from ragas import evaluate
-from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
-from datasets import Dataset
+try:
+    from ragas import evaluate
+    from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
+    from datasets import Dataset
+    HAS_RAGAS = True
+except ImportError:
+    HAS_RAGAS = False
+
+class RAGEvaluator:
+    def __init__(self):
+        if not HAS_RAGAS:
+            raise ImportError("ragasパッケージがインストールされていません")
 
 class RAGEvaluator:
     def __init__(self):

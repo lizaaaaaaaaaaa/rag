@@ -12,3 +12,7 @@ OPENAI_API_KEY.txt
 !requirements.txt
 !rag/prompt_template.txt
 .env.production
+*.pyc
+*.db
+rag/vectorstore/
+uploads/

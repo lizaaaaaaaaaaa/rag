@@ -1,8 +1,12 @@
 # utils/cache.py (新規作成)
+import os
 import redis
 import json
 import hashlib
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 class RAGCache:
     def __init__(self):

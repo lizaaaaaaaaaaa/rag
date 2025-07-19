@@ -1,4 +1,6 @@
 # rag/verification.py (新規作成)
+
+from rag.advanced_prompts import VERIFICATION_PROMPT
 class ResponseVerifier:
     def __init__(self, llm):
         self.llm = llm

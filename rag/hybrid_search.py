@@ -1,7 +1,17 @@
 # rag/hybrid_search.py (新規作成)
 from langchain.retrievers import BM25Retriever, EnsembleRetriever
 from langchain_community.vectorstores import FAISS
-import MeCab
+import logging
+
+logger = logging.getLogger(__name__)
+
+# MeCabは日本語環境でのみ必要なので、オプショナルにする
+try:
+    import MeCab
+    HAS_MECAB = True
+except ImportError:
+    logger.warning("MeCabが利用できません。基本的なトークナイザーを使用します。")
+    HAS_MECAB = False
 
 class HybridRetriever:
     def __init__(self, vectorstore, documents):
