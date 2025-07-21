@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 logger.info("==== DEBUG: ENV = %s", os.environ.get("ENV"))
 logger.info("==== DEBUG: OPENAI_API_KEY = %s****", (os.environ.get("OPENAI_API_KEY") or "")[:10])
 logger.info("==== DEBUG: GCS_BUCKET_NAME = %s", os.environ.get("GCS_BUCKET_NAME"))
+logger.info("==== DEBUG: LANGSMITH_API_KEY = %s****", (os.environ.get("LANGSMITH_API_KEY") or "")[:10])
+logger.info("==== DEBUG: LANGCHAIN_TRACING_V2 = %s", os.environ.get("LANGCHAIN_TRACING_V2"))
+logger.info("==== DEBUG: LANGCHAIN_PROJECT = %s", os.environ.get("LANGCHAIN_PROJECT"))
 
 if os.getenv("ENV") != "production":
     from dotenv import load_dotenv
@@ -206,6 +209,66 @@ def get_status():
         "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY")),
         "gcs_bucket": os.environ.get("GCS_BUCKET_NAME", "Not set")
     }
+
+# デバッグエンドポイントの追加
+@app.get("/debug/env")
+def debug_env():
+    """環境変数のデバッグ情報を返す"""
+    return {
+        "environment": os.environ.get("ENV"),
+        "langsmith_api_key_set": bool(os.environ.get("LANGSMITH_API_KEY")),
+        "langsmith_api_key_length": len(os.environ.get("LANGSMITH_API_KEY", "")),
+        "langsmith_api_key_prefix": (os.environ.get("LANGSMITH_API_KEY", ""))[:10] + "..." if os.environ.get("LANGSMITH_API_KEY") else "NOT_SET",
+        "langchain_tracing": os.environ.get("LANGCHAIN_TRACING_V2"),
+        "langchain_project": os.environ.get("LANGCHAIN_PROJECT"),
+        "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY")),
+        "gcs_bucket": os.environ.get("GCS_BUCKET_NAME"),
+        "db_host": os.environ.get("DB_HOST"),
+        "db_port": os.environ.get("DB_PORT"),
+        "all_langchain_vars": {
+            k: v for k, v in os.environ.items() 
+            if k.startswith("LANGCHAIN_") or k.startswith("LANGSMITH_")
+        },
+        "total_env_vars": len(os.environ)
+    }
+
+@app.get("/debug/langsmith-test")
+def test_langsmith():
+    """LangSmithの初期化テスト"""
+    try:
+        langsmith_key = os.environ.get("LANGSMITH_API_KEY")
+        tracing_enabled = os.environ.get("LANGCHAIN_TRACING_V2")
+        project = os.environ.get("LANGCHAIN_PROJECT")
+        
+        if not langsmith_key:
+            return {"status": "error", "message": "LANGSMITH_API_KEY not found"}
+        
+        if tracing_enabled != "true":
+            return {"status": "error", "message": f"LANGCHAIN_TRACING_V2 is '{tracing_enabled}', should be 'true'"}
+        
+        # LangSmithライブラリのテスト
+        try:
+            from langsmith import Client
+            client = Client(api_key=langsmith_key)
+            return {
+                "status": "success",
+                "langsmith_key_length": len(langsmith_key),
+                "langsmith_key_prefix": langsmith_key[:10] + "...",
+                "tracing_enabled": tracing_enabled,
+                "project": project,
+                "client_created": True,
+                "message": "LangSmith client successfully created"
+            }
+        except Exception as e:
+            return {
+                "status": "error", 
+                "message": f"LangSmith client creation failed: {str(e)}",
+                "langsmith_key_length": len(langsmith_key) if langsmith_key else 0,
+                "tracing_enabled": tracing_enabled,
+                "project": project
+            }
+    except Exception as e:
+        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
 # ★★★ 追加: OPTIONS メソッドのハンドリング（明示的に）
 @app.options("/chat")

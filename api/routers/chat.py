@@ -20,6 +20,11 @@ history_logs: list[dict] = []
 
 logger = logging.getLogger(__name__)
 
+# ★ 追加: LangSmith環境変数デバッグログ
+logger.info(f"Chat router - LANGSMITH_API_KEY set: {bool(os.environ.get('LANGSMITH_API_KEY'))}")
+logger.info(f"Chat router - LANGCHAIN_TRACING_V2: {os.environ.get('LANGCHAIN_TRACING_V2')}")
+logger.info(f"Chat router - LANGCHAIN_PROJECT: {os.environ.get('LANGCHAIN_PROJECT')}")
+
 class ChatRequest(BaseModel):
     question: str
     username: str | None = None
