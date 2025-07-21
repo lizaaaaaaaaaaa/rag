@@ -11,17 +11,27 @@ os.environ.pop("HTTPS_PROXY", None)
 # ── ロガーを最初に定義 ────────────────
 logger = logging.getLogger(__name__)
 
-# ── LangSmith設定を確実に読み込み ────────────────
+# ── LangSmith設定を確実に読み込み（修正版） ────────────────
 def setup_langsmith():
     """LangSmith設定を確実に初期化"""
     # 環境変数の確認
     langsmith_api_key = os.environ.get("LANGSMITH_API_KEY")
     
+    logger.info(f"🔍 LangSmith setup - API key exists: {bool(langsmith_api_key)}")
+    logger.info(f"🔍 LangSmith setup - API key length: {len(langsmith_api_key) if langsmith_api_key else 0}")
+    
     if langsmith_api_key:
+        # LangSmith環境変数を明示的に設定
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
         os.environ["LANGCHAIN_PROJECT"] = os.environ.get("LANGCHAIN_PROJECT", "rag-chat-evaluation")
         os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
+        
+        # ★ 重要: LangSmithライブラリ用の環境変数も設定
+        os.environ["LANGSMITH_API_KEY"] = langsmith_api_key
+        
         logger.info(f"✅ LangSmith enabled with API key: {langsmith_api_key[:8]}...")
+        logger.info(f"✅ LANGCHAIN_TRACING_V2: {os.environ.get('LANGCHAIN_TRACING_V2')}")
+        logger.info(f"✅ LANGCHAIN_PROJECT: {os.environ.get('LANGCHAIN_PROJECT')}")
         return True
     else:
         logger.warning("⚠️ LANGSMITH_API_KEY not found, tracing disabled")
@@ -29,21 +39,35 @@ def setup_langsmith():
         return False
 
 # LangSmith設定を実行
-setup_langsmith()
+langsmith_enabled = setup_langsmith()
 
-# ── LangSmithトレース関連のimport ────────────────
-try:
-    from langsmith import traceable
-    HAS_LANGSMITH = True
-    logger.info("✅ LangSmith library loaded successfully")
-except ImportError:
-    logger.warning("⚠️ LangSmith library not available")
-    # LangSmithがない場合のダミーデコレータ
+# ── LangSmithトレース関連のimport（修正版） ────────────────
+HAS_LANGSMITH = False
+traceable = None
+
+if langsmith_enabled:
+    try:
+        # LangSmithライブラリを明示的にAPI keyと一緒にimport
+        from langsmith import Client, traceable as langsmith_traceable
+        
+        # クライアントをテスト作成
+        api_key = os.environ.get("LANGSMITH_API_KEY")
+        test_client = Client(api_key=api_key)
+        
+        traceable = langsmith_traceable
+        HAS_LANGSMITH = True
+        logger.info("✅ LangSmith library loaded and client tested successfully")
+    except Exception as e:
+        logger.error(f"❌ LangSmith library error: {e}")
+        HAS_LANGSMITH = False
+
+# LangSmithが利用できない場合のダミーデコレータ
+if not HAS_LANGSMITH:
+    logger.warning("⚠️ LangSmith library not available, using dummy decorator")
     def traceable(name=None):
         def decorator(func):
             return func
         return decorator
-    HAS_LANGSMITH = False
 
 # langchain-openaiを使用（より安定）
 from langchain_openai import ChatOpenAI
@@ -68,23 +92,34 @@ def load_llm() -> Tuple[Any, None, int]:
         )
 
     # 2) ChatOpenAI のインスタンス化
-    #    最新のモデル名に更新
     model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo")
     temperature = float(os.getenv("OPENAI_TEMPERATURE", "0"))
 
     try:
+        # LangSmithトレースを明示的に有効化
+        extra_kwargs = {}
+        if HAS_LANGSMITH and os.environ.get("LANGCHAIN_TRACING_V2") == "true":
+            from langchain.callbacks import LangChainTracer
+            try:
+                tracer = LangChainTracer(project_name=os.environ.get("LANGCHAIN_PROJECT", "rag-chat-evaluation"))
+                extra_kwargs["callbacks"] = [tracer]
+                logger.info("✅ LangChain tracer added to ChatOpenAI")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to add tracer: {e}")
+
         llm = ChatOpenAI(
             model=model_name,
             temperature=temperature,
             openai_api_key=api_key,
             max_retries=3,
-            request_timeout=30
+            request_timeout=30,
+            **extra_kwargs
         )
 
         # テスト呼び出し
         logger.info(f"Testing LLM connection...")
         test_response = llm.invoke("Hello")
-        logger.info(f"LLM test successful")
+        logger.info(f"✅ LLM test successful")
 
     except Exception as e:
         logger.error(f"Failed to initialize ChatOpenAI: {e}")
