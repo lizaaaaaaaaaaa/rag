@@ -1,0 +1,144 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  annotations:
+    run.googleapis.com/build-enable-automatic-updates: 'false'
+    run.googleapis.com/build-id: 81cdfae7-7fd9-4b1e-8608-9fdd17201964
+    run.googleapis.com/build-image-uri: asia-northeast1-docker.pkg.dev/rag-cloud-project/cloud-run-source-deploy/rag-api
+    run.googleapis.com/build-name: projects/190389115361/locations/asia-northeast1/builds/81cdfae7-7fd9-4b1e-8608-9fdd17201964
+    run.googleapis.com/build-source-location: gs://run-sources-rag-cloud-project-asia-northeast1/services/rag-api/1747109331.606491-a48b73edd1db42beb6e8d767db7a64e1.zip#1747109332510284
+    run.googleapis.com/ingress: all
+    run.googleapis.com/ingress-status: all
+    run.googleapis.com/urls: '["https://rag-api-190389115361.asia-northeast1.run.app","https://rag-api-jy2dt7mlwq-an.a.run.app"]'
+  labels:
+    cloud.googleapis.com/location: asia-northeast1
+    commit-sha: 0a7376b8052f93868d12d843c8bfcb8f6206c092
+    gcb-build-id: d5efd2e0-7319-4ee2-8ae3-6b9dacd415c9
+    gcb-commit-sha: d358a2cb8e6cdbc204a2d3c163166a1c971e4b7c
+    gcb-trigger-id: cfcf322a-a08a-48ee-8b47-9f721c40a245
+    gcb-trigger-region: global
+    image-tag: d358a2c
+    managed-by: gcp-cloud-build-deploy-cloud-run
+  name: rag-api
+  namespace: '190389115361'
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '25'
+        autoscaling.knative.dev/minScale: '1'
+        run.googleapis.com/client-name: gcloud
+        run.googleapis.com/client-version: 530.0.0
+        run.googleapis.com/startup-cpu-boost: 'true'
+        run.googleapis.com/vpc-access-connector: projects/rag-cloud-project/locations/asia-northeast1/connectors/cloudrun-to-sql
+        run.googleapis.com/vpc-access-egress: private-ranges-only
+      labels:
+        client.knative.dev/nonce: qkynzipqpk
+        commit-sha: 0a7376b8052f93868d12d843c8bfcb8f6206c092
+        gcb-build-id: d5efd2e0-7319-4ee2-8ae3-6b9dacd415c9
+        gcb-commit-sha: d358a2cb8e6cdbc204a2d3c163166a1c971e4b7c
+        gcb-trigger-id: cfcf322a-a08a-48ee-8b47-9f721c40a245
+        gcb-trigger-region: global
+        image-tag: d358a2c
+        managed-by: gcp-cloud-build-deploy-cloud-run
+        run.googleapis.com/startupProbeType: Custom
+    spec:
+      containerConcurrency: 100
+      containers:
+      - env:
+        - name: MODEL_PRESET
+          value: auto
+        - name: MAX_NEW_TOKENS
+          value: '256'
+        - name: DB_HOST
+          value: /DB_PORT=5432
+        - name: GCS_BUCKET_NAME
+          value: run-sources-rag-cloud-project-asia-northeast1
+        - name: ENV
+          value: production
+        - name: OPENAI_MODEL_NAME
+          value: gpt-3.5-turbo
+        - name: REDIS_URL
+          value: redis://your-redis-instance
+        - name: LANGCHAIN_TRACING_V2
+          value: 'true'
+        - name: LANGCHAIN_PROJECT
+          value: rag-chat-evaluation
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: db-name
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: db-user
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: db-password
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: OPENAI_API_KEY
+        - name: GOOGLE_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: GOOGLE_CLIENT_ID
+        - name: GOOGLE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: GOOGLE_CLIENT_SECRET
+        - name: GOOGLE_REDIRECT_URI
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: GOOGLE_REDIRECT_URI
+        - name: GOOGLE_SEARCH_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: GOOGLE_SEARCH_API_KEY
+        - name: GOOGLE_SEARCH_ENGINE_ID
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: GOOGLE_SEARCH_ENGINE_ID
+        - name: LANGSMITH_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: LANGSMITH_API_KEY
+        image: asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /healthz
+            port: 8080
+          periodSeconds: 30
+          timeoutSeconds: 3
+        name: rag-api-1
+        ports:
+        - containerPort: 8080
+          name: http1
+        resources:
+          limits:
+            cpu: '8'
+            memory: 32Gi
+        startupProbe:
+          failureThreshold: 3
+          initialDelaySeconds: 15
+          periodSeconds: 240
+          tcpSocket:
+            port: 8080
+          timeoutSeconds: 5
+      serviceAccountName: 190389115361-compute@developer.gserviceaccount.com
+      timeoutSeconds: 600
+  traffic:
+  - latestRevision: true
+    percent: 100

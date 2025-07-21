@@ -210,6 +210,8 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
 def get_rag_chain(vectorstore, return_source: bool = True):
     """RAGチェーンを作成（LangSmithトレース対応版）"""
     logger.info("Creating RAG chain with LangSmith tracing...")
+    logger.info(f"Creating RAG chain - LangSmith enabled: {os.environ.get('LANGCHAIN_TRACING_V2')}")
+    logger.info(f"LangSmith project: {os.environ.get('LANGCHAIN_PROJECT')}")
     
     try:
         # LangSmith設定確認
