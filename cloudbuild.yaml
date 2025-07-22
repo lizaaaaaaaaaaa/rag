@@ -4,7 +4,7 @@ steps:
     args: [
       'build',
       '--no-cache',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100',
+      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.102',
       '-f', 'Dockerfile.api',
       '.'
     ]
@@ -13,7 +13,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100'
+      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.102'
     ]
 
   # 3. フロントエンド用イメージをビルド
@@ -21,7 +21,7 @@ steps:
     args: [
       'build',
       '--no-cache',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100',
+      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.102',
       '-f', 'Dockerfile.front',
       '.'
     ]
@@ -30,7 +30,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100'
+      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.102'
     ]
 
   # 5. APIサーバーをCloud Runにデプロイ（GCS_BUCKET_NAME追加済み＋ENV=production＋OPENAI_MODEL_NAME）
@@ -63,7 +63,7 @@ steps:
       - run
       - deploy
       - rag-frontend
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100
+      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.102
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
@@ -78,8 +78,8 @@ steps:
       - --set-secrets=DB_PASSWORD=db-password:latest
 
 images:
-  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.100'
-  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.100'
+  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.102'
+  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.102'
 
 options:
   machineType: 'E2_HIGHCPU_8'
