@@ -11,9 +11,18 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from utils.web_search import GoogleSearcher as WebSearcher
 
-# ←ここにLangSmithトレースユーティリティをimport
+# LangSmithトレースユーティリティをimport
 from utils.langsmith_tracer import RAGTracer
-from langsmith import traceable
+
+# traceableのインポートを条件付きに
+try:
+    from langsmith import traceable
+except ImportError:
+    # ダミーデコレータ
+    def traceable(name=None, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
 
 router = APIRouter()
 history_logs: list[dict] = []
@@ -81,15 +90,13 @@ def get_app_globals():
 
 tracer = RAGTracer()
 
+# @traceable デコレータを一時的に簡略化
 @router.post("/", summary="AI チャット")
-@traceable(name="chat_endpoint")
 async def chat_endpoint(req: ChatRequest, request: Request):
+    """チャットエンドポイント（LangSmithトレースを簡略化）"""
     logger.info(f"=== chat_endpoint called === question: {req.question}, username: {req.username}")
     
-    # リクエストヘッダーのログ出力（デバッグ用）
-    logger.info(f"Request headers: {dict(request.headers)}")
-    logger.info(f"Request origin: {request.headers.get('origin', 'unknown')}")
-
+    # 以下、既存のコードと同じ...
     query = req.question
     user = req.username or "guest"
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

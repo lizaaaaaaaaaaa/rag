@@ -10,21 +10,32 @@ HAS_LANGSMITH = False
 Client = None
 traceable = None
 
+# トレースを一時的に無効化（エラー回避のため）
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
 try:
     # 環境変数確認
     api_key = os.environ.get("LANGSMITH_API_KEY")
-    if api_key:
+    if api_key and os.environ.get("DISABLE_LANGSMITH", "false").lower() != "true":
         from langsmith import Client as LangSmithClient, traceable as langsmith_traceable
         
-        # テストクライアント作成
-        test_client = LangSmithClient(api_key=api_key)
-        
-        Client = LangSmithClient
-        traceable = langsmith_traceable
-        HAS_LANGSMITH = True
-        logger.info("✅ LangSmith tracer module loaded successfully")
+        # テストクライアント作成（エラーハンドリング付き）
+        try:
+            test_client = LangSmithClient(api_key=api_key)
+            # プロジェクトの存在確認をスキップ
+            
+            Client = LangSmithClient
+            traceable = langsmith_traceable
+            HAS_LANGSMITH = True
+            
+            # 成功したらトレースを有効化
+            os.environ["LANGCHAIN_TRACING_V2"] = "true"
+            logger.info("✅ LangSmith tracer module loaded successfully")
+        except Exception as e:
+            logger.warning(f"⚠️ LangSmith client initialization failed: {e}")
+            HAS_LANGSMITH = False
     else:
-        logger.warning("⚠️ LANGSMITH_API_KEY not found in tracer module")
+        logger.warning("⚠️ LANGSMITH_API_KEY not found or disabled in tracer module")
 except ImportError:
     logger.warning("⚠️ LangSmith library not available in tracer module")
 except Exception as e:
@@ -32,7 +43,7 @@ except Exception as e:
 
 # ダミー関数の定義
 if not HAS_LANGSMITH:
-    def traceable(name=None):
+    def traceable(name=None, **kwargs):
         def decorator(func):
             return func
         return decorator
@@ -43,19 +54,22 @@ if not HAS_LANGSMITH:
 
 class RAGTracer:
     def __init__(self):
+        self.client = None
+        self.project_name = "rag-chat-evaluation"
+        
         if HAS_LANGSMITH and Client:
             try:
                 api_key = os.environ.get("LANGSMITH_API_KEY")
+                # プロジェクト名をシンプルに
+                self.project_name = "default"
+                os.environ["LANGCHAIN_PROJECT"] = self.project_name
+                
                 self.client = Client(api_key=api_key)
-                self.project_name = os.environ.get("LANGCHAIN_PROJECT", "rag-chat-evaluation")
                 logger.info(f"✅ RAGTracer initialized with project: {self.project_name}")
             except Exception as e:
                 logger.error(f"❌ Failed to initialize RAGTracer: {e}")
                 self.client = None
-                self.project_name = "rag-chat-evaluation"
         else:
-            self.client = None
-            self.project_name = "rag-chat-evaluation"
             logger.warning("⚠️ RAGTracer initialized in dummy mode")
     
     def trace_retrieval(self, query: str, documents: list) -> Dict[str, Any]:
@@ -66,9 +80,9 @@ class RAGTracer:
             "documents": [doc.page_content[:100] for doc in documents]
         }
         
-        if self.client:
+        # LangSmithトレースを一時的に無効化
+        if self.client and False:  # 一時的に無効化
             try:
-                # LangSmithにトレースデータを送信
                 logger.info(f"📊 Tracing retrieval: {len(documents)} documents for query: {query[:50]}...")
             except Exception as e:
                 logger.error(f"❌ Failed to trace retrieval: {e}")
@@ -84,9 +98,9 @@ class RAGTracer:
             "answer_length": len(answer)
         }
         
-        if self.client:
+        # LangSmithトレースを一時的に無効化
+        if self.client and False:  # 一時的に無効化
             try:
-                # LangSmithにトレースデータを送信
                 logger.info(f"📊 Tracing generation: answer length {len(answer)} for query: {query[:50]}...")
             except Exception as e:
                 logger.error(f"❌ Failed to trace generation: {e}")
@@ -95,16 +109,4 @@ class RAGTracer:
     
     def log_feedback(self, run_id: str, score: float, comment: str = ""):
         """ユーザーフィードバックを記録"""
-        if self.client:
-            try:
-                self.client.create_feedback(
-                    run_id=run_id,
-                    key="user_satisfaction",
-                    score=score,
-                    comment=comment
-                )
-                logger.info(f"✅ Feedback logged: score={score}")
-            except Exception as e:
-                logger.error(f"❌ Failed to log feedback: {e}")
-        else:
-            logger.info(f"📝 Feedback (dummy mode): score={score}, comment={comment}")
+        logger.info(f"📝 Feedback (local only): score={score}, comment={comment}")
