@@ -3,6 +3,7 @@ import traceback
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 import logging
 import sys
 
@@ -38,21 +39,30 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# ★★★ 修正: 正しいCORS設定（重複を削除し、正しいオリジンを追加）
+# ★★★ 修正: 正しいCORS設定
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://leafy-kitsune-eb4566.netlify.app",  # Netlify URL
-        "https://preview.studio.site/live/EjOQljz1WJ",  # Studio preview domain
+        "https://preview.studio.site",  # Studio.site のベースドメイン
+        "https://*.studio.site",  # Studio.site のサブドメインを許可
         "http://localhost:3000",
         "http://localhost:8501",
-        "*"  # 開発用（本番では削除推奨）
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # OPTIONSを明示的に追加
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
-    expose_headers=["*"]
+    expose_headers=["*"],
+    max_age=3600  # プリフライトリクエストのキャッシュ時間
 )
+
+# CSPヘッダーを設定するミドルウェア
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    # CSPを緩和して eval() を許可（開発用）
+    response.headers["Content-Security-Policy"] = "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:;"
+    return response
 
 # グローバル変数
 vectorstore = None
@@ -270,11 +280,17 @@ def test_langsmith():
     except Exception as e:
         return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
-# ★★★ 追加: OPTIONS メソッドのハンドリング（明示的に）
-@app.options("/chat")
-@app.options("/chat/")
-async def chat_options():
-    return {"message": "OK"}
+# OPTIONS メソッドのハンドリングを改善
+@app.options("/{path:path}")
+async def handle_options(path: str):
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 if __name__ == "__main__":
     import uvicorn

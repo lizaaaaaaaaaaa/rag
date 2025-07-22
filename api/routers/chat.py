@@ -5,7 +5,7 @@ from uuid import uuid4
 import traceback
 import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse, JSONResponse
 
@@ -83,8 +83,12 @@ tracer = RAGTracer()
 
 @router.post("/", summary="AI チャット")
 @traceable(name="chat_endpoint")
-async def chat_endpoint(req: ChatRequest):
+async def chat_endpoint(req: ChatRequest, request: Request):
     logger.info(f"=== chat_endpoint called === question: {req.question}, username: {req.username}")
+    
+    # リクエストヘッダーのログ出力（デバッグ用）
+    logger.info(f"Request headers: {dict(request.headers)}")
+    logger.info(f"Request origin: {request.headers.get('origin', 'unknown')}")
 
     query = req.question
     user = req.username or "guest"
@@ -100,7 +104,21 @@ async def chat_endpoint(req: ChatRequest):
         rag_chain_template = globals_dict['rag_chain_template']
         llm_instance = globals_dict['llm_instance']
 
-        logger.info(f"Vectorstore: {vectorstore is not None}, RAG chain: {rag_chain_template is not None}, LLM: {llm_instance is not None}")
+        logger.info(f"System status - Vectorstore: {vectorstore is not None}, RAG chain: {rag_chain_template is not None}, LLM: {llm_instance is not None}")
+
+        # グローバル変数が初期化されていない場合のエラーハンドリング
+        if not vectorstore and not llm_instance:
+            logger.error("System not properly initialized")
+            answer = "システムが正しく初期化されていません。管理者にお問い合わせください。"
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "answer": answer,
+                    "sources": [],
+                    "status": "error",
+                    "error": "Service temporarily unavailable"
+                }
+            )
 
         if is_general_greeting_or_chat(query):
             logger.info("Detected general chat/greeting - using direct LLM response")
@@ -139,6 +157,7 @@ async def chat_endpoint(req: ChatRequest):
                         answer = web_searcher.get_enhanced_answer(query, context=answer, use_web_search=True)
             except Exception as e:
                 logger.error(f"RAG chain error: {e}")
+                logger.error(traceback.format_exc())
                 if llm_instance:
                     answer = get_general_response_from_llm(query, llm_instance)
                 else:
@@ -174,8 +193,8 @@ async def chat_endpoint(req: ChatRequest):
     return response
 
 @router.post("", include_in_schema=False)
-async def chat_endpoint_slashless(req: ChatRequest):
-    return await chat_endpoint(req)
+async def chat_endpoint_slashless(req: ChatRequest, request: Request):
+    return await chat_endpoint(req, request)
 
 @router.get("/history", summary="チャット履歴取得")
 def get_history():
