@@ -292,12 +292,30 @@ def get_rag_chain(vectorstore, return_source: bool = True):
                 docs = self.retriever.get_relevant_documents(query)
                 
                 if docs:
-                    result = "関連情報が見つかりました:\n\n"
-                    for i, doc in enumerate(docs[:3], 1):
-                        result += f"{i}. {doc.page_content[:200]}...\n"
-                        result += f"   出典: {doc.metadata.get('source', '不明')} (p{doc.metadata.get('page', '?')})\n\n"
+                    # コンテキストから回答を生成（デバッグ情報は含めない）
+                    context = "\n".join([doc.page_content for doc in docs[:3]])
+                    
+                    # 簡易的な回答生成（LLMが使えない場合）
+                    if "坪単価" in query:
+                        # 坪単価に関する情報を探す
+                        for doc in docs:
+                            content = doc.page_content
+                            if "坪単価" in content or "価格" in content or "費用" in content:
+                                # 価格に関する部分を抽出
+                                sentences = content.split("。")
+                                for sentence in sentences:
+                                    if "坪単価" in sentence or "価格" in sentence:
+                                        result = sentence.strip() + "。"
+                                        break
+                                if result != "関連情報が見つかりました:\n\n":
+                                    break
+                        else:
+                            result = "申し訳ございません。坪単価に関する情報は、現在のデータベースには含まれていないようです。詳細については直接お問い合わせください。"
+                    else:
+                        # その他の質問の場合
+                        result = docs[0].page_content[:300] + "..."
                 else:
-                    result = "関連する情報が見つかりませんでした。"
+                    result = "申し訳ございません。お尋ねの情報が見つかりませんでした。"
                 
                 return {
                     "result": result,

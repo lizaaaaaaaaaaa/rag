@@ -88,6 +88,32 @@ class GoogleSearcher:
     def get_enhanced_answer(self, query: str, context: str = "", use_web_search: bool = True) -> str:
         """Web検索結果も含めて強化された回答を生成"""
         
+        # 坪単価の質問に特化した処理
+        if "坪単価" in query:
+            # コンテキストから坪単価情報を探す
+            if context:
+                # コンテキストに坪単価の情報があるか確認
+                if "坪単価" in context or "万円/坪" in context or "価格" in context:
+                    # OpenAI APIで回答生成
+                    if self.openai_api_key:
+                        try:
+                            client = openai.OpenAI(api_key=self.openai_api_key)
+                            response = client.chat.completions.create(
+                                model="gpt-3.5-turbo",
+                                messages=[
+                                    {"role": "system", "content": "質問に対して簡潔に回答してください。"},
+                                    {"role": "user", "content": f"以下の情報から坪単価について教えてください。\n\n情報: {context}\n\n回答:"}
+                                ],
+                                temperature=0.3,
+                                max_tokens=200
+                            )
+                            return response.choices[0].message.content
+                        except Exception as e:
+                            logger.error(f"Error generating answer: {e}")
+                
+                # コンテキストに情報がない場合
+                return "申し訳ございません。坪単価に関する具体的な情報は現在のデータには含まれていないようです。詳細については直接お問い合わせいただければ幸いです。"
+        
         # Web検索結果を取得
         web_context = ""
         if use_web_search and self.should_search_web(query):

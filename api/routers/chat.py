@@ -159,7 +159,12 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                     logger.info("No relevant documents found, trying enhanced response with web search")
                     answer = web_searcher.get_enhanced_answer(query, context="", use_web_search=True)
                 else:
-                    if web_searcher.should_search_web(query):
+                    # 「関連文書が見つかりました:」で始まる場合は、実際の回答部分のみを抽出
+                    if answer.startswith("関連文書が見つかりました:") or answer.startswith("関連情報が見つかりました:"):
+                        # デバッグ用の詳細な検索結果は削除し、純粋な回答のみを生成
+                        context = "\n".join([doc.page_content for doc in docs])
+                        answer = web_searcher.get_enhanced_answer(query, context=context, use_web_search=False)
+                    elif web_searcher.should_search_web(query):
                         logger.info("Enhancing RAG answer with web search")
                         answer = web_searcher.get_enhanced_answer(query, context=answer, use_web_search=True)
             except Exception as e:
