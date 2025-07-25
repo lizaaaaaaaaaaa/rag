@@ -1,67 +1,63 @@
-# Cloud Build compatible requirements.txt
-# Resolved pydantic version conflicts
+# Fallback requirements.txt - Using older LINE Bot SDK for compatibility
 
-# Core Web Framework - Updated for Pydantic 2.x compatibility
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+# Core Web Framework
+fastapi==0.95.1
+uvicorn==0.22.0
 python-dotenv==1.0.1
-python-multipart==0.0.6
+python-multipart
 
-# Pydantic 2.x - Compatible with both FastAPI and LINE Bot SDK
-pydantic==2.5.3
-pydantic-settings==2.1.0
+# Pydantic 1.x - Compatible with FastAPI 0.95.1
+pydantic==1.10.14
 
-# LINE Bot SDK
-line-bot-sdk==3.5.0
+# LINE Bot SDK - Older version compatible with Pydantic 1.x
+line-bot-sdk==2.4.0
 
-# OpenAI and LLM - Updated versions
-openai==1.3.7
-langchain-openai==0.0.2
+# OpenAI and LLM
+openai==1.82.1
+langchain-openai==0.0.8
 
-# LangChain Core - Compatible versions
-langchain==0.0.350
-langchain-core==0.1.1
-langchain-community==0.0.1
-langsmith==0.0.69
+# LangChain Core
+langchain==0.1.20
+langchain-core==0.1.53
+langchain-community==0.0.38
+langsmith==0.1.21
 
-# Machine Learning and AI - Stable versions
-transformers==4.36.2
-tokenizers==0.15.0
-huggingface_hub==0.19.4
+# Machine Learning and AI
+transformers==4.31.0
+tokenizers==0.13.3
+huggingface_hub==0.16.4
 faiss-cpu==1.7.4
 sentence-transformers==2.2.2
-accelerate==0.25.0
-torch==2.1.2
+accelerate==0.21.0
+torch==2.0.1
 sentencepiece==0.1.99
 
 # Data Processing
-PyYAML>=6.0.1
-pypdf==3.17.4
-protobuf==4.25.1
-
-# Security and Authentication
+PyYAML>=5.3
+pypdf==3.17.1
+protobuf==4.25.3
 bcrypt==4.1.2
-PyJWT==2.8.0
+PyJWT==2.10.1
 
 # Google Cloud Services
-google-auth==2.25.2
-google-cloud-firestore==2.13.1
-google-cloud-storage==2.10.0
-google-cloud-secret-manager==2.18.1
-psycopg2-binary==2.9.9
+google-auth==2.29.0
+google-cloud-firestore==2.20.2
+google-cloud-storage
+google-cloud-secret-manager==2.16.1
+psycopg2-binary
 
 # Web and HTTP
 requests==2.31.0
-streamlit==1.29.0
-
-# Visualization and Analysis
-matplotlib==3.8.2
-seaborn==0.13.0
+streamlit==1.32.2
 
 # Search and Data Processing
 rank-bm25==0.2.2
-redis==5.0.1
-datasets==2.15.0
+redis==4.5.5
+datasets==2.14.0
 
 # Japanese Language Processing
 mecab-python3==1.0.6
+
+# Visualization
+matplotlib
+seaborn
