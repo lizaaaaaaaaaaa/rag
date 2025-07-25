@@ -1,4 +1,4 @@
-# api/routers/line_bot.py - Compatible with line-bot-sdk 2.4.0
+# api/routers/line_bot.py - Updated for line-bot-sdk v3.5.0
 
 import os
 import logging
@@ -7,43 +7,41 @@ import asyncio
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
 
-# LINE Bot SDK imports with version compatibility
+# LINE Bot SDK v3 imports
 try:
-    from linebot import LineBotApi, WebhookHandler
-    from linebot.exceptions import InvalidSignatureError, LineBotApiError
-    from linebot.models import (
-        MessageEvent, TextMessage, TextSendMessage,
-        FollowEvent, UnfollowEvent
+    from linebot.v3 import WebhookHandler
+    from linebot.v3.exceptions import InvalidSignatureError
+    from linebot.v3.messaging import (
+        Configuration,
+        ApiClient,
+        MessagingApi,
+        ReplyMessageRequest,
+        TextMessage
+    )
+    from linebot.v3.webhooks import (
+        MessageEvent,
+        TextMessageContent,
+        FollowEvent
     )
     
-    # QuickReply and RichMenu features (available in v2.4.0)
-    try:
-        from linebot.models import (
-            QuickReply, QuickReplyButton, MessageAction
-        )
-        QUICK_REPLY_AVAILABLE = True
-    except ImportError:
-        QUICK_REPLY_AVAILABLE = False
-        
     LINE_SDK_AVAILABLE = True
     logger = logging.getLogger(__name__)
-    logger.info("✅ LINE Bot SDK v2.4.0 loaded successfully")
+    logger.info("✅ LINE Bot SDK v3.5.0 loaded successfully")
     
 except ImportError as e:
     logging.getLogger(__name__).error(f"LINE Bot SDK not available: {e}")
     LINE_SDK_AVAILABLE = False
-    QUICK_REPLY_AVAILABLE = False
     
     # Dummy classes for development
-    class LineBotApi:
-        def __init__(self, *args, **kwargs): pass
     class WebhookHandler:
         def __init__(self, *args, **kwargs): pass
         def add(self, *args, **kwargs): 
             def decorator(func): return func
             return decorator
         def handle(self, *args, **kwargs): pass
-    class TextSendMessage:
+    class MessagingApi:
+        def __init__(self, *args, **kwargs): pass
+    class TextMessage:
         def __init__(self, *args, **kwargs): pass
 
 logger = logging.getLogger(__name__)
@@ -55,9 +53,15 @@ LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 # LINE Bot APIの初期化
 if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
     try:
-        line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+        # v3 Configuration
+        configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
         handler = WebhookHandler(LINE_CHANNEL_SECRET)
-        logger.info("✅ LINE Bot API initialized successfully with SDK v2.4.0")
+        
+        # v3 API Client
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+        
+        logger.info("✅ LINE Bot API v3 initialized successfully")
     except Exception as e:
         logger.error(f"❌ LINE Bot API initialization failed: {e}")
         line_bot_api = None
@@ -204,7 +208,7 @@ async def process_rag_query(message_text: str, user_id: str) -> str:
 # Webhook エンドポイント
 @router.post("/webhook")
 async def line_webhook(request: Request):
-    """LINE Webhook エンドポイント"""
+    """LINE Webhook エンドポイント (v3対応)"""
     if not line_bot_api or not handler:
         raise HTTPException(status_code=500, detail="LINE Bot not configured")
     
@@ -222,11 +226,11 @@ async def line_webhook(request: Request):
     
     return {"status": "ok"}
 
-# イベントハンドラー
+# イベントハンドラー (v3対応)
 if LINE_SDK_AVAILABLE and handler:
-    @handler.add(MessageEvent, message=TextMessage)
+    @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """テキストメッセージの処理"""
+        """テキストメッセージの処理 (v3対応)"""
         try:
             user_id = event.source.user_id
             message_text = event.message.text
@@ -235,42 +239,56 @@ if LINE_SDK_AVAILABLE and handler:
             
             answer = asyncio.run(process_rag_query(message_text, user_id))
             
-            reply_message = TextSendMessage(text=answer)
-            line_bot_api.reply_message(event.reply_token, reply_message)
+            # v3対応のメッセージ送信
+            with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.reply_message_with_http_info(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=answer)]
+                    )
+                )
             
             logger.info(f"Sent reply to {user_id}: {answer[:50]}...")
             
-        except LineBotApiError as e:
-            logger.error(f"LINE Bot API error: {e}")
         except Exception as e:
             logger.error(f"Error handling text message: {e}")
             logger.error(traceback.format_exc())
             
             try:
-                error_message = TextSendMessage(
-                    text="申し訳ございません。一時的にエラーが発生しています。しばらくしてから再度お試しください。"
-                )
-                line_bot_api.reply_message(event.reply_token, error_message)
+                error_message = "申し訳ございません。一時的にエラーが発生しています。しばらくしてから再度お試しください。"
+                with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
+                    line_bot_api = MessagingApi(api_client)
+                    line_bot_api.reply_message_with_http_info(
+                        ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=error_message)]
+                        )
+                    )
             except:
                 pass
 
     @handler.add(FollowEvent)
     def handle_follow(event):
-        """友達追加時の処理"""
+        """友達追加時の処理 (v3対応)"""
         try:
             user_id = event.source.user_id
             logger.info(f"New follower: {user_id}")
             
-            welcome_message = TextSendMessage(
-                text="友達追加ありがとうございます！🎉\n\n"
-                     "私はRAGチャットボットです。\n"
-                     "アップロードされた文書に基づいて、様々な質問にお答えします。\n\n"
-                     "何でもお気軽にご質問ください！"
-            )
-            line_bot_api.reply_message(event.reply_token, welcome_message)
+            welcome_message = ("友達追加ありがとうございます！🎉\n\n"
+                             "私はRAGチャットボットです。\n"
+                             "アップロードされた文書に基づいて、様々な質問にお答えします。\n\n"
+                             "何でもお気軽にご質問ください！")
             
-        except LineBotApiError as e:
-            logger.error(f"LINE Bot API error in follow event: {e}")
+            with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.reply_message_with_http_info(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=welcome_message)]
+                    )
+                )
+            
         except Exception as e:
             logger.error(f"Error handling follow event: {e}")
 
@@ -281,8 +299,7 @@ def get_line_bot_status():
     return {
         "line_bot_configured": bool(line_bot_api and handler),
         "line_sdk_available": LINE_SDK_AVAILABLE,
-        "line_sdk_version": "2.4.0",
-        "quick_reply_available": QUICK_REPLY_AVAILABLE,
+        "line_sdk_version": "3.5.0",
         "channel_access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
         "channel_secret_set": bool(LINE_CHANNEL_SECRET),
         "timestamp": datetime.now().isoformat()
@@ -294,7 +311,7 @@ def test_line_bot_connection():
     if not LINE_SDK_AVAILABLE:
         return {
             "status": "error",
-            "message": "LINE Bot SDK not available. Please install: pip install line-bot-sdk==2.4.0",
+            "message": "LINE Bot SDK not available. Please install: pip install line-bot-sdk==3.5.0",
             "config": {
                 "access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
                 "channel_secret_set": bool(LINE_CHANNEL_SECRET)
@@ -314,7 +331,7 @@ def test_line_bot_connection():
     try:
         return {
             "status": "success",
-            "message": "LINE Bot API is configured correctly (SDK v2.4.0)",
+            "message": "LINE Bot API is configured correctly (SDK v3.5.0)",
             "webhook_url": "https://your-domain.com/line/webhook",
             "config": {
                 "access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
@@ -326,41 +343,3 @@ def test_line_bot_connection():
             "status": "error",
             "message": f"LINE Bot API test failed: {str(e)}"
         }
-
-@router.post("/test-message")
-async def test_message_processing(test_request: dict):
-    """メッセージ処理のテスト"""
-    message_text = test_request.get("message", "テストメッセージ")
-    user_id = test_request.get("user_id", "test_user")
-    
-    try:
-        response = await process_rag_query(message_text, user_id)
-        return {
-            "status": "success",
-            "input": message_text,
-            "output": response,
-            "user_id": user_id
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "input": message_text,
-            "error": str(e)
-        }
-
-@router.get("/webhook-info")
-def get_webhook_info():
-    """Webhook設定情報を表示"""
-    base_url = os.getenv("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
-    return {
-        "webhook_url": f"{base_url}/line/webhook",
-        "status_url": f"{base_url}/line/status",
-        "test_url": f"{base_url}/line/test",
-        "line_sdk_version": "2.4.0",
-        "instructions": [
-            "1. LINE Developers Console でWebhook URLを設定してください",
-            "2. Webhookの使用を有効にしてください", 
-            "3. 応答メッセージを無効にしてください（重複を避けるため）",
-            "4. /line/test エンドポイントで接続をテストしてください"
-        ]
-    }
