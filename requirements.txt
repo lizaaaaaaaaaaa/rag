@@ -1,68 +1,55 @@
-# FastAPI and Web Framework - Updated to support Pydantic 2.x
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-dotenv==1.0.1
-python-multipart==0.0.6
+# requirements.txtに追加するLINE関連パッケージ
 
-# Pydantic 2.x (compatible with both FastAPI and LINE Bot SDK)
-pydantic==2.5.3
-pydantic-settings==2.1.0
-
-# LINE Bot SDK
+# LINE Messaging API SDK
 line-bot-sdk==3.5.0
 
-# OpenAI and LLM
-openai==1.3.7
-langchain-openai==0.0.2
+# 既存のrequirements.txtの内容も含める
+fastapi==0.95.1
+uvicorn==0.22.0
+python-dotenv==1.0.1
 
-# LangChain Core - Updated versions
-langchain==0.1.7
-langchain-core==0.1.7
-langchain-community==0.0.1
+# OpenAI関連
+openai==1.82.1
+langchain-openai==0.0.8
 
-# LangSmith
-langsmith==0.0.69
+# LangChain関連 - 安定版のバージョンセット
+langchain==0.1.20
+langchain-core==0.1.53
+langchain-community==0.0.38
+langsmith==0.1.21
 
-# Machine Learning and AI
-transformers==4.36.2
-tokenizers==0.15.0
-huggingface_hub==0.19.4
+# ML/AI関連
+transformers==4.31.0
+tokenizers==0.13.3
+huggingface_hub==0.16.4
 faiss-cpu==1.7.4
 sentence-transformers==2.2.2
-accelerate==0.25.0
-torch==2.1.2
+accelerate==0.21.0
+torch==2.0.1
 sentencepiece==0.1.99
 
-# Data Processing
-PyYAML>=6.0.1
-pypdf==3.17.4
-protobuf==4.25.1
-
-# Security and Authentication
+# その他
+pydantic==1.10.14
+PyYAML>=5.3
 bcrypt==4.1.2
-PyJWT==2.8.0
+pypdf==3.17.1
+protobuf==4.25.3
+streamlit==1.32.2
+google-auth==2.29.0
 
-# Google Cloud Services
-google-auth==2.25.2
-google-cloud-firestore==2.13.1
-google-cloud-storage==2.10.0
-google-cloud-secret-manager==2.18.1
-psycopg2-binary==2.9.9
+google-cloud-firestore==2.20.2
+python-multipart
+psycopg2-binary
+google-cloud-storage
+matplotlib
+seaborn
+PyJWT==2.10.1
 
-# Web and HTTP
 requests==2.31.0
-streamlit==1.29.0
+google-cloud-secret-manager==2.16.1
 
-# Visualization and Analysis
-matplotlib==3.8.2
-seaborn==0.13.0
-
-# Search and Ranking
 rank-bm25==0.2.2
-redis==5.0.1
-datasets==2.15.0
-
-# Japanese Language Processing
+ragas==0.1.0
+redis==4.5.5
 mecab-python3==1.0.6
-
-packaging==23.2
+datasets==2.14.0
