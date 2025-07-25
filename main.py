@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# .env 読み込み（ローカルのみ）
+# 環境変数読み込み
 if os.getenv("ENV") != "production":
     from dotenv import load_dotenv
     load_dotenv(".env")
@@ -23,20 +23,21 @@ if os.getenv("ENV") != "production":
 else:
     logger.info(">>> Running in production mode")
 
-# 環境変数ログ（LangSmith含む）
-logger.info("==== DEBUG: ENV = %s", os.environ.get("ENV"))
-logger.info("==== DEBUG: OPENAI_API_KEY = %s****", (os.environ.get("OPENAI_API_KEY") or "")[:10])
-logger.info("==== DEBUG: GCS_BUCKET_NAME = %s", os.environ.get("GCS_BUCKET_NAME"))
-logger.info("==== DEBUG: LINE_CHANNEL_ACCESS_TOKEN = %s****", (os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") or "")[:10])
-logger.info("==== DEBUG: LINE_CHANNEL_SECRET = %s****", (os.environ.get("LINE_CHANNEL_SECRET") or "")[:10])
-logger.info("==== DEBUG: LANGSMITH_API_KEY = %s****", (os.environ.get("LANGSMITH_API_KEY") or "")[:10])
-logger.info("==== DEBUG: LANGCHAIN_TRACING_V2 = %s", os.environ.get("LANGCHAIN_TRACING_V2"))
-logger.info("==== DEBUG: LANGCHAIN_PROJECT = %s", os.environ.get("LANGCHAIN_PROJECT"))
+# 環境変数デバッグログ
+logger.info("==== Environment Variables ====")
+logger.info("ENV: %s", os.environ.get("ENV"))
+logger.info("OPENAI_API_KEY: %s****", (os.environ.get("OPENAI_API_KEY") or "")[:10])
+logger.info("GCS_BUCKET_NAME: %s", os.environ.get("GCS_BUCKET_NAME"))
+logger.info("LINE_CHANNEL_ACCESS_TOKEN: %s****", (os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") or "")[:10])
+logger.info("LINE_CHANNEL_SECRET: %s****", (os.environ.get("LINE_CHANNEL_SECRET") or "")[:10])
+logger.info("LANGSMITH_API_KEY: %s****", (os.environ.get("LANGSMITH_API_KEY") or "")[:10])
+logger.info("LANGCHAIN_TRACING_V2: %s", os.environ.get("LANGCHAIN_TRACING_V2"))
+logger.info("=================================")
 
-# FastAPI 初期化
+# FastAPI初期化
 app = FastAPI(
-    title="RAG FastAPI Backend with LINE Bot + LangSmith",
-    description="RAG + LLM 連携 API (Cloud Run対応) + LINE Messaging API + LangSmith",
+    title="RAG FastAPI Backend with LINE Bot",
+    description="RAG + LLM連携API (Cloud Run対応) + LINE Messaging API",
     version="1.0.0"
 )
 
@@ -57,11 +58,15 @@ app.add_middleware(
     max_age=3600
 )
 
-# CSPヘッダー
+# セキュリティヘッダー
 @app.middleware("http")
 async def add_security_headers(request, call_next):
     response = await call_next(request)
-    response.headers["Content-Security-Policy"] = "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:;"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self' https:; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; "
+        "style-src 'self' 'unsafe-inline' https:;"
+    )
     return response
 
 # グローバル変数
@@ -71,29 +76,35 @@ llm_instance = None
 
 @app.on_event("startup")
 async def load_models_on_startup():
+    """システム起動時のモデル読み込み"""
     global vectorstore, rag_chain_template, llm_instance
 
-    logger.info("=== startup: begin loading models ===")
-    logger.info(f"LANGCHAIN_TRACING_V2: {os.environ.get('LANGCHAIN_TRACING_V2', 'not set')}")
-    logger.info(f"DISABLE_LANGSMITH: {os.environ.get('DISABLE_LANGSMITH', 'not set')}")
+    logger.info("=== System Startup: Loading Models ===")
+    
+    # LangSmith設定確認
+    langsmith_enabled = os.environ.get("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+    logger.info(f"LangSmith tracing: {'enabled' if langsmith_enabled else 'disabled'}")
 
-    # LLMロード
+    # 1. LLMの読み込み
     try:
         from llm.llm_runner import load_llm
         llm, tokenizer, max_tokens = load_llm()
         llm_instance = llm
-        logger.info(f"✅ LLM loaded successfully: {type(llm).__name__}")
+        logger.info(f"✅ LLM loaded: {type(llm).__name__}")
+        
+        # LLMテスト
         try:
-            result = llm.invoke("Hello") if hasattr(llm, "invoke") else llm("Hello")
+            test_response = llm.invoke("Hello") if hasattr(llm, "invoke") else llm("Hello")
             logger.info("✅ LLM test successful")
         except Exception as e:
-            logger.warning(f"LLM test warning: {e}")
+            logger.warning(f"LLM test warning (non-critical): {e}")
+            
     except Exception as e:
         logger.error(f"❌ LLM load failed: {e}")
         logger.error(traceback.format_exc())
         llm_instance = None
 
-    # ベクトルストア
+    # 2. ベクトルストアの読み込み
     try:
         from rag.ingested_text import load_vectorstore
         vectorstore = load_vectorstore()
@@ -102,7 +113,7 @@ async def load_models_on_startup():
         logger.warning(f"⚠️ Vectorstore load failed: {e}")
         vectorstore = None
 
-    # RAGチェーン構築
+    # 3. RAGチェーンの構築
     if vectorstore:
         try:
             if llm_instance:
@@ -110,20 +121,26 @@ async def load_models_on_startup():
                 rag_chain_template = get_rag_chain(vectorstore=vectorstore, return_source=True)
                 logger.info("✅ RAG chain created with LLM")
             else:
-                from langchain.chains import RetrievalQA
-                from langchain.schema import BaseRetriever
-
+                # LLMなしの検索専用チェーン
                 class SimpleSearchChain:
                     def __init__(self, vectorstore):
+                        self.vectorstore = vectorstore
                         self.retriever = vectorstore.as_retriever()
+                        self.callbacks = []
 
                     def invoke(self, inputs):
                         query = inputs.get("query", "")
                         docs = self.retriever.get_relevant_documents(query)
-                        result = "関連文書が見つかりました:\n\n" if docs else "関連する文書が見つかりませんでした。"
-                        for i, doc in enumerate(docs[:3], 1):
-                            result += f"{i}. {doc.page_content[:200]}...\n"
-                            result += f"   出典: {doc.metadata.get('source', '不明')} (p{doc.metadata.get('page', '?')})\n\n"
+                        
+                        if docs:
+                            result = "関連文書が見つかりました:\n\n"
+                            for i, doc in enumerate(docs[:3], 1):
+                                result += f"{i}. {doc.page_content[:200]}...\n"
+                                result += f"   出典: {doc.metadata.get('source', '不明')} "
+                                result += f"(p{doc.metadata.get('page', '?')})\n\n"
+                        else:
+                            result = "関連する文書が見つかりませんでした。"
+                        
                         return {"result": result, "source_documents": docs[:3]}
 
                 rag_chain_template = SimpleSearchChain(vectorstore)
@@ -133,29 +150,35 @@ async def load_models_on_startup():
             logger.error(traceback.format_exc())
             rag_chain_template = None
 
-    logger.info("=== Startup complete ===")
-    logger.info(f"  - LLM: {'✅ Loaded' if llm_instance else '❌ Not loaded'}")
-    logger.info(f"  - VectorStore: {'✅ Loaded' if vectorstore else '❌ Not loaded'}")
-    logger.info(f"  - RAG Chain: {'✅ Created' if rag_chain_template else '❌ Not created'}")
+    # 起動完了ログ
+    logger.info("=== Startup Complete ===")
+    logger.info(f"  LLM: {'✅ Loaded' if llm_instance else '❌ Not loaded'}")
+    logger.info(f"  VectorStore: {'✅ Loaded' if vectorstore else '❌ Not loaded'}")
+    logger.info(f"  RAG Chain: {'✅ Created' if rag_chain_template else '❌ Not created'}")
+    logger.info(f"  LINE Bot: {'✅ Configured' if os.environ.get('LINE_CHANNEL_ACCESS_TOKEN') else '❌ Not configured'}")
+    logger.info("========================")
 
 # ルーター登録
 from api.routers import upload, chat, google_oauth, healthz, line_bot
+
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(google_oauth.router, tags=["auth"])
 app.include_router(healthz.router, prefix="", tags=["healthz"])
 app.include_router(line_bot.router, tags=["line"])
 
-# 静的ファイルマウント
+# 静的ファイル
 pdf_dir = os.path.join("rag", "vectorstore", "pdfs")
 if os.path.isdir(pdf_dir):
     app.mount("/pdfs", StaticFiles(directory=pdf_dir), name="pdfs")
 
-# ルート
+# ルートエンドポイント
 @app.get("/")
 def read_root():
+    """ルートエンドポイント"""
     return {
-        "message": "Hello from FastAPI on Cloud Run with LINE Bot + LangSmith!",
+        "message": "RAG FastAPI Backend with LINE Bot",
+        "version": "1.0.0",
         "status": {
             "llm": llm_instance is not None,
             "vectorstore": vectorstore is not None,
@@ -166,18 +189,24 @@ def read_root():
 
 @app.get("/status")
 def get_status():
+    """システムステータス確認"""
     return {
         "llm_loaded": llm_instance is not None,
         "vectorstore_loaded": vectorstore is not None,
         "rag_chain_loaded": rag_chain_template is not None,
         "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY")),
         "gcs_bucket": os.environ.get("GCS_BUCKET_NAME", "Not set"),
-        "line_bot_configured": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") and os.environ.get("LINE_CHANNEL_SECRET")),
+        "line_bot_configured": bool(
+            os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") and 
+            os.environ.get("LINE_CHANNEL_SECRET")
+        ),
         "langsmith_enabled": os.environ.get("LANGCHAIN_TRACING_V2") == "true"
     }
 
+# デバッグエンドポイント
 @app.get("/debug/env")
 def debug_env():
+    """環境変数デバッグ情報"""
     return {
         "environment": os.environ.get("ENV"),
         "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY")),
@@ -192,27 +221,37 @@ def debug_env():
 
 @app.get("/debug/langsmith-test")
 def test_langsmith():
+    """LangSmith接続テスト"""
     try:
-        from langsmith import Client
-        key = os.environ.get("LANGSMITH_API_KEY")
-        tracing = os.environ.get("LANGCHAIN_TRACING_V2")
-        if not key:
+        langsmith_key = os.environ.get("LANGSMITH_API_KEY")
+        tracing_enabled = os.environ.get("LANGCHAIN_TRACING_V2")
+        
+        if not langsmith_key:
             return {"status": "error", "message": "LANGSMITH_API_KEY not found"}
-        if tracing != "true":
-            return {"status": "error", "message": f"LANGCHAIN_TRACING_V2 must be 'true', got '{tracing}'"}
-        client = Client(api_key=key)
+        
+        if tracing_enabled != "true":
+            return {
+                "status": "error", 
+                "message": f"LANGCHAIN_TRACING_V2 is '{tracing_enabled}', should be 'true'"
+            }
+        
+        from langsmith import Client
+        client = Client(api_key=langsmith_key)
+        
         return {
             "status": "success",
             "client_created": True,
             "project": os.environ.get("LANGCHAIN_PROJECT"),
-            "key_prefix": key[:10] + "...",
-            "tracing_enabled": tracing
+            "key_prefix": langsmith_key[:10] + "...",
+            "tracing_enabled": tracing_enabled
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+# CORS preflight handling
 @app.options("/{path:path}")
 async def handle_options(path: str):
+    """CORS preflight requests"""
     return JSONResponse(
         content={"message": "OK"},
         headers={
