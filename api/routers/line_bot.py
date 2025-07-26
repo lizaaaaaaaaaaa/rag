@@ -1,4 +1,4 @@
-# api/routers/line_bot.py - Corrected version
+# api/routers/line_bot.py - 修正版
 
 import os
 import logging
@@ -31,18 +31,6 @@ try:
 except ImportError as e:
     logging.getLogger(__name__).error(f"LINE Bot SDK not available: {e}")
     LINE_SDK_AVAILABLE = False
-    
-    # Dummy classes for development
-    class WebhookHandler:
-        def __init__(self, *args, **kwargs): pass
-        def add(self, *args, **kwargs): 
-            def decorator(func): return func
-            return decorator
-        def handle(self, *args, **kwargs): pass
-    class MessagingApi:
-        def __init__(self, *args, **kwargs): pass
-    class TextMessage:
-        def __init__(self, *args, **kwargs): pass
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +38,19 @@ logger = logging.getLogger(__name__)
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 
+# グローバル変数でAPI clientを保持
+line_bot_api = None
+handler = None
+
 # LINE Bot APIの初期化
 if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
     try:
-        # v3 Configuration
+        # v3 Configuration（修正：グローバルで設定）
         configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
         handler = WebhookHandler(LINE_CHANNEL_SECRET)
         
-        # v3 API Client
-        with ApiClient(configuration) as api_client:
-            line_bot_api = MessagingApi(api_client)
+        # APIクライアントをグローバルで作成
+        line_bot_api = MessagingApi(ApiClient(configuration))
         
         logger.info("✅ LINE Bot API v3 initialized successfully")
     except Exception as e:
@@ -94,7 +85,7 @@ def is_general_greeting_or_chat(query: str) -> bool:
     greetings = [
         "こんにちは", "こんばんは", "おはよう", "はじめまして",
         "hello", "hi", "hey", "ありがとう", "さようなら",
-        "元気", "調子はどう", "お疲れ様", "よろしく", "友達追加"
+        "元気", "調子はどう", "お疲れ様", "よろしく", "友達追加", "AI相談"
     ]
     query_lower = query.lower()
     
@@ -127,7 +118,7 @@ LINEでのチャットのような短めで親しみやすい応答を心がけ�
     except Exception as e:
         logger.error(f"Error generating general response: {e}")
         
-        if "こんにちは" in query or "はじめまして" in query:
+        if "こんにちは" in query or "はじめまして" in query or "AI相談" in query:
             return "こんにちは！🌟\nRAGチャットボットです。何でもお気軽にご質問ください！"
         elif "ありがとう" in query:
             return "どういたしまして！😊\n他にもご質問がございましたら、いつでもお聞きください。"
@@ -152,7 +143,7 @@ async def process_rag_query(message_text: str, user_id: str) -> str:
             if llm_instance:
                 return get_general_response_from_llm(message_text, llm_instance)
             else:
-                if "こんにちは" in message_text or "はじめまして" in message_text:
+                if "こんにちは" in message_text or "はじめまして" in message_text or "AI相談" in message_text:
                     return "こんにちは！🌟\nRAGチャットボットです。何でもお気軽にご質問ください！"
                 else:
                     return "お手伝いできることがあれば、お気軽にお尋ねください。"
@@ -208,29 +199,32 @@ async def process_rag_query(message_text: str, user_id: str) -> str:
 # Webhook エンドポイント
 @router.post("/webhook")
 async def line_webhook(request: Request):
-    """LINE Webhook エンドポイント (v3対応)"""
+    """LINE Webhook エンドポイント (v3対応・修正版)"""
     if not line_bot_api or not handler:
+        logger.error("LINE Bot not configured properly")
         raise HTTPException(status_code=500, detail="LINE Bot not configured")
     
     body = await request.body()
     signature = request.headers.get("X-Line-Signature", "")
     
+    logger.info(f"Received webhook: signature={signature[:10]}..., body_size={len(body)}")
+    
     try:
         handler.handle(body.decode('utf-8'), signature)
+        return {"status": "ok"}
     except InvalidSignatureError:
         logger.error("Invalid signature")
         raise HTTPException(status_code=400, detail="Invalid signature")
     except Exception as e:
         logger.error(f"Webhook error: {e}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal server error")
-    
-    return {"status": "ok"}
 
-# イベントハンドラー (v3対応)
-if LINE_SDK_AVAILABLE and handler:
+# イベントハンドラー (v3対応・修正版)
+if LINE_SDK_AVAILABLE and handler and line_bot_api:
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """テキストメッセージの処理 (v3対応)"""
+        """テキストメッセージの処理 (v3対応・修正版)"""
         try:
             user_id = event.source.user_id
             message_text = event.message.text.strip()
@@ -250,14 +244,17 @@ if LINE_SDK_AVAILABLE and handler:
                     "ご質問をお待ちしています！"
                 )
                 
-                with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-                    line_bot_api = MessagingApi(api_client)
+                # 修正：グローバルのline_bot_apiを使用
+                try:
                     line_bot_api.reply_message_with_http_info(
                         ReplyMessageRequest(
                             reply_token=event.reply_token,
                             messages=[TextMessage(text=welcome_message)]
                         )
                     )
+                    logger.info(f"Sent welcome message to {user_id}")
+                except Exception as api_error:
+                    logger.error(f"Failed to send welcome message: {api_error}")
                 
                 return
             
@@ -271,31 +268,52 @@ if LINE_SDK_AVAILABLE and handler:
             elif message_text == "チャット相談":
                 response_text = "チャット相談を開始します。\nどのようなご相談でしょうか？"
             else:
-                # 通常のRAGチャット処理
-                answer = asyncio.run(process_rag_query(message_text, user_id))
+                # 通常のRAGチャット処理（修正：asyncio.run削除）
+                # asyncio.run()は既にイベントループ内で実行されているため使用不可
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 既存のループで実行
+                    task = asyncio.create_task(process_rag_query(message_text, user_id))
+                    answer = None
+                    # 同期的に結果を取得する代替方法
+                    try:
+                        # タスクを待機（ただし同期的に）
+                        answer = asyncio.run_coroutine_threadsafe(
+                            process_rag_query(message_text, user_id), loop
+                        ).result(timeout=30)
+                    except Exception as async_error:
+                        logger.error(f"Async processing error: {async_error}")
+                        answer = "申し訳ございません。処理中にエラーが発生しました。"
+                else:
+                    # 新しいループで実行
+                    answer = asyncio.run(process_rag_query(message_text, user_id))
                 
-                # v3対応のメッセージ送信
-                with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-                    line_bot_api = MessagingApi(api_client)
+                # 応答を送信
+                try:
                     line_bot_api.reply_message_with_http_info(
                         ReplyMessageRequest(
                             reply_token=event.reply_token,
                             messages=[TextMessage(text=answer)]
                         )
                     )
+                    logger.info(f"Sent RAG reply to {user_id}: {answer[:50]}...")
+                except Exception as api_error:
+                    logger.error(f"Failed to send RAG reply: {api_error}")
                 
-                logger.info(f"Sent reply to {user_id}: {answer[:50]}...")
                 return
             
             # リッチメニューからのメッセージに対する返信
-            with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-                line_bot_api = MessagingApi(api_client)
+            try:
                 line_bot_api.reply_message_with_http_info(
                     ReplyMessageRequest(
                         reply_token=event.reply_token,
                         messages=[TextMessage(text=response_text)]
                     )
                 )
+                logger.info(f"Sent response to {user_id}: {response_text}")
+            except Exception as api_error:
+                logger.error(f"Failed to send response: {api_error}")
             
         except Exception as e:
             logger.error(f"Error handling text message: {e}")
@@ -303,20 +321,18 @@ if LINE_SDK_AVAILABLE and handler:
             
             try:
                 error_message = "申し訳ございません。一時的にエラーが発生しています。しばらくしてから再度お試しください。"
-                with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-                    line_bot_api = MessagingApi(api_client)
-                    line_bot_api.reply_message_with_http_info(
-                        ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[TextMessage(text=error_message)]
-                        )
+                line_bot_api.reply_message_with_http_info(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=error_message)]
                     )
+                )
             except:
                 pass
 
     @handler.add(FollowEvent)
     def handle_follow(event):
-        """友達追加時の処理 (v3対応)"""
+        """友達追加時の処理 (v3対応・修正版)"""
         try:
             user_id = event.source.user_id
             logger.info(f"New follower: {user_id}")
@@ -326,14 +342,16 @@ if LINE_SDK_AVAILABLE and handler:
                              "アップロードされた文書に基づいて、様々な質問にお答えします。\n\n"
                              "何でもお気軽にご質問ください！")
             
-            with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-                line_bot_api = MessagingApi(api_client)
+            try:
                 line_bot_api.reply_message_with_http_info(
                     ReplyMessageRequest(
                         reply_token=event.reply_token,
                         messages=[TextMessage(text=welcome_message)]
                     )
                 )
+                logger.info(f"Sent welcome message to new follower: {user_id}")
+            except Exception as api_error:
+                logger.error(f"Failed to send welcome message to follower: {api_error}")
             
         except Exception as e:
             logger.error(f"Error handling follow event: {e}")
@@ -378,7 +396,7 @@ def test_line_bot_connection():
         return {
             "status": "success",
             "message": "LINE Bot API is configured correctly (SDK v3.5.0)",
-            "webhook_url": "https://your-domain.com/line/webhook",
+            "webhook_url": "https://rag-api-190389115361.asia-northeast1.run.app/line/webhook",
             "config": {
                 "access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
                 "channel_secret_set": bool(LINE_CHANNEL_SECRET)

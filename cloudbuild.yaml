@@ -4,7 +4,7 @@ steps:
     args: [
       'build',
       '--no-cache',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.103',
+      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.104',
       '-f', 'Dockerfile.api',
       '.'
     ]
@@ -13,7 +13,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.103'
+      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.104'
     ]
 
   # 3. フロントエンド用イメージをビルド
@@ -21,7 +21,7 @@ steps:
     args: [
       'build',
       '--no-cache',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.103',
+      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.104',
       '-f', 'Dockerfile.front',
       '.'
     ]
@@ -30,17 +30,17 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.103'
+      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.104'
     ]
 
-  # 5. APIサーバーをCloud Runにデプロイ（LINE Bot環境変数追加）
+  # 5. APIサーバーをCloud Runにデプロイ（LINE Bot環境変数追加・修正版）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - run
       - deploy
       - rag-api
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.103
+      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.104
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
@@ -63,7 +63,7 @@ steps:
       - run
       - deploy
       - rag-frontend
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.103
+      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.104
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
@@ -78,8 +78,8 @@ steps:
       - --set-secrets=DB_PASSWORD=db-password:latest
 
 images:
-  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.103'
-  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.103'
+  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:v1.0.104'
+  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:v1.0.104'
 
 options:
   machineType: 'E2_HIGHCPU_8'
