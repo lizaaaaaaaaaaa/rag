@@ -1,4 +1,4 @@
-# api/routers/line_bot.py - Updated for line-bot-sdk v3.5.0
+# api/routers/line_bot.py - Corrected version
 
 import os
 import logging
@@ -233,23 +233,69 @@ if LINE_SDK_AVAILABLE and handler:
         """テキストメッセージの処理 (v3対応)"""
         try:
             user_id = event.source.user_id
-            message_text = event.message.text
+            message_text = event.message.text.strip()
             
             logger.info(f"Received LINE message from {user_id}: {message_text}")
             
-            answer = asyncio.run(process_rag_query(message_text, user_id))
+            # リッチメニューからのメッセージ処理
+            if message_text == "AI相談を開始":
+                # AI相談モードの開始メッセージ
+                welcome_message = (
+                    "AI相談を開始します！🤖\n\n"
+                    "家づくりに関するご質問をお気軽にどうぞ。\n"
+                    "例えば：\n"
+                    "・「注文住宅の流れを教えて」\n"
+                    "・「坪単価はいくらですか？」\n"
+                    "・「土地探しのポイントは？」\n\n"
+                    "ご質問をお待ちしています！"
+                )
+                
+                with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
+                    line_bot_api = MessagingApi(api_client)
+                    line_bot_api.reply_message_with_http_info(
+                        ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=welcome_message)]
+                        )
+                    )
+                
+                return
             
-            # v3対応のメッセージ送信
+            # その他のリッチメニューメッセージ
+            elif message_text == "資料請求":
+                response_text = "資料請求ありがとうございます。\n担当者より後日ご連絡させていただきます。"
+            elif message_text == "展示場予約":
+                response_text = "展示場のご予約はこちらから：\n[予約フォームURL]"
+            elif message_text == "資金計画相談":
+                response_text = "資金計画のご相談を承ります。\nご希望の日時をお知らせください。"
+            elif message_text == "チャット相談":
+                response_text = "チャット相談を開始します。\nどのようなご相談でしょうか？"
+            else:
+                # 通常のRAGチャット処理
+                answer = asyncio.run(process_rag_query(message_text, user_id))
+                
+                # v3対応のメッセージ送信
+                with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
+                    line_bot_api = MessagingApi(api_client)
+                    line_bot_api.reply_message_with_http_info(
+                        ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=answer)]
+                        )
+                    )
+                
+                logger.info(f"Sent reply to {user_id}: {answer[:50]}...")
+                return
+            
+            # リッチメニューからのメッセージに対する返信
             with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
                 line_bot_api = MessagingApi(api_client)
                 line_bot_api.reply_message_with_http_info(
                     ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[TextMessage(text=answer)]
+                        messages=[TextMessage(text=response_text)]
                     )
                 )
-            
-            logger.info(f"Sent reply to {user_id}: {answer[:50]}...")
             
         except Exception as e:
             logger.error(f"Error handling text message: {e}")
