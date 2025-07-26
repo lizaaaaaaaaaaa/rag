@@ -232,7 +232,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
             logger.info(f"Received LINE message from {user_id}: {message_text}")
             
             # リッチメニューからのメッセージ処理
-            if message_text == "AI相談を開始":
+            if message_text == "🤖 AI相談 AI相談を開始します！ ご質問やお悩みを自由に 入力してください😊":
                 # AI相談モードの開始メッセージ
                 welcome_message = (
                     "AI相談を開始します！🤖\n\n"
