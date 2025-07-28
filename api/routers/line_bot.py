@@ -1,4 +1,4 @@
-# api/routers/line_bot.py - 修正版
+# api/routers/line_bot.py - 修正版（リッチメニュー対応完全版）
 
 import os
 import logging
@@ -45,7 +45,7 @@ handler = None
 # LINE Bot APIの初期化
 if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
     try:
-        # v3 Configuration（修正：グローバルで設定）
+        # v3 Configuration
         configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
         handler = WebhookHandler(LINE_CHANNEL_SECRET)
         
@@ -85,7 +85,7 @@ def is_general_greeting_or_chat(query: str) -> bool:
     greetings = [
         "こんにちは", "こんばんは", "おはよう", "はじめまして",
         "hello", "hi", "hey", "ありがとう", "さようなら",
-        "元気", "調子はどう", "お疲れ様", "よろしく", "友達追加", "AI相談"
+        "元気", "調子はどう", "お疲れ様", "よろしく", "友達追加"
     ]
     query_lower = query.lower()
     
@@ -118,7 +118,7 @@ LINEでのチャットのような短めで親しみやすい応答を心がけ�
     except Exception as e:
         logger.error(f"Error generating general response: {e}")
         
-        if "こんにちは" in query or "はじめまして" in query or "AI相談" in query:
+        if "こんにちは" in query or "はじめまして" in query:
             return "こんにちは！🌟\nRAGチャットボットです。何でもお気軽にご質問ください！"
         elif "ありがとう" in query:
             return "どういたしまして！😊\n他にもご質問がございましたら、いつでもお聞きください。"
@@ -143,7 +143,7 @@ async def process_rag_query(message_text: str, user_id: str) -> str:
             if llm_instance:
                 return get_general_response_from_llm(message_text, llm_instance)
             else:
-                if "こんにちは" in message_text or "はじめまして" in message_text or "AI相談" in message_text:
+                if "こんにちは" in message_text or "はじめまして" in message_text:
                     return "こんにちは！🌟\nRAGチャットボットです。何でもお気軽にご質問ください！"
                 else:
                     return "お手伝いできることがあれば、お気軽にお尋ねください。"
@@ -199,7 +199,7 @@ async def process_rag_query(message_text: str, user_id: str) -> str:
 # Webhook エンドポイント
 @router.post("/webhook")
 async def line_webhook(request: Request):
-    """LINE Webhook エンドポイント (v3対応・修正版)"""
+    """LINE Webhook エンドポイント (v3対応)"""
     if not line_bot_api or not handler:
         logger.error("LINE Bot not configured properly")
         raise HTTPException(status_code=500, detail="LINE Bot not configured")
@@ -220,21 +220,24 @@ async def line_webhook(request: Request):
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal server error")
 
-# イベントハンドラー (v3対応・修正版)
+# イベントハンドラー (v3対応・リッチメニュー完全対応版)
 if LINE_SDK_AVAILABLE and handler and line_bot_api:
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """テキストメッセージの処理 (v3対応・修正版)"""
+        """テキストメッセージの処理 (v3対応・リッチメニュー完全対応版)"""
         try:
             user_id = event.source.user_id
             message_text = event.message.text.strip()
             
             logger.info(f"Received LINE message from {user_id}: {message_text}")
             
-            # リッチメニューからのメッセージ処理
+            # リッチメニューからのメッセージ処理（完全一致で判定）
+            response_text = None
+            
+            # A: AI相談
             if message_text == "🤖 AI相談 AI相談を開始します！ ご質問やお悩みを自由に 入力してください😊":
-                # AI相談モードの開始メッセージ
-                welcome_message = (
+                # AI相談モードの開始
+                response_text = (
                     "AI相談を開始します！🤖\n\n"
                     "家づくりに関するご質問をお気軽にどうぞ。\n"
                     "例えば：\n"
@@ -244,41 +247,97 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "ご質問をお待ちしています！"
                 )
                 
-                # 修正：グローバルのline_bot_apiを使用
-                try:
-                    line_bot_api.reply_message_with_http_info(
-                        ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[TextMessage(text=welcome_message)]
-                        )
-                    )
-                    logger.info(f"Sent welcome message to {user_id}")
-                except Exception as api_error:
-                    logger.error(f"Failed to send welcome message: {api_error}")
+            # B: AI住まいサイト
+            elif message_text == "🌐 AI住まいサイト AI住まいホームページ、準備中です 今しばらくお待ちください😴":
+                response_text = (
+                    "AI住まいサイトは現在準備中です🏗️\n\n"
+                    "近日公開予定ですので、もうしばらくお待ちください。\n"
+                    "公開されましたらお知らせいたします！\n\n"
+                    "他にご質問がございましたら、お気軽にお尋ねください😊"
+                )
                 
-                return
+            # C: 資料請求
+            elif message_text == "📋 資料請求します！ お名前と送付先を ご入力ください😊":
+                response_text = (
+                    "資料請求を承ります📋\n\n"
+                    "以下の情報をお送りください：\n"
+                    "1. お名前（フルネーム）\n"
+                    "2. 郵便番号\n"
+                    "3. ご住所\n"
+                    "4. お電話番号\n\n"
+                    "例：\n"
+                    "山田太郎\n"
+                    "〒123-4567\n"
+                    "東京都渋谷区〇〇1-2-3\n"
+                    "090-1234-5678"
+                )
+                
+            # D: 展示場来場予約
+            elif message_text == "📍 展示場来場予約します！日時をメッセージください 営業時間9-18時":
+                response_text = (
+                    "展示場のご予約を承ります📍\n\n"
+                    "ご希望の日時をお知らせください。\n"
+                    "営業時間：9:00〜18:00\n\n"
+                    "例：\n"
+                    "「1月15日（水）14時に予約したいです」\n\n"
+                    "※土日は混雑することがございます。\n"
+                    "平日のご来場がおすすめです😊"
+                )
+                
+            # E: 資金計画
+            elif message_text == "💰 資金計画 資金計画を開始します お名前と連絡先を送付先を ご入力ください😊":
+                response_text = (
+                    "資金計画のご相談を承ります💰\n\n"
+                    "まず、以下の情報をお送りください：\n"
+                    "1. お名前\n"
+                    "2. ご連絡先（電話番号）\n"
+                    "3. ご希望の相談方法\n"
+                    "   - オンライン相談\n"
+                    "   - 来店相談\n"
+                    "   - 電話相談\n\n"
+                    "専門スタッフが丁寧にご対応いたします！"
+                )
+                
+            # F: チャット相談
+            elif message_text == "💬 チャット相談 スタッフとチャット相談 気軽にメッセージどうぞ！ 営業時間9-18時":
+                response_text = (
+                    "チャット相談を開始します💬\n\n"
+                    "スタッフが対応いたします。\n"
+                    "お気軽にご相談内容をお送りください！\n\n"
+                    "営業時間：9:00〜18:00\n"
+                    "※営業時間外のメッセージは翌営業日に返信いたします。"
+                )
             
-            # その他のリッチメニューメッセージ
-            elif message_text == "資料請求":
-                response_text = "資料請求ありがとうございます。\n担当者より後日ご連絡させていただきます。"
-            elif message_text == "展示場予約":
-                response_text = "展示場のご予約はこちらから：\n[予約フォームURL]"
-            elif message_text == "資金計画相談":
-                response_text = "資金計画のご相談を承ります。\nご希望の日時をお知らせください。"
-            elif message_text == "チャット相談":
-                response_text = "チャット相談を開始します。\nどのようなご相談でしょうか？"
-            else:
-                # 通常のRAGチャット処理（修正：asyncio.run削除）
-                # asyncio.run()は既にイベントループ内で実行されているため使用不可
+            # 資料請求への返信（名前と住所が含まれている場合）
+            elif any(keyword in message_text for keyword in ["〒", "郵便番号", "住所"]) and len(message_text) > 20:
+                response_text = (
+                    "資料請求を受け付けました📮\n\n"
+                    "ご記入いただいた住所に資料をお送りいたします。\n"
+                    "到着まで3〜5営業日ほどお待ちください。\n\n"
+                    "ご不明な点がございましたら、お気軽にお問い合わせください😊"
+                )
+                
+            # 展示場予約への返信（日時が含まれている場合）
+            elif any(keyword in message_text for keyword in ["月", "日", "時", "予約"]) and "展示場" in message_text:
+                response_text = (
+                    "展示場のご予約を承りました📍\n\n"
+                    "ご希望の日時で仮予約いたしました。\n"
+                    "確定後、改めてご連絡いたします。\n\n"
+                    "当日は以下をご持参ください：\n"
+                    "・ご家族の情報\n"
+                    "・ご希望の間取りイメージ\n"
+                    "・ご予算の目安\n\n"
+                    "お会いできるのを楽しみにしています！"
+                )
+            
+            # 通常のメッセージ（RAGチャット処理）
+            if not response_text:
+                # RAGによる回答生成
                 import asyncio
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # 既存のループで実行
-                    task = asyncio.create_task(process_rag_query(message_text, user_id))
-                    answer = None
-                    # 同期的に結果を取得する代替方法
                     try:
-                        # タスクを待機（ただし同期的に）
                         answer = asyncio.run_coroutine_threadsafe(
                             process_rag_query(message_text, user_id), loop
                         ).result(timeout=30)
@@ -289,21 +348,9 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     # 新しいループで実行
                     answer = asyncio.run(process_rag_query(message_text, user_id))
                 
-                # 応答を送信
-                try:
-                    line_bot_api.reply_message_with_http_info(
-                        ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[TextMessage(text=answer)]
-                        )
-                    )
-                    logger.info(f"Sent RAG reply to {user_id}: {answer[:50]}...")
-                except Exception as api_error:
-                    logger.error(f"Failed to send RAG reply: {api_error}")
-                
-                return
+                response_text = answer
             
-            # リッチメニューからのメッセージに対する返信
+            # 応答を送信
             try:
                 line_bot_api.reply_message_with_http_info(
                     ReplyMessageRequest(
@@ -311,7 +358,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                         messages=[TextMessage(text=response_text)]
                     )
                 )
-                logger.info(f"Sent response to {user_id}: {response_text}")
+                logger.info(f"Sent response to {user_id}: {response_text[:50]}...")
             except Exception as api_error:
                 logger.error(f"Failed to send response: {api_error}")
             
@@ -332,15 +379,23 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
 
     @handler.add(FollowEvent)
     def handle_follow(event):
-        """友達追加時の処理 (v3対応・修正版)"""
+        """友達追加時の処理 (v3対応)"""
         try:
             user_id = event.source.user_id
             logger.info(f"New follower: {user_id}")
             
-            welcome_message = ("友達追加ありがとうございます！🎉\n\n"
-                             "私はRAGチャットボットです。\n"
-                             "アップロードされた文書に基づいて、様々な質問にお答えします。\n\n"
-                             "何でもお気軽にご質問ください！")
+            welcome_message = (
+                "友達追加ありがとうございます！🎉\n\n"
+                "キノエデザインホームです。\n"
+                "家づくりに関するご相談を承っております。\n\n"
+                "下のメニューから、お好きな項目をお選びください：\n"
+                "🤖 AI相談 - AIが質問に即座に回答\n"
+                "📋 資料請求 - パンフレットをお送りします\n"
+                "📍 展示場予約 - 実際の家を見学\n"
+                "💰 資金計画 - お金の相談\n"
+                "💬 チャット相談 - スタッフと直接相談\n\n"
+                "お気軽にご利用ください！"
+            )
             
             try:
                 line_bot_api.reply_message_with_http_info(
