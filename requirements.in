@@ -37,3 +37,4 @@ ragas
 redis
 mecab-python3
 datasets
+nest-asyncio

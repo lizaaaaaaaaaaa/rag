@@ -253,7 +253,9 @@ mypy-extensions==1.1.0
 narwhals==1.48.1
     # via altair
 nest-asyncio==1.6.0
-    # via ragas
+    # via
+    #   -r requirements.in
+    #   ragas
 networkx==3.5
     # via torch
 nltk==3.9.1

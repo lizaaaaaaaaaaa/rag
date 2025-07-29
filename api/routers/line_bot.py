@@ -1,11 +1,14 @@
-# api/routers/line_bot.py - 修正版（リッチメニュー完全対応）
+# api/routers/line_bot.py - 修正版（asyncio問題を解決）
 
 import os
 import logging
 import traceback
-import asyncio
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
+
+# asyncio問題を回避するための対策
+import asyncio
+import threading
 
 # LINE Bot SDK v3 imports
 try:
@@ -125,8 +128,8 @@ LINEでのチャットのような短めで親しみやすい応答を心がけ�
         else:
             return "申し訳ございません。もう一度お聞かせいただけますか？"
 
-async def process_rag_query(message_text: str, user_id: str) -> str:
-    """RAGを使用してメッセージを処理"""
+def process_rag_query_sync(message_text: str, user_id: str) -> str:
+    """RAGを使用してメッセージを処理（同期版）"""
     try:
         globals_dict = get_app_globals()
         vectorstore = globals_dict['vectorstore']
@@ -224,7 +227,7 @@ async def line_webhook(request: Request):
 if LINE_SDK_AVAILABLE and handler and line_bot_api:
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """テキストメッセージの処理 (v3対応・リッチメニュー完全対応版)"""
+        """テキストメッセージの処理 (v3対応・修正版)"""
         try:
             user_id = event.source.user_id
             message_text = event.message.text.strip()
@@ -232,11 +235,10 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
             logger.info(f"Received LINE message from {user_id}: {message_text}")
             
             # リッチメニューからのメッセージ処理
-            # 部分一致で判定（より柔軟に）
             response_text = None
             
             # A: AI相談
-            if "AI相談" in message_text and ("開始" in message_text or "お話" in message_text):
+            if "AI相談" in message_text:
                 response_text = (
                     "AI相談を開始します！🤖\n\n"
                     "ご質問やお悩みを自由に入力してください😊\n"
@@ -248,7 +250,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                 )
                 
             # B: AI住まいサイト
-            elif "AI住まいサイト" in message_text and ("準備中" in message_text or "ホームページ" in message_text):
+            elif "AI住まいサイト" in message_text:
                 response_text = (
                     "AI住まいサイトは現在準備中です🏗️\n\n"
                     "近日公開予定ですので、もうしばらくお待ちください。\n"
@@ -257,7 +259,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                 )
                 
             # C: 資料請求
-            elif "資料請求" in message_text and ("入力" in message_text or "送付先" in message_text):
+            elif "資料請求" in message_text:
                 response_text = (
                     "資料請求を承ります📋\n\n"
                     "以下の情報をお送りください：\n"
@@ -273,7 +275,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                 )
                 
             # D: 展示場来場予約
-            elif "展示場" in message_text and ("予約" in message_text or "来場" in message_text):
+            elif "展示場" in message_text and "予約" in message_text:
                 response_text = (
                     "展示場のご予約を承ります📍\n\n"
                     "ご希望の日時をお知らせください。\n"
@@ -285,7 +287,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                 )
                 
             # E: 資金計画
-            elif "資金計画" in message_text and ("開始" in message_text or "連絡先" in message_text):
+            elif "資金計画" in message_text:
                 response_text = (
                     "資金計画のご相談を承ります💰\n\n"
                     "まず、以下の情報をお送りください：\n"
@@ -299,7 +301,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                 )
                 
             # F: チャット相談
-            elif "チャット相談" in message_text and ("スタッフ" in message_text or "営業時間" in message_text):
+            elif "チャット相談" in message_text:
                 response_text = (
                     "チャット相談を開始します💬\n\n"
                     "スタッフが対応いたします。\n"
@@ -308,7 +310,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "※営業時間外のメッセージは翌営業日に返信いたします。"
                 )
             
-            # 資料請求への返信（名前と住所が含まれている場合）
+            # 資料請求への返信
             elif any(keyword in message_text for keyword in ["〒", "郵便番号", "住所"]) and len(message_text) > 20:
                 response_text = (
                     "資料請求を受け付けました📮\n\n"
@@ -317,7 +319,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "ご不明な点がございましたら、お気軽にお問い合わせください😊"
                 )
                 
-            # 展示場予約への返信（日時が含まれている場合）
+            # 展示場予約への返信
             elif any(keyword in message_text for keyword in ["月", "日", "時", "予約"]) and "展示場" not in message_text and len(message_text) > 10:
                 response_text = (
                     "展示場のご予約を承りました📍\n\n"
@@ -332,23 +334,8 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
             
             # 通常のメッセージ（RAGチャット処理）
             if not response_text:
-                # RAGによる回答生成
-                import asyncio
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # 既存のループで実行
-                    try:
-                        answer = asyncio.run_coroutine_threadsafe(
-                            process_rag_query(message_text, user_id), loop
-                        ).result(timeout=30)
-                    except Exception as async_error:
-                        logger.error(f"Async processing error: {async_error}")
-                        answer = "申し訳ございません。処理中にエラーが発生しました。"
-                else:
-                    # 新しいループで実行
-                    answer = asyncio.run(process_rag_query(message_text, user_id))
-                
-                response_text = answer
+                # 同期版のRAG処理を呼び出し
+                response_text = process_rag_query_sync(message_text, user_id)
             
             # 応答を送信
             try:

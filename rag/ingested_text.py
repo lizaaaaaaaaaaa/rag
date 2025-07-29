@@ -1,3 +1,5 @@
+# rag/ingested_text.py - 修正版（非推奨メソッドを更新）
+
 import os
 import logging
 import sys
@@ -208,8 +210,8 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
         raise
 
 def get_rag_chain(vectorstore, return_source: bool = True):
-    """RAGチェーンを作成（LangSmithトレース対応版）"""
-    logger.info("Creating RAG chain with LangSmith tracing...")
+    """RAGチェーンを作成（非推奨メソッドを修正）"""
+    logger.info("Creating RAG chain with updated methods...")
     logger.info(f"Creating RAG chain - LangSmith enabled: {os.environ.get('LANGCHAIN_TRACING_V2')}")
     logger.info(f"LangSmith project: {os.environ.get('LANGCHAIN_PROJECT')}")
     
@@ -243,6 +245,11 @@ def get_rag_chain(vectorstore, return_source: bool = True):
         # RAGチェーンを作成
         from langchain.chains import RetrievalQA
         
+        # 更新されたRetrieverの作成方法
+        retriever = vectorstore.as_retriever(
+            search_kwargs={"k": 3}
+        )
+        
         # LangSmithトレース用の設定
         chain_kwargs = {
             "prompt": prompt,
@@ -262,9 +269,7 @@ def get_rag_chain(vectorstore, return_source: bool = True):
         rag_chain = RetrievalQA.from_chain_type(
             llm=llm,
             chain_type="stuff",
-            retriever=vectorstore.as_retriever(
-                search_kwargs={"k": 3}
-            ),
+            retriever=retriever,
             return_source_documents=return_source,
             chain_type_kwargs=chain_kwargs
         )
@@ -273,7 +278,7 @@ def get_rag_chain(vectorstore, return_source: bool = True):
         if not hasattr(rag_chain, 'callbacks'):
             rag_chain.callbacks = []
         
-        logger.info("✅ RAG chain created successfully with LangSmith tracing")
+        logger.info("✅ RAG chain created successfully with updated methods")
         return rag_chain
         
     except Exception as e:
@@ -289,7 +294,8 @@ def get_rag_chain(vectorstore, return_source: bool = True):
             
             def invoke(self, inputs):
                 query = inputs.get("query", "")
-                docs = self.retriever.get_relevant_documents(query)
+                # 更新されたメソッドを使用
+                docs = self.retriever.invoke(query)
                 
                 if docs:
                     # コンテキストから回答を生成（デバッグ情報は含めない）
