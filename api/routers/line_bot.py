@@ -232,11 +232,11 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
             logger.info(f"Received LINE message from {user_id}: {message_text}")
             
             # リッチメニューからのメッセージ処理
-            # 完全一致で判定（スペースも含めて）
+            # 部分一致で判定（より柔軟に）
             response_text = None
             
-            # A: テスト・ 💬AIとお話
-            if message_text == "A：テスト・ 💬AIとお話":
+            # A: AI相談
+            if "AI相談" in message_text and ("開始" in message_text or "お話" in message_text):
                 response_text = (
                     "AI相談を開始します！🤖\n\n"
                     "ご質問やお悩みを自由に入力してください😊\n"
@@ -247,8 +247,8 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "どんなことでもお気軽にどうぞ！"
                 )
                 
-            # B: テスト・ 🏢AI住まいサイト AI住まいホームページ。 準備中です 今しばらくお待ちください😴
-            elif message_text == "B：テスト・ 🏢AI住まいサイト AI住まいホームページ。 準備中です 今しばらくお待ちください😴":
+            # B: AI住まいサイト
+            elif "AI住まいサイト" in message_text and ("準備中" in message_text or "ホームページ" in message_text):
                 response_text = (
                     "AI住まいサイトは現在準備中です🏗️\n\n"
                     "近日公開予定ですので、もうしばらくお待ちください。\n"
@@ -256,8 +256,8 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "他にご質問がございましたら、お気軽にお尋ねください😊"
                 )
                 
-            # C: テスト・ 📋資料請求します！ おるも和歌付き をご入力ください😊
-            elif message_text == "C：テスト・ 📋資料請求します！ おるも和歌付き をご入力ください😊":
+            # C: 資料請求
+            elif "資料請求" in message_text and ("入力" in message_text or "送付先" in message_text):
                 response_text = (
                     "資料請求を承ります📋\n\n"
                     "以下の情報をお送りください：\n"
@@ -272,8 +272,8 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "090-1234-5678"
                 )
                 
-            # D: テスト・ 📍展示場来場 予約手続き を メッセージください
-            elif message_text == "D：テスト・ 📍展示場来場 予約手続き を メッセージください":
+            # D: 展示場来場予約
+            elif "展示場" in message_text and ("予約" in message_text or "来場" in message_text):
                 response_text = (
                     "展示場のご予約を承ります📍\n\n"
                     "ご希望の日時をお知らせください。\n"
@@ -284,8 +284,8 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "平日のご来場がおすすめです😊"
                 )
                 
-            # E: テスト・ 💰資金計画 AI金融相談スタート！ 年収・自己資金など 調査にお間にします😊
-            elif message_text == "E：テスト・ 💰資金計画 AI金融相談スタート！ 年収・自己資金など 調査にお間にします😊":
+            # E: 資金計画
+            elif "資金計画" in message_text and ("開始" in message_text or "連絡先" in message_text):
                 response_text = (
                     "資金計画のご相談を承ります💰\n\n"
                     "まず、以下の情報をお送りください：\n"
@@ -298,8 +298,8 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "専門スタッフが丁寧にご対応いたします！"
                 )
                 
-            # F: チャット相談 スタッフとチャット相談 気転にメッセージどうぞ！ 営業時間9-18時
-            elif message_text == "F：チャット相談 スタッフとチャット相談 気転にメッセージどうぞ！ 営業時間9-18時":
+            # F: チャット相談
+            elif "チャット相談" in message_text and ("スタッフ" in message_text or "営業時間" in message_text):
                 response_text = (
                     "チャット相談を開始します💬\n\n"
                     "スタッフが対応いたします。\n"
@@ -318,7 +318,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                 )
                 
             # 展示場予約への返信（日時が含まれている場合）
-            elif any(keyword in message_text for keyword in ["月", "日", "時", "予約"]) and "展示場" in message_text:
+            elif any(keyword in message_text for keyword in ["月", "日", "時", "予約"]) and "展示場" not in message_text and len(message_text) > 10:
                 response_text = (
                     "展示場のご予約を承りました📍\n\n"
                     "ご希望の日時で仮予約いたしました。\n"

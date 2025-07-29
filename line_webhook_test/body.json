@@ -1,0 +1,12 @@
+{
+  "destination": "test",
+  "events": [
+    {
+      "type": "message",
+      "replyToken": "test-token",
+      "source": { "type": "user", "userId": "test-user" },
+      "timestamp": 1720000000000,
+      "message": { "type": "text", "id": "test-message", "text": "AI相談を開始" }
+    }
+  ]
+}
