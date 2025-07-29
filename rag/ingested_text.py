@@ -1,4 +1,4 @@
-# rag/ingested_text.py - 修正版（自然な回答生成）
+# rag/ingested_text.py - 改善版（自然な回答生成）
 
 import os
 import logging
@@ -210,64 +210,82 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
         raise
 
 def clean_and_format_response(raw_response: str) -> str:
-    """回答をクリーンアップして自然な形式に変換"""
+    """回答をクリーンアップして自然な形式に変換（改善版）"""
+    import re
     
-    # デバッグ情報や不要な文字列を削除
+    # より包括的な不要パターンの削除
     unwanted_patterns = [
-        "関連文書が見つかりました:",
-        "関連情報が見つかりました:",
-        "【質問】",
-        "【回答】",
-        "出典:",
-        "/tmp/tmp",
-        ".pdf",
-        "(p0)", "(p1)", "(p2)", "(p3)", "(p4)", "(p5)",
-        "1.", "2.", "3.", "4.", "5.",
+        r"関連文書が見つかりました[:：]?\s*",
+        r"関連情報が見つかりました[:：]?\s*",
+        r"\d+\.\s*【質問】[^】]*】\s*",
+        r"【回答】\s*",
+        r"【質問】\s*",
+        r"出典[:：]\s*[^\n]*",
+        r"/tmp/tmp[a-zA-Z0-9_]*\.pdf",
+        r"\([pP]\d+\)",
+        r"^\d+\.\s*",
+        r"【[^】]*】",
+        r"^質問[:：]\s*",
+        r"^回答[:：]\s*",
     ]
     
-    # 縦書き文字の修正（改行で区切られた単一文字を結合）
-    lines = raw_response.split('\n')
-    cleaned_lines = []
+    # パターンマッチングで不要部分を削除
+    cleaned = raw_response
+    for pattern in unwanted_patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE | re.IGNORECASE)
     
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
+    # 縦書き文字の修正（より積極的な結合）
+    lines = cleaned.split('\n')
+    processed_lines = []
+    combined_buffer = []
+    
+    for line in lines:
+        line = line.strip()
         
-        # 1文字だけの行が連続している場合は結合
-        if len(line) == 1 and i + 1 < len(lines):
-            combined_text = line
-            j = i + 1
-            while j < len(lines) and len(lines[j].strip()) <= 2:
-                if lines[j].strip():
-                    combined_text += lines[j].strip()
-                j += 1
-            
-            # 結合したテキストが意味のある長さの場合
-            if len(combined_text) > 5:
-                cleaned_lines.append(combined_text)
-                i = j
-                continue
-        
-        # 不要なパターンを含む行をスキップ
-        if any(pattern in line for pattern in unwanted_patterns):
-            i += 1
+        # 空行はスキップ
+        if not line:
+            if combined_buffer:
+                # バッファに溜まったテキストを結合
+                combined_text = ''.join(combined_buffer)
+                if len(combined_text) > 3:
+                    processed_lines.append(combined_text)
+                combined_buffer = []
             continue
-            
-        # 意味のあるテキストのみ追加
-        if len(line) > 2 and not line.isdigit():
-            cleaned_lines.append(line)
         
-        i += 1
+        # 短い行（1-3文字）は結合候補
+        if len(line) <= 3:
+            combined_buffer.append(line)
+        else:
+            # バッファに溜まったテキストを処理
+            if combined_buffer:
+                combined_text = ''.join(combined_buffer)
+                if len(combined_text) > 3:
+                    processed_lines.append(combined_text)
+                combined_buffer = []
+            
+            # 現在の行を追加
+            processed_lines.append(line)
     
-    # 結合して自然な文章に整形
-    result = ' '.join(cleaned_lines)
+    # 最後のバッファを処理
+    if combined_buffer:
+        combined_text = ''.join(combined_buffer)
+        if len(combined_text) > 3:
+            processed_lines.append(combined_text)
+    
+    # 文章を自然に結合
+    result = ' '.join(processed_lines)
     
     # 追加のクリーンアップ
-    result = result.replace('...', '。')
-    result = result.replace('  ', ' ')
+    result = re.sub(r'\s+', ' ', result)  # 複数スペースを1つに
+    result = re.sub(r'([。！？])\s*', r'\1', result)  # 句読点後のスペースを削除
+    result = re.sub(r'\.{3,}', '。', result)  # 3つ以上のドットを句点に
     result = result.strip()
     
-    # 空の場合はデフォルトメッセージ
+    # 「、」で終わっている場合は「。」に変更
+    if result.endswith('、'):
+        result = result[:-1] + '。'
+    
+    # 最終チェック：意味のない短い回答は置き換え
     if not result or len(result) < 10:
         result = "申し訳ございません。お尋ねの内容について、現在のデータベースでは詳細な情報を見つけることができませんでした。"
     
@@ -282,7 +300,7 @@ def get_rag_chain(vectorstore, return_source: bool = True):
         from llm.llm_runner import load_llm
         llm, _, _ = load_llm()
         
-        # 改良されたプロンプトテンプレート
+        # 改良されたプロンプトテンプレート（より明確な指示）
         prompt_str = """あなたは親切で知識豊富な住宅・建築の専門アドバイザーです。
 以下の情報を参考に、ユーザーの質問に対して自然で分かりやすい回答を提供してください。
 
@@ -290,8 +308,12 @@ def get_rag_chain(vectorstore, return_source: bool = True):
 - 回答は自然な会話調で、親しみやすく答えてください
 - 専門用語は分かりやすく説明してください
 - 具体的で実用的な情報を含めてください
-- 出典や参考文献については言及しないでください
+- 出典や参考文献については一切言及しないでください
 - デバッグ情報や検索結果の詳細は含めないでください
+- 「関連文書が見つかりました」などの検索結果の説明は含めないでください
+- 番号付きリストや出典情報は含めないでください
+- 【質問】【回答】などのラベルは使用しないでください
+- 質問の内容に直接答えることから始めてください
 
 【参考情報】
 {context}
@@ -299,7 +321,13 @@ def get_rag_chain(vectorstore, return_source: bool = True):
 【質問】
 {question}
 
-【回答】"""
+【回答指針】
+- 質問に対して直接的で分かりやすい回答を提供する
+- 住宅に関する専門知識を活用して具体的にアドバイスする
+- 必要に応じて例を挙げて説明する
+- 自然な日本語の文章として回答する
+
+回答:"""
         
         prompt = PromptTemplate(
             input_variables=["context", "question"],
@@ -320,7 +348,7 @@ def get_rag_chain(vectorstore, return_source: bool = True):
             chain_type_kwargs={"prompt": prompt}
         )
         
-        # カスタムラッパーで回答をクリーンアップ
+        # カスタムラッパーで回答をクリーンアップ（強化版）
         class CleanResponseChain:
             def __init__(self, base_chain):
                 self.base_chain = base_chain
@@ -362,17 +390,47 @@ def get_rag_chain(vectorstore, return_source: bool = True):
                     # 関連する情報から自然な回答を生成
                     context_texts = [doc.page_content for doc in docs[:3]]
                     
+                    # 縦書き文字の修正を各テキストに適用
+                    fixed_texts = []
+                    for text in context_texts:
+                        # 縦書き修正処理
+                        lines = text.split('\n')
+                        fixed_lines = []
+                        buffer = []
+                        
+                        for line in lines:
+                            line = line.strip()
+                            if len(line) <= 3:
+                                buffer.append(line)
+                            else:
+                                if buffer:
+                                    combined = ''.join(buffer)
+                                    if len(combined) > 3:
+                                        fixed_lines.append(combined)
+                                    buffer = []
+                                fixed_lines.append(line)
+                        
+                        if buffer:
+                            combined = ''.join(buffer)
+                            if len(combined) > 3:
+                                fixed_lines.append(combined)
+                        
+                        fixed_text = ' '.join(fixed_lines)
+                        fixed_texts.append(fixed_text)
+                    
                     # 質問に応じた回答生成
                     if "坪単価" in query or "価格" in query or "費用" in query:
                         # 価格関連の質問
                         price_info = []
-                        for text in context_texts:
+                        for text in fixed_texts:
                             if any(keyword in text for keyword in ["価格", "坪単価", "万円", "費用", "コスト"]):
                                 # 価格情報を抽出
                                 sentences = text.split("。")
                                 for sentence in sentences:
                                     if any(keyword in sentence for keyword in ["価格", "坪単価", "万円"]):
-                                        price_info.append(sentence.strip())
+                                        clean_sentence = sentence.strip()
+                                        if len(clean_sentence) > 5:
+                                            price_info.append(clean_sentence)
                         
                         if price_info:
                             result = "価格については、" + "。".join(price_info[:2]) + "。詳細については、お気軽にお問い合わせください。"
@@ -382,27 +440,30 @@ def get_rag_chain(vectorstore, return_source: bool = True):
                     elif "仕様" in query or "標準" in query:
                         # 仕様関連の質問
                         spec_info = []
-                        for text in context_texts:
-                            if any(keyword in text for keyword in ["仕様", "標準", "性能", "等級"]):
+                        for text in fixed_texts:
+                            if any(keyword in text for keyword in ["仕様", "標準", "性能", "等級", "ZEH", "断熱"]):
                                 sentences = text.split("。")
-                                for sentence in sentences[:2]:  # 最初の2文を使用
-                                    if sentence.strip():
-                                        spec_info.append(sentence.strip())
+                                for sentence in sentences[:3]:  # 最初の3文を使用
+                                    clean_sentence = sentence.strip()
+                                    if len(clean_sentence) > 10:
+                                        spec_info.append(clean_sentence)
                         
                         if spec_info:
-                            result = "標準仕様についてご説明します。" + "。".join(spec_info) + "。"
+                            # 仕様情報を整理して回答
+                            result = "標準仕様についてご説明します。" + "。".join(spec_info[:2]) + "。その他の詳細については、お気軽にお問い合わせください。"
                         else:
                             result = "標準仕様については、高品質な住宅をご提供するため、様々な設備や性能を標準装備としております。詳細については、ショールームでご確認いただけます。"
                     
                     elif "人気" in query or "おすすめ" in query:
                         # 人気・おすすめ関連の質問
                         popular_info = []
-                        for text in context_texts:
+                        for text in fixed_texts:
                             if any(keyword in text for keyword in ["人気", "おすすめ", "好評", "評判"]):
                                 sentences = text.split("。")
                                 for sentence in sentences[:2]:
-                                    if sentence.strip():
-                                        popular_info.append(sentence.strip())
+                                    clean_sentence = sentence.strip()
+                                    if len(clean_sentence) > 10:
+                                        popular_info.append(clean_sentence)
                         
                         if popular_info:
                             result = "最近人気の設備や間取りについてご紹介します。" + "。".join(popular_info) + "。"
@@ -412,9 +473,14 @@ def get_rag_chain(vectorstore, return_source: bool = True):
                     else:
                         # その他の質問
                         # 最も関連性の高い文章を使用
-                        main_content = context_texts[0] if context_texts else ""
+                        main_content = fixed_texts[0] if fixed_texts else ""
                         sentences = main_content.split("。")
-                        relevant_sentences = [s.strip() for s in sentences[:3] if s.strip()]
+                        relevant_sentences = []
+                        
+                        for sentence in sentences[:3]:
+                            clean_sentence = sentence.strip()
+                            if len(clean_sentence) > 10:
+                                relevant_sentences.append(clean_sentence)
                         
                         if relevant_sentences:
                             result = "。".join(relevant_sentences) + "。ご不明な点がございましたら、お気軽にお尋ねください。"
@@ -424,10 +490,16 @@ def get_rag_chain(vectorstore, return_source: bool = True):
                 else:
                     result = "申し訳ございません。お尋ねの内容について、現在のデータベースでは該当する情報が見つかりませんでした。詳細については、お気軽にお問い合わせください。"
                 
+                # 最終的なクリーンアップ
+                result = clean_and_format_response(result)
+                
                 return {
                     "result": result,
                     "source_documents": docs[:3]
                 }
+            
+            def __call__(self, inputs, callbacks=None):
+                return self.invoke(inputs)
         
         logger.warning("Using improved simple chain as fallback")
         return ImprovedSimpleChain(vectorstore)

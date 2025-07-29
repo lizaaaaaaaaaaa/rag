@@ -77,71 +77,82 @@ def get_general_response_from_llm(query: str, llm_instance):
             return "申し訳ございません。もう一度お聞かせいただけますか？"
 
 def clean_rag_response(raw_response: str) -> str:
-    """RAG回答をクリーンアップして自然な形式に変換"""
+    """RAG回答をクリーンアップして自然な形式に変換（改善版）"""
     
-    # 不要なパターンを削除
+    # より包括的な不要パターンの削除
     unwanted_patterns = [
         r"関連文書が見つかりました[:：]?\s*",
         r"関連情報が見つかりました[:：]?\s*",
         r"\d+\.\s*【質問】[^】]*】\s*",
         r"【回答】\s*",
-        r"出典[:：]\s*[^\n]*\.pdf\s*\([^)]*\)\s*",
-        r"/tmp/tmp[a-zA-Z0-9]*\.pdf",
-        r"\(p\d+\)",
+        r"【質問】\s*",
+        r"出典[:：]\s*[^\n]*",
+        r"/tmp/tmp[a-zA-Z0-9_]*\.pdf",
+        r"\([pP]\d+\)",
         r"^\d+\.\s*",
         r"【[^】]*】",
+        r"^質問[:：]\s*",
+        r"^回答[:：]\s*",
     ]
     
     # パターンマッチングで不要部分を削除
     cleaned = raw_response
     for pattern in unwanted_patterns:
-        cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE | re.IGNORECASE)
     
-    # 縦書き文字の修正（連続する単一文字を結合）
+    # 縦書き文字の修正（より積極的な結合）
     lines = cleaned.split('\n')
     processed_lines = []
+    combined_buffer = []
     
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
+    for line in lines:
+        line = line.strip()
         
         # 空行はスキップ
         if not line:
-            i += 1
+            if combined_buffer:
+                # バッファに溜まったテキストを結合
+                combined_text = ''.join(combined_buffer)
+                if len(combined_text) > 3:
+                    processed_lines.append(combined_text)
+                combined_buffer = []
             continue
-            
-        # 1文字の行が連続している場合は結合
-        if len(line) == 1 and i + 1 < len(lines):
-            combined_text = line
-            j = i + 1
-            
-            # 次の行も1-2文字の場合は結合を続ける
-            while j < len(lines) and len(lines[j].strip()) <= 2 and lines[j].strip():
-                combined_text += lines[j].strip()
-                j += 1
-            
-            # 結合したテキストが意味のある長さの場合
-            if len(combined_text) > 3:
-                processed_lines.append(combined_text)
-                i = j
-                continue
         
-        # 意味のあるテキストのみ追加
-        if len(line) > 2:
+        # 短い行（1-3文字）は結合候補
+        if len(line) <= 3:
+            combined_buffer.append(line)
+        else:
+            # バッファに溜まったテキストを処理
+            if combined_buffer:
+                combined_text = ''.join(combined_buffer)
+                if len(combined_text) > 3:
+                    processed_lines.append(combined_text)
+                combined_buffer = []
+            
+            # 現在の行を追加
             processed_lines.append(line)
-        
-        i += 1
     
-    # 文章を結合
+    # 最後のバッファを処理
+    if combined_buffer:
+        combined_text = ''.join(combined_buffer)
+        if len(combined_text) > 3:
+            processed_lines.append(combined_text)
+    
+    # 文章を自然に結合
     result = ' '.join(processed_lines)
     
     # 追加のクリーンアップ
     result = re.sub(r'\s+', ' ', result)  # 複数スペースを1つに
+    result = re.sub(r'([。！？])\s*', r'\1', result)  # 句読点後のスペースを削除
     result = re.sub(r'\.{3,}', '。', result)  # 3つ以上のドットを句点に
     result = result.strip()
     
+    # 「、」で終わっている場合は「。」に変更
+    if result.endswith('、'):
+        result = result[:-1] + '。'
+    
     # 最終チェック：意味のない短い回答は置き換え
-    if not result or len(result) < 10 or result.count(' ') < 3:
+    if not result or len(result) < 10:
         result = "申し訳ございません。お尋ねの内容について、より詳しい情報をご提供するため、直接お問い合わせいただければと思います。"
     
     return result
@@ -217,7 +228,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                 
                 raw_answer = result.get("result", "")
                 
-                # 回答をクリーンアップ
+                # 回答をクリーンアップ（改善版を使用）
                 answer = clean_rag_response(raw_answer)
                 
                 # --- 生成のトレース ---
@@ -254,7 +265,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         logger.error(traceback.format_exc())
         answer = f"システムエラーが発生しました。管理者にお問い合わせください。（エラーID: {error_id}）"
 
-    # 最終的な回答のクリーンアップ
+    # 最終的な回答のクリーンアップ（二重の保険）
     answer = clean_rag_response(answer)
 
     log = {
