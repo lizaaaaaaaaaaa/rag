@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import uuid4
 import traceback
 import os
+import re
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -28,11 +29,6 @@ router = APIRouter()
 history_logs: list[dict] = []
 
 logger = logging.getLogger(__name__)
-
-# ★ 追加: LangSmith環境変数デバッグログ
-logger.info(f"Chat router - LANGSMITH_API_KEY set: {bool(os.environ.get('LANGSMITH_API_KEY'))}")
-logger.info(f"Chat router - LANGCHAIN_TRACING_V2: {os.environ.get('LANGCHAIN_TRACING_V2')}")
-logger.info(f"Chat router - LANGCHAIN_PROJECT: {os.environ.get('LANGCHAIN_PROJECT')}")
 
 class ChatRequest(BaseModel):
     question: str
@@ -80,6 +76,76 @@ def get_general_response_from_llm(query: str, llm_instance):
         else:
             return "申し訳ございません。もう一度お聞かせいただけますか？"
 
+def clean_rag_response(raw_response: str) -> str:
+    """RAG回答をクリーンアップして自然な形式に変換"""
+    
+    # 不要なパターンを削除
+    unwanted_patterns = [
+        r"関連文書が見つかりました[:：]?\s*",
+        r"関連情報が見つかりました[:：]?\s*",
+        r"\d+\.\s*【質問】[^】]*】\s*",
+        r"【回答】\s*",
+        r"出典[:：]\s*[^\n]*\.pdf\s*\([^)]*\)\s*",
+        r"/tmp/tmp[a-zA-Z0-9]*\.pdf",
+        r"\(p\d+\)",
+        r"^\d+\.\s*",
+        r"【[^】]*】",
+    ]
+    
+    # パターンマッチングで不要部分を削除
+    cleaned = raw_response
+    for pattern in unwanted_patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE)
+    
+    # 縦書き文字の修正（連続する単一文字を結合）
+    lines = cleaned.split('\n')
+    processed_lines = []
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # 空行はスキップ
+        if not line:
+            i += 1
+            continue
+            
+        # 1文字の行が連続している場合は結合
+        if len(line) == 1 and i + 1 < len(lines):
+            combined_text = line
+            j = i + 1
+            
+            # 次の行も1-2文字の場合は結合を続ける
+            while j < len(lines) and len(lines[j].strip()) <= 2 and lines[j].strip():
+                combined_text += lines[j].strip()
+                j += 1
+            
+            # 結合したテキストが意味のある長さの場合
+            if len(combined_text) > 3:
+                processed_lines.append(combined_text)
+                i = j
+                continue
+        
+        # 意味のあるテキストのみ追加
+        if len(line) > 2:
+            processed_lines.append(line)
+        
+        i += 1
+    
+    # 文章を結合
+    result = ' '.join(processed_lines)
+    
+    # 追加のクリーンアップ
+    result = re.sub(r'\s+', ' ', result)  # 複数スペースを1つに
+    result = re.sub(r'\.{3,}', '。', result)  # 3つ以上のドットを句点に
+    result = result.strip()
+    
+    # 最終チェック：意味のない短い回答は置き換え
+    if not result or len(result) < 10 or result.count(' ') < 3:
+        result = "申し訳ございません。お尋ねの内容について、より詳しい情報をご提供するため、直接お問い合わせいただければと思います。"
+    
+    return result
+
 def get_app_globals():
     import main
     return {
@@ -90,13 +156,11 @@ def get_app_globals():
 
 tracer = RAGTracer()
 
-# @traceable デコレータを一時的に簡略化
 @router.post("/", summary="AI チャット")
 async def chat_endpoint(req: ChatRequest, request: Request):
-    """チャットエンドポイント（LangSmithトレースを簡略化）"""
+    """チャットエンドポイント（改善版）"""
     logger.info(f"=== chat_endpoint called === question: {req.question}, username: {req.username}")
     
-    # 以下、既存のコードと同じ...
     query = req.question
     user = req.username or "guest"
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -142,6 +206,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                 # --- RAG検索とトレース ---
                 docs = vectorstore.similarity_search(query, k=3)
                 tracer.trace_retrieval(query, docs)
+                
                 # --- RAG生成 ---
                 if hasattr(rag_chain_template, '__call__'):
                     result = rag_chain_template({"query": query})
@@ -149,24 +214,27 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                     result = rag_chain_template.invoke({"query": query})
                 else:
                     result = rag_chain_template({"query": query}, callbacks=[])
-                answer = result.get("result", "")
+                
+                raw_answer = result.get("result", "")
+                
+                # 回答をクリーンアップ
+                answer = clean_rag_response(raw_answer)
+                
                 # --- 生成のトレース ---
                 context = "\n".join([doc.page_content for doc in docs])
                 tracer.trace_generation(query, context, answer)
 
                 # 回答が見つからない場合、Web検索も使う
-                if not answer or "関連する情報が見つかりませんでした" in answer:
+                if not answer or len(answer) < 20 or "関連する情報が見つかりませんでした" in answer:
                     logger.info("No relevant documents found, trying enhanced response with web search")
                     answer = web_searcher.get_enhanced_answer(query, context="", use_web_search=True)
-                else:
-                    # 「関連文書が見つかりました:」で始まる場合は、実際の回答部分のみを抽出
-                    if answer.startswith("関連文書が見つかりました:") or answer.startswith("関連情報が見つかりました:"):
-                        # デバッグ用の詳細な検索結果は削除し、純粋な回答のみを生成
-                        context = "\n".join([doc.page_content for doc in docs])
-                        answer = web_searcher.get_enhanced_answer(query, context=context, use_web_search=False)
-                    elif web_searcher.should_search_web(query):
-                        logger.info("Enhancing RAG answer with web search")
-                        answer = web_searcher.get_enhanced_answer(query, context=answer, use_web_search=True)
+                elif web_searcher.should_search_web(query):
+                    logger.info("Enhancing RAG answer with web search")
+                    # Web検索で補強するが、メインはRAGの回答を使用
+                    web_enhanced = web_searcher.get_enhanced_answer(query, context=answer, use_web_search=True)
+                    if len(web_enhanced) > len(answer):
+                        answer = web_enhanced
+                        
             except Exception as e:
                 logger.error(f"RAG chain error: {e}")
                 logger.error(traceback.format_exc())
@@ -178,13 +246,16 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             if llm_instance:
                 answer = get_general_response_from_llm(query, llm_instance)
             else:
-                answer = "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
+                answer = "申し訳ございません。システムが準備中です。しばらくしてから再度お試ください。"
 
     except Exception as e:
         error_id = str(uuid4())[:8]
         logger.error(f"Unexpected error [{error_id}]: {e}")
         logger.error(traceback.format_exc())
         answer = f"システムエラーが発生しました。管理者にお問い合わせください。（エラーID: {error_id}）"
+
+    # 最終的な回答のクリーンアップ
+    answer = clean_rag_response(answer)
 
     log = {
         "id": str(uuid4()),
@@ -201,7 +272,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         "sources": [],
         "status": "ok"
     }
-    logger.info(f"Returning response: {response['answer'][:100]}...")
+    logger.info(f"Returning response: {answer[:100]}...")
     return response
 
 @router.post("", include_in_schema=False)

@@ -1,4 +1,4 @@
-# utils/web_search.py - Google Custom Search API版
+# utils/web_search.py - 改善版（自然な回答生成）
 
 import os
 import logging
@@ -86,7 +86,7 @@ class GoogleSearcher:
             return []
     
     def get_enhanced_answer(self, query: str, context: str = "", use_web_search: bool = True) -> str:
-        """Web検索結果も含めて強化された回答を生成"""
+        """Web検索結果も含めて強化された回答を生成（自然な回答版）"""
         
         # 坪単価の質問に特化した処理
         if "坪単価" in query:
@@ -101,18 +101,18 @@ class GoogleSearcher:
                             response = client.chat.completions.create(
                                 model="gpt-3.5-turbo",
                                 messages=[
-                                    {"role": "system", "content": "質問に対して簡潔に回答してください。"},
-                                    {"role": "user", "content": f"以下の情報から坪単価について教えてください。\n\n情報: {context}\n\n回答:"}
+                                    {"role": "system", "content": "あなたは住宅の専門アドバイザーです。質問に対して親しみやすく、自然な日本語で回答してください。出典や参考文献については言及しないでください。"},
+                                    {"role": "user", "content": f"以下の情報から坪単価について教えてください。\n\n情報: {context}\n\n自然で分かりやすい回答をお願いします。"}
                                 ],
                                 temperature=0.3,
-                                max_tokens=200
+                                max_tokens=300
                             )
                             return response.choices[0].message.content
                         except Exception as e:
                             logger.error(f"Error generating answer: {e}")
                 
                 # コンテキストに情報がない場合
-                return "申し訳ございません。坪単価に関する具体的な情報は現在のデータには含まれていないようです。詳細については直接お問い合わせいただければ幸いです。"
+                return "申し訳ございません。坪単価については、お客様のご希望や仕様によって異なるため、詳細なお見積りをご提供させていただきます。お気軽にお問い合わせください。"
         
         # Web検索結果を取得
         web_context = ""
@@ -121,29 +121,41 @@ class GoogleSearcher:
             search_results = self.search_web(query)
             
             if search_results:
-                web_context = "\n\n【参考：最新のWeb情報】\n"
-                for i, result in enumerate(search_results, 1):
-                    web_context += f"{i}. {result['title']} ({result['domain']})\n"
-                    web_context += f"   {result['snippet']}\n\n"
+                # Web検索情報を要約して含める
+                web_snippets = []
+                for result in search_results[:3]:  # 上位3件のみ使用
+                    if result['snippet']:
+                        web_snippets.append(result['snippet'])
+                
+                if web_snippets:
+                    web_context = " ".join(web_snippets)
         
-        # プロンプトを構築
-        system_prompt = """あなたは親切で知識豊富な日本語のAIアシスタントです。
-ユーザーの質問に対して、正確で分かりやすい回答を提供してください。
-重要：出典や参考文献については言及せず、自然な会話として回答してください。"""
+        # プロンプトを構築（自然な回答生成用）
+        system_prompt = """あなたは親切で知識豊富な住宅・建築の専門アドバイザーです。
+ユーザーの質問に対して、自然で分かりやすい回答を提供してください。
 
-        # f-string内のバックスラッシュを回避
-        context_section = f'【関連文書情報】\n{context}\n' if context else ''
-        
-        user_prompt = f"""{context_section}
-{web_context if web_context else ''}
-
-質問: {query}
-
-以下の点に注意して回答してください：
+【重要な指示】
 - 自然で親しみやすい日本語で回答する
-- 情報源については触れない
+- 出典や参考文献については一切言及しない
+- デバッグ情報や検索結果の詳細は含めない
 - 具体的で実用的な回答を心がける
-- 必要に応じて例を挙げて説明する"""
+- 専門用語は分かりやすく説明する"""
+
+        # コンテキスト部分を構築
+        context_parts = []
+        if context and len(context.strip()) > 10:
+            context_parts.append(f"参考情報: {context}")
+        if web_context and len(web_context.strip()) > 10:
+            context_parts.append(f"最新情報: {web_context}")
+        
+        context_section = "\n\n".join(context_parts) if context_parts else ""
+        
+        user_prompt = f"""質問: {query}
+
+{context_section}
+
+上記の情報を参考に、質問に対して自然で分かりやすい回答をお願いします。
+専門的な内容も含めて、お客様にとって有用な情報を提供してください。"""
 
         try:
             if self.openai_api_key:
@@ -155,15 +167,44 @@ class GoogleSearcher:
                         {"role": "user", "content": user_prompt}
                     ],
                     temperature=0.7,
-                    max_tokens=800
+                    max_tokens=600
                 )
-                return response.choices[0].message.content
+                
+                generated_answer = response.choices[0].message.content
+                
+                # 生成された回答をクリーンアップ
+                return self._clean_generated_answer(generated_answer)
             else:
                 return "申し訳ございません。回答を生成できませんでした。"
                 
         except Exception as e:
             logger.error(f"Error generating enhanced answer: {e}")
             return "申し訳ございません。エラーが発生しました。もう一度お試しください。"
+    
+    def _clean_generated_answer(self, answer: str) -> str:
+        """生成された回答をクリーンアップ"""
+        import re
+        
+        # 不要なパターンを削除
+        unwanted_patterns = [
+            r"参考文献[:：][^\n]*",
+            r"出典[:：][^\n]*",
+            r"【[^】]*】",
+            r"参考情報[:：]",
+            r"最新情報[:：]",
+            r"^情報[:：]\s*",
+        ]
+        
+        cleaned = answer
+        for pattern in unwanted_patterns:
+            cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE)
+        
+        # 余分な改行や空白を整理
+        cleaned = re.sub(r'\n\s*\n', '\n', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        cleaned = cleaned.strip()
+        
+        return cleaned
     
     def should_search_web(self, query: str) -> bool:
         """Web検索が必要かどうかを判定"""
