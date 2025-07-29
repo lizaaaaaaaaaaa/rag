@@ -7,6 +7,8 @@ python scripts/verify_richmenu.py
 import os
 import requests
 import json
+from dotenv import load_dotenv
+load_dotenv()
 
 # 環境変数から取得
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")

@@ -10,6 +10,8 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 import io
 import sys
+from dotenv import load_dotenv
+load_dotenv()
 
 # 環境変数から取得
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")

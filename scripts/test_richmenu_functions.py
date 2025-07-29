@@ -8,6 +8,8 @@ import os
 import requests
 import json
 from datetime import datetime
+from dotenv import load_dotenv
+load_dotenv()
 
 # APIエンドポイント
 API_URL = "https://rag-api-190389115361.asia-northeast1.run.app"

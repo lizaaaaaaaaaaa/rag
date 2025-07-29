@@ -4,6 +4,8 @@ import os
 import requests
 import json
 from datetime import datetime
+from dotenv import load_dotenv
+load_dotenv()
 
 def check_line_webhook_config():
     """LINE Webhook設定を確認"""
