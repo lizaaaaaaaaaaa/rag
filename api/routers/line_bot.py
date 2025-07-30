@@ -1,8 +1,9 @@
-# api/routers/line_bot.py - 修正版（asyncio問題を解決）
+# api/routers/line_bot.py - 修正版（回答クリーンアップ強化）
 
 import os
 import logging
 import traceback
+import re
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
 
@@ -128,8 +129,117 @@ LINEでのチャットのような短めで親しみやすい応答を心がけ�
         else:
             return "申し訳ございません。もう一度お聞かせいただけますか？"
 
+def clean_line_response(raw_response: str) -> str:
+    """LINE用のレスポンスクリーンアップ（改良版）"""
+    
+    if not raw_response or len(raw_response.strip()) < 3:
+        return "申し訳ございません。お答えできませんでした。"
+    
+    # 1. 構造化情報とデバッグ情報の完全削除
+    debug_patterns = [
+        r"関連文書が見つかりました[:：]?\s*",
+        r"関連情報が見つかりました[:：]?\s*",
+        r"\d+\.\s*【質問】[^】]*】\s*",
+        r"【回答】\s*",
+        r"【質問】\s*",
+        r"出典[:：]\s*[^\n]*",
+        r"/tmp/tmp[a-zA-Z0-9_]*\.pdf",
+        r"\([pP]\d+\)",
+        r"^\d+\.\s*",
+        r"【[^】]*】",
+        r"^質問[:：]\s*",
+        r"^回答[:：]\s*",
+        r"出典[:：][^\n]*",
+        r"\.pdf\s*\([pP]\d+\)",
+        r"\.pdf\s+\(p\d+\)",
+    ]
+    
+    cleaned = raw_response
+    for pattern in debug_patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE | re.IGNORECASE)
+    
+    # 2. 縦書き文字の修正（LINE専用改良版）
+    lines = cleaned.split('\n')
+    char_accumulator = []
+    fixed_content = []
+    
+    for line in lines:
+        line = line.strip()
+        
+        if not line:
+            # 空行で区切り
+            if char_accumulator:
+                combined = ''.join(char_accumulator)
+                if len(combined) > 3:
+                    fixed_content.append(combined)
+                char_accumulator = []
+            continue
+        
+        # 1文字の行は蓄積
+        if len(line) == 1:
+            char_accumulator.append(line)
+        else:
+            # まとまった文章が来た場合
+            if char_accumulator:
+                combined = ''.join(char_accumulator)
+                if len(combined) > 3:
+                    fixed_content.append(combined)
+                char_accumulator = []
+            
+            # 現在の行を追加
+            fixed_content.append(line)
+    
+    # 最後の蓄積分を処理
+    if char_accumulator:
+        combined = ''.join(char_accumulator)
+        if len(combined) > 3:
+            fixed_content.append(combined)
+    
+    # 3. 重複除去と最適化
+    if fixed_content:
+        # 重複する行を除去
+        unique_lines = []
+        seen = set()
+        
+        for line in fixed_content:
+            line_norm = re.sub(r'[。、\s]', '', line.lower())
+            if line_norm not in seen and len(line) > 5:
+                seen.add(line_norm)
+                unique_lines.append(line)
+        
+        # 最も長い有意な内容を選択
+        if unique_lines:
+            best_line = max(unique_lines, key=len)
+            result = best_line
+        else:
+            result = fixed_content[0] if fixed_content else ""
+    else:
+        result = "申し訳ございません。お答えできませんでした。"
+    
+    # 4. 最終整形
+    result = re.sub(r'\s+', ' ', result)
+    result = re.sub(r'([。！？])\s*', r'\1', result)
+    result = result.strip()
+    
+    # 文末調整
+    if result and not result.endswith(('。', '！', '？')):
+        if result.endswith('、'):
+            result = result[:-1] + '。'
+        elif not result.endswith('.'):
+            result += '。'
+    
+    # LINEメッセージの文字数制限
+    if len(result) > 1800:
+        result = result[:1800] + "...\n\n詳細については、お気軽にお尋ねください。"
+    
+    # 最低限の内容チェック
+    if len(result) < 10:
+        result = "申し訳ございません。詳細についてはお問い合わせください。"
+    
+    return result
+
 def process_rag_query_sync(message_text: str, user_id: str) -> str:
-    """RAGを使用してメッセージを処理（同期版）"""
+    """RAGを使用してメッセージを処理（改良版）"""
     try:
         globals_dict = get_app_globals()
         vectorstore = globals_dict['vectorstore']
@@ -162,7 +272,12 @@ def process_rag_query_sync(message_text: str, user_id: str) -> str:
                 else:
                     result = rag_chain_template({"query": message_text}, callbacks=[])
                 
-                answer = result.get("result", "")
+                raw_answer = result.get("result", "")
+                logger.info(f"Raw RAG response for LINE: {raw_answer[:100]}...")
+                
+                # LINE専用のクリーンアップを適用
+                answer = clean_line_response(raw_answer)
+                logger.info(f"Cleaned LINE response: {answer[:100]}...")
                 
                 if not answer or "関連する情報が見つかりませんでした" in answer:
                     logger.info("No relevant documents found, trying web search")
@@ -172,13 +287,11 @@ def process_rag_query_sync(message_text: str, user_id: str) -> str:
                         answer = web_searcher.get_enhanced_answer(
                             message_text, context="", use_web_search=True
                         )
+                        # Web検索結果もクリーンアップ
+                        answer = clean_line_response(answer)
                     except Exception as web_error:
                         logger.error(f"Web search error: {web_error}")
                         answer = "申し訳ございません。関連する情報が見つかりませんでした。"
-                
-                # LINEメッセージの文字数制限を考慮
-                if len(answer) > 1800:
-                    answer = answer[:1800] + "...\n\n詳細については、お気軽にお尋ねください。"
                 
                 return answer
                 
@@ -227,7 +340,7 @@ async def line_webhook(request: Request):
 if LINE_SDK_AVAILABLE and handler and line_bot_api:
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """テキストメッセージの処理 (v3対応・修正版)"""
+        """テキストメッセージの処理 (v3対応・改良版)"""
         try:
             user_id = event.source.user_id
             message_text = event.message.text.strip()
@@ -237,7 +350,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
             # リッチメニューからのメッセージ処理
             response_text = None
             
-            # A: AI相談
+            # リッチメニューボタンの判定（部分一致で対応）
             if "AI相談" in message_text:
                 response_text = (
                     "AI相談を開始します！🤖\n\n"
@@ -249,7 +362,6 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "どんなことでもお気軽にどうぞ！"
                 )
                 
-            # B: AI住まいサイト
             elif "AI住まいサイト" in message_text:
                 response_text = (
                     "AI住まいサイトは現在準備中です🏗️\n\n"
@@ -258,7 +370,6 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "他にご質問がございましたら、お気軽にお尋ねください😊"
                 )
                 
-            # C: 資料請求
             elif "資料請求" in message_text:
                 response_text = (
                     "資料請求を承ります📋\n\n"
@@ -274,7 +385,6 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "090-1234-5678"
                 )
                 
-            # D: 展示場来場予約
             elif "展示場" in message_text and "予約" in message_text:
                 response_text = (
                     "展示場のご予約を承ります📍\n\n"
@@ -286,7 +396,6 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "平日のご来場がおすすめです😊"
                 )
                 
-            # E: 資金計画
             elif "資金計画" in message_text:
                 response_text = (
                     "資金計画のご相談を承ります💰\n\n"
@@ -300,7 +409,6 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "専門スタッフが丁寧にご対応いたします！"
                 )
                 
-            # F: チャット相談
             elif "チャット相談" in message_text:
                 response_text = (
                     "チャット相談を開始します💬\n\n"
@@ -310,7 +418,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "※営業時間外のメッセージは翌営業日に返信いたします。"
                 )
             
-            # 資料請求への返信
+            # 個人情報の入力への対応
             elif any(keyword in message_text for keyword in ["〒", "郵便番号", "住所"]) and len(message_text) > 20:
                 response_text = (
                     "資料請求を受け付けました📮\n\n"
@@ -319,7 +427,6 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "ご不明な点がございましたら、お気軽にお問い合わせください😊"
                 )
                 
-            # 展示場予約への返信
             elif any(keyword in message_text for keyword in ["月", "日", "時", "予約"]) and "展示場" not in message_text and len(message_text) > 10:
                 response_text = (
                     "展示場のご予約を承りました📍\n\n"
@@ -334,7 +441,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
             
             # 通常のメッセージ（RAGチャット処理）
             if not response_text:
-                # 同期版のRAG処理を呼び出し
+                # RAG処理を呼び出し（改良版クリーンアップ適用）
                 response_text = process_rag_query_sync(message_text, user_id)
             
             # 応答を送信

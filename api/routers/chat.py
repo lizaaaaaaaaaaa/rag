@@ -77,10 +77,16 @@ def get_general_response_from_llm(query: str, llm_instance):
             return "申し訳ございません。もう一度お聞かせいただけますか？"
 
 def clean_rag_response(raw_response: str) -> str:
-    """RAG回答をクリーンアップして自然な形式に変換（改善版）"""
+    """RAG回答をクリーンアップして自然な形式に変換（大幅改良版）"""
     
-    # より包括的な不要パターンの削除
-    unwanted_patterns = [
+    if not raw_response or len(raw_response.strip()) < 3:
+        return "申し訳ございません。お尋ねの内容について詳細な情報が見つかりませんでした。"
+    
+    # 1. 最初に全体のクリーンアップ
+    cleaned = raw_response
+    
+    # 2. 構造化情報の完全削除
+    structure_patterns = [
         r"関連文書が見つかりました[:：]?\s*",
         r"関連情報が見つかりました[:：]?\s*",
         r"\d+\.\s*【質問】[^】]*】\s*",
@@ -93,66 +99,97 @@ def clean_rag_response(raw_response: str) -> str:
         r"【[^】]*】",
         r"^質問[:：]\s*",
         r"^回答[:：]\s*",
+        r"出典[:：][^\n]*",
+        r"\.pdf\s*\([pP]\d+\)",
+        r"\.pdf\s+\(p\d+\)",
     ]
     
-    # パターンマッチングで不要部分を削除
-    cleaned = raw_response
-    for pattern in unwanted_patterns:
+    for pattern in structure_patterns:
         cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE | re.IGNORECASE)
     
-    # 縦書き文字の修正（より積極的な結合）
+    # 3. 縦書き文字の修正（改良版）
     lines = cleaned.split('\n')
-    processed_lines = []
-    combined_buffer = []
+    fixed_lines = []
+    char_buffer = []
     
     for line in lines:
         line = line.strip()
         
         # 空行はスキップ
         if not line:
-            if combined_buffer:
-                # バッファに溜まったテキストを結合
-                combined_text = ''.join(combined_buffer)
-                if len(combined_text) > 3:
-                    processed_lines.append(combined_text)
-                combined_buffer = []
+            if char_buffer:
+                combined = ''.join(char_buffer)
+                if len(combined) > 2:
+                    fixed_lines.append(combined)
+                char_buffer = []
             continue
         
-        # 短い行（1-3文字）は結合候補
-        if len(line) <= 3:
-            combined_buffer.append(line)
+        # 1文字の行は結合候補
+        if len(line) == 1:
+            char_buffer.append(line)
+        elif len(line) <= 3:
+            # 2-3文字の短い行も結合候補
+            char_buffer.append(line)
         else:
-            # バッファに溜まったテキストを処理
-            if combined_buffer:
-                combined_text = ''.join(combined_buffer)
-                if len(combined_text) > 3:
-                    processed_lines.append(combined_text)
-                combined_buffer = []
-            
-            # 現在の行を追加
-            processed_lines.append(line)
+            # 長い行が来たら、バッファをクリア
+            if char_buffer:
+                combined = ''.join(char_buffer)
+                if len(combined) > 2:
+                    fixed_lines.append(combined)
+                char_buffer = []
+            fixed_lines.append(line)
     
     # 最後のバッファを処理
-    if combined_buffer:
-        combined_text = ''.join(combined_buffer)
-        if len(combined_text) > 3:
-            processed_lines.append(combined_text)
+    if char_buffer:
+        combined = ''.join(char_buffer)
+        if len(combined) > 2:
+            fixed_lines.append(combined)
     
-    # 文章を自然に結合
-    result = ' '.join(processed_lines)
+    # 4. 重複する内容の削除
+    unique_content = []
+    seen_content = set()
     
-    # 追加のクリーンアップ
-    result = re.sub(r'\s+', ' ', result)  # 複数スペースを1つに
-    result = re.sub(r'([。！？])\s*', r'\1', result)  # 句読点後のスペースを削除
-    result = re.sub(r'\.{3,}', '。', result)  # 3つ以上のドットを句点に
-    result = result.strip()
+    for line in fixed_lines:
+        # 短すぎる行はスキップ
+        if len(line) < 5:
+            continue
+            
+        # 類似する内容をチェック
+        line_normalized = re.sub(r'[。、\s]', '', line.lower())
+        
+        # 重複チェック
+        is_duplicate = False
+        for seen in seen_content:
+            if line_normalized in seen or seen in line_normalized:
+                is_duplicate = True
+                break
+        
+        if not is_duplicate:
+            seen_content.add(line_normalized)
+            unique_content.append(line)
     
-    # 「、」で終わっている場合は「。」に変更
-    if result.endswith('、'):
-        result = result[:-1] + '。'
+    # 5. 自然な文章に再構成
+    if unique_content:
+        # 最も長くて意味のある文章を選択
+        best_content = max(unique_content, key=len)
+        
+        # 文章の整形
+        result = best_content
+        result = re.sub(r'\s+', ' ', result)  # 複数スペースを1つに
+        result = re.sub(r'([。！？])\s*', r'\1', result)  # 句読点後のスペース削除
+        result = result.strip()
+        
+        # 文末の調整
+        if not result.endswith(('。', '！', '？')):
+            if result.endswith('、'):
+                result = result[:-1] + '。'
+            elif not result.endswith('.'):
+                result += '。'
+    else:
+        result = "申し訳ございません。お尋ねの内容について、詳細な情報をお答えできませんでした。"
     
-    # 最終チェック：意味のない短い回答は置き換え
-    if not result or len(result) < 10:
+    # 6. 最終的な品質チェック
+    if len(result) < 10 or "..." in result:
         result = "申し訳ございません。お尋ねの内容について、より詳しい情報をご提供するため、直接お問い合わせいただければと思います。"
     
     return result
@@ -169,7 +206,7 @@ tracer = RAGTracer()
 
 @router.post("/", summary="AI チャット")
 async def chat_endpoint(req: ChatRequest, request: Request):
-    """チャットエンドポイント（改善版）"""
+    """チャットエンドポイント（大幅改良版）"""
     logger.info(f"=== chat_endpoint called === question: {req.question}, username: {req.username}")
     
     query = req.question
@@ -227,15 +264,17 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                     result = rag_chain_template({"query": query}, callbacks=[])
                 
                 raw_answer = result.get("result", "")
+                logger.info(f"Raw RAG response: {raw_answer[:200]}...")
                 
-                # 回答をクリーンアップ（改善版を使用）
+                # 回答をクリーンアップ（大幅改良版を使用）
                 answer = clean_rag_response(raw_answer)
+                logger.info(f"Cleaned response: {answer[:200]}...")
                 
                 # --- 生成のトレース ---
                 context = "\n".join([doc.page_content for doc in docs])
                 tracer.trace_generation(query, context, answer)
 
-                # 回答が見つからない場合、Web検索も使う
+                # 回答が不十分な場合、Web検索も使う
                 if not answer or len(answer) < 20 or "関連する情報が見つかりませんでした" in answer:
                     logger.info("No relevant documents found, trying enhanced response with web search")
                     answer = web_searcher.get_enhanced_answer(query, context="", use_web_search=True)
@@ -257,7 +296,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             if llm_instance:
                 answer = get_general_response_from_llm(query, llm_instance)
             else:
-                answer = "申し訳ございません。システムが準備中です。しばらくしてから再度お試ください。"
+                answer = "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
 
     except Exception as e:
         error_id = str(uuid4())[:8]
@@ -280,10 +319,10 @@ async def chat_endpoint(req: ChatRequest, request: Request):
 
     response = {
         "answer": answer,
-        "sources": [],
+        "sources": [],  # 出典情報は非表示
         "status": "ok"
     }
-    logger.info(f"Returning response: {answer[:100]}...")
+    logger.info(f"Final response: {answer[:100]}...")
     return response
 
 @router.post("", include_in_schema=False)
