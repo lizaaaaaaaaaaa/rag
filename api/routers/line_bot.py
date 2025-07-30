@@ -1,4 +1,4 @@
-# api/routers/line_bot.py - 修正版（回答クリーンアップ強化）
+# api/routers/line_bot.py - 改善版（完全な回答生成）
 
 import os
 import logging
@@ -7,9 +7,7 @@ import re
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
 
-# asyncio問題を回避するための対策
-import asyncio
-import threading
+logger = logging.getLogger(__name__)
 
 # LINE Bot SDK v3 imports
 try:
@@ -29,14 +27,11 @@ try:
     )
     
     LINE_SDK_AVAILABLE = True
-    logger = logging.getLogger(__name__)
     logger.info("✅ LINE Bot SDK v3.5.0 loaded successfully")
     
 except ImportError as e:
     logging.getLogger(__name__).error(f"LINE Bot SDK not available: {e}")
     LINE_SDK_AVAILABLE = False
-
-logger = logging.getLogger(__name__)
 
 # LINE Bot設定
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -49,25 +44,14 @@ handler = None
 # LINE Bot APIの初期化
 if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
     try:
-        # v3 Configuration
         configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
         handler = WebhookHandler(LINE_CHANNEL_SECRET)
-        
-        # APIクライアントをグローバルで作成
         line_bot_api = MessagingApi(ApiClient(configuration))
-        
         logger.info("✅ LINE Bot API v3 initialized successfully")
     except Exception as e:
         logger.error(f"❌ LINE Bot API initialization failed: {e}")
         line_bot_api = None
         handler = None
-else:
-    line_bot_api = None
-    handler = None
-    if LINE_SDK_AVAILABLE:
-        logger.warning("⚠️ LINE Bot credentials not found")
-    else:
-        logger.warning("⚠️ LINE Bot SDK not available")
 
 router = APIRouter(prefix="/line", tags=["line"])
 
@@ -123,19 +107,19 @@ LINEでのチャットのような短めで親しみやすい応答を心がけ�
         logger.error(f"Error generating general response: {e}")
         
         if "こんにちは" in query or "はじめまして" in query:
-            return "こんにちは！🌟\nRAGチャットボットです。何でもお気軽にご質問ください！"
+            return "こんにちは！🌟\nキノエデザインホームのAIアシスタントです。住宅に関することなら何でもお気軽にご質問ください！"
         elif "ありがとう" in query:
             return "どういたしまして！😊\n他にもご質問がございましたら、いつでもお聞きください。"
         else:
             return "申し訳ございません。もう一度お聞かせいただけますか？"
 
-def clean_line_response(raw_response: str) -> str:
-    """LINE用のレスポンスクリーンアップ（改良版）"""
+def clean_line_response_advanced(raw_response: str) -> str:
+    """LINE用の高度なレスポンスクリーンアップ"""
     
     if not raw_response or len(raw_response.strip()) < 3:
         return "申し訳ございません。お答えできませんでした。"
     
-    # 1. 構造化情報とデバッグ情報の完全削除
+    # 1. デバッグ情報とメタデータの完全削除
     debug_patterns = [
         r"関連文書が見つかりました[:：]?\s*",
         r"関連情報が見つかりました[:：]?\s*",
@@ -152,170 +136,209 @@ def clean_line_response(raw_response: str) -> str:
         r"出典[:：][^\n]*",
         r"\.pdf\s*\([pP]\d+\)",
         r"\.pdf\s+\(p\d+\)",
+        r"参考文献[:：][^\n]*",
+        r"ソース[:：][^\n]*",
+        r"情報源[:：][^\n]*",
     ]
     
     cleaned = raw_response
     for pattern in debug_patterns:
         cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE | re.IGNORECASE)
     
-    # 2. 縦書き文字の修正（LINE専用改良版）
+    # 2. 縦書き文字の完全修正（改良版）
     lines = cleaned.split('\n')
-    char_accumulator = []
-    fixed_content = []
+    horizontal_content = []
+    vertical_buffer = []
     
     for line in lines:
         line = line.strip()
         
+        # 空行で区切り
         if not line:
-            # 空行で区切り
-            if char_accumulator:
-                combined = ''.join(char_accumulator)
-                if len(combined) > 3:
-                    fixed_content.append(combined)
-                char_accumulator = []
+            if vertical_buffer:
+                combined = ''.join(vertical_buffer)
+                if len(combined) > 5:  # 意味のある長さのもののみ
+                    horizontal_content.append(combined)
+                vertical_buffer = []
             continue
         
-        # 1文字の行は蓄積
-        if len(line) == 1:
-            char_accumulator.append(line)
+        # 1文字または2文字の短い行は縦書きとして蓄積
+        if len(line) <= 2:
+            vertical_buffer.append(line)
         else:
-            # まとまった文章が来た場合
-            if char_accumulator:
-                combined = ''.join(char_accumulator)
-                if len(combined) > 3:
-                    fixed_content.append(combined)
-                char_accumulator = []
+            # 通常の文章
+            if vertical_buffer:
+                combined = ''.join(vertical_buffer)
+                if len(combined) > 5:
+                    horizontal_content.append(combined)
+                vertical_buffer = []
+            horizontal_content.append(line)
+    
+    # 最後のバッファを処理
+    if vertical_buffer:
+        combined = ''.join(vertical_buffer)
+        if len(combined) > 5:
+            horizontal_content.append(combined)
+    
+    # 3. 重複排除と内容の最適化
+    if horizontal_content:
+        unique_content = []
+        seen_normalized = set()
+        
+        for content in horizontal_content:
+            if len(content) < 10:  # 短すぎる内容はスキップ
+                continue
+                
+            # 正規化（句読点と空白を除去）
+            normalized = re.sub(r'[。、\s]', '', content.lower())
             
-            # 現在の行を追加
-            fixed_content.append(line)
-    
-    # 最後の蓄積分を処理
-    if char_accumulator:
-        combined = ''.join(char_accumulator)
-        if len(combined) > 3:
-            fixed_content.append(combined)
-    
-    # 3. 重複除去と最適化
-    if fixed_content:
-        # 重複する行を除去
-        unique_lines = []
-        seen = set()
+            # 重複チェック
+            is_duplicate = False
+            for seen in seen_normalized:
+                similarity = len(set(normalized) & set(seen)) / max(len(set(normalized)), len(set(seen)), 1)
+                if similarity > 0.8:  # 80%以上似ている場合は重複とみなす
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                seen_normalized.add(normalized)
+                unique_content.append(content)
         
-        for line in fixed_content:
-            line_norm = re.sub(r'[。、\s]', '', line.lower())
-            if line_norm not in seen and len(line) > 5:
-                seen.add(line_norm)
-                unique_lines.append(line)
-        
-        # 最も長い有意な内容を選択
-        if unique_lines:
-            best_line = max(unique_lines, key=len)
-            result = best_line
+        # 最も情報量の多い内容を選択
+        if unique_content:
+            # 長さと質を考慮して最適な回答を選択
+            best_content = max(unique_content, key=lambda x: len(x) + x.count('。') * 10)
+            result = best_content
         else:
-            result = fixed_content[0] if fixed_content else ""
+            result = horizontal_content[0] if horizontal_content else ""
     else:
         result = "申し訳ございません。お答えできませんでした。"
     
-    # 4. 最終整形
-    result = re.sub(r'\s+', ' ', result)
-    result = re.sub(r'([。！？])\s*', r'\1', result)
-    result = result.strip()
+    # 4. 最終的な文章の整形
+    if result:
+        # 余分な空白の削除
+        result = re.sub(r'\s+', ' ', result)
+        # 句読点の後の空白を削除
+        result = re.sub(r'([。！？])\s*', r'\1', result)
+        result = result.strip()
+        
+        # 文末の調整
+        if result and not result.endswith(('。', '！', '？', '.')):
+            if result.endswith('、'):
+                result = result[:-1] + '。'
+            else:
+                result += '。'
     
-    # 文末調整
-    if result and not result.endswith(('。', '！', '？')):
-        if result.endswith('、'):
-            result = result[:-1] + '。'
-        elif not result.endswith('.'):
-            result += '。'
-    
-    # LINEメッセージの文字数制限
+    # 5. LINEメッセージの文字数制限（2000文字）
     if len(result) > 1800:
         result = result[:1800] + "...\n\n詳細については、お気軽にお尋ねください。"
     
-    # 最低限の内容チェック
-    if len(result) < 10:
-        result = "申し訳ございません。詳細についてはお問い合わせください。"
+    # 6. 最低限の内容チェック
+    if len(result) < 15:
+        result = "申し訳ございません。お尋ねの内容について、詳細な情報をお答えできませんでした。よろしければ、別の表現で再度お聞かせください。"
     
     return result
 
-def process_rag_query_sync(message_text: str, user_id: str) -> str:
-    """RAGを使用してメッセージを処理（改良版）"""
+def process_rag_query_safe(message_text: str, user_id: str) -> str:
+    """安全なRAG処理（エラーハンドリング強化版）"""
     try:
+        logger.info(f"Processing LINE message: {message_text[:50]}...")
+        
         globals_dict = get_app_globals()
         vectorstore = globals_dict['vectorstore']
         rag_chain_template = globals_dict['rag_chain_template']
         llm_instance = globals_dict['llm_instance']
 
-        logger.info(f"Processing LINE message: {message_text[:50]}...")
-
         if not vectorstore and not llm_instance:
             return "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
 
+        # 一般的な挨拶の場合
         if is_general_greeting_or_chat(message_text):
             logger.info("Detected general chat/greeting")
             if llm_instance:
                 return get_general_response_from_llm(message_text, llm_instance)
             else:
                 if "こんにちは" in message_text or "はじめまして" in message_text:
-                    return "こんにちは！🌟\nRAGチャットボットです。何でもお気軽にご質問ください！"
+                    return "こんにちは！🌟\nキノエデザインホームのAIアシスタントです。住宅に関することなら何でもお気軽にご質問ください！"
                 else:
                     return "お手伝いできることがあれば、お気軽にお尋ねください。"
 
+        # RAGチェーンを使用
         if vectorstore and rag_chain_template:
             try:
                 logger.info("Using RAG chain for query processing")
                 
-                if hasattr(rag_chain_template, '__call__'):
-                    result = rag_chain_template({"query": message_text})
-                elif hasattr(rag_chain_template, 'invoke'):
+                # RAGチェーンを実行
+                if hasattr(rag_chain_template, 'invoke'):
                     result = rag_chain_template.invoke({"query": message_text})
+                elif hasattr(rag_chain_template, '__call__'):
+                    result = rag_chain_template({"query": message_text})
                 else:
-                    result = rag_chain_template({"query": message_text}, callbacks=[])
+                    # フォールバック処理
+                    docs = vectorstore.similarity_search(message_text, k=3)
+                    if docs:
+                        context = "\n".join([doc.page_content for doc in docs[:2]])
+                        if llm_instance:
+                            prompt = f"""以下の情報を参考に、質問に自然で分かりやすく答えてください。
+
+参考情報: {context}
+
+質問: {message_text}
+
+自然で親しみやすい日本語で回答してください。"""
+                            
+                            response = llm_instance.invoke(prompt)
+                            raw_answer = response.content if hasattr(response, 'content') else str(response)
+                        else:
+                            raw_answer = f"関連情報が見つかりました: {context[:200]}..."
+                    else:
+                        raw_answer = "関連する情報が見つかりませんでした。"
+                    
+                    result = {"result": raw_answer}
                 
                 raw_answer = result.get("result", "")
-                logger.info(f"Raw RAG response for LINE: {raw_answer[:100]}...")
+                logger.info(f"Raw RAG response: {raw_answer[:100]}...")
                 
-                # LINE専用のクリーンアップを適用
-                answer = clean_line_response(raw_answer)
-                logger.info(f"Cleaned LINE response: {answer[:100]}...")
+                # 高度なクリーンアップを適用
+                cleaned_answer = clean_line_response_advanced(raw_answer)
+                logger.info(f"Cleaned response: {cleaned_answer[:100]}...")
                 
-                if not answer or "関連する情報が見つかりませんでした" in answer:
-                    logger.info("No relevant documents found, trying web search")
-                    try:
-                        from utils.web_search import GoogleSearcher
-                        web_searcher = GoogleSearcher()
-                        answer = web_searcher.get_enhanced_answer(
-                            message_text, context="", use_web_search=True
-                        )
-                        # Web検索結果もクリーンアップ
-                        answer = clean_line_response(answer)
-                    except Exception as web_error:
-                        logger.error(f"Web search error: {web_error}")
-                        answer = "申し訳ございません。関連する情報が見つかりませんでした。"
+                # 回答が不十分な場合のフォールバック
+                if not cleaned_answer or len(cleaned_answer) < 20 or "関連する情報が見つかりませんでした" in cleaned_answer:
+                    logger.info("No relevant answer, using fallback")
+                    if "坪単価" in message_text or "価格" in message_text:
+                        cleaned_answer = "坪単価については、お客様のご希望や仕様によって異なります。詳細なお見積りをご提供いたしますので、お気軽にお問い合わせください。"
+                    elif "仕様" in message_text or "標準" in message_text:
+                        cleaned_answer = "住宅の標準仕様については、高品質な住まいをご提供するため、様々な設備や性能を標準装備としております。詳細は展示場でご確認いただけます。"
+                    else:
+                        cleaned_answer = "申し訳ございません。詳細については、お気軽にお問い合わせください。専門スタッフが丁寧にご説明いたします。"
                 
-                return answer
+                return cleaned_answer
                 
             except Exception as e:
                 logger.error(f"RAG chain error: {e}")
+                logger.error(traceback.format_exc())
+                # エラー時のフォールバック
                 if llm_instance:
                     return get_general_response_from_llm(message_text, llm_instance)
                 else:
-                    return "申し訳ございません。質問の処理中にエラーが発生しました。"
+                    return "申し訳ございません。一時的にエラーが発生しました。しばらくしてから再度お試しください。"
         else:
+            # RAGが利用できない場合
             if llm_instance:
                 return get_general_response_from_llm(message_text, llm_instance)
             else:
                 return "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
 
     except Exception as e:
-        logger.error(f"Error processing RAG query: {e}")
+        logger.error(f"Critical error in process_rag_query_safe: {e}")
         logger.error(traceback.format_exc())
         return "システムエラーが発生しました。管理者にお問い合わせください。"
 
 # Webhook エンドポイント
 @router.post("/webhook")
 async def line_webhook(request: Request):
-    """LINE Webhook エンドポイント (v3対応)"""
+    """LINE Webhook エンドポイント (改善版)"""
     if not line_bot_api or not handler:
         logger.error("LINE Bot not configured properly")
         raise HTTPException(status_code=500, detail="LINE Bot not configured")
@@ -336,25 +359,25 @@ async def line_webhook(request: Request):
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal server error")
 
-# イベントハンドラー (v3対応・リッチメニュー完全対応版)
+# イベントハンドラー (改善版)
 if LINE_SDK_AVAILABLE and handler and line_bot_api:
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """テキストメッセージの処理 (v3対応・改良版)"""
+        """テキストメッセージの処理 (改善版)"""
         try:
             user_id = event.source.user_id
             message_text = event.message.text.strip()
             
             logger.info(f"Received LINE message from {user_id}: {message_text}")
             
-            # リッチメニューからのメッセージ処理
+            # リッチメニューからのメッセージ処理（改良版）
             response_text = None
             
-            # リッチメニューボタンの判定（部分一致で対応）
+            # より柔軟な部分一致での判定
             if "AI相談" in message_text:
                 response_text = (
                     "AI相談を開始します！🤖\n\n"
-                    "ご質問やお悩みを自由に入力してください😊\n"
+                    "住宅に関するご質問やお悩みを自由にご入力ください😊\n\n"
                     "例えば：\n"
                     "・おすすめの住宅設計は？\n"
                     "・価格について教えて\n"
@@ -381,17 +404,17 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "例：\n"
                     "山田太郎\n"
                     "〒123-4567\n"
-                    "東京都渋谷区〇〇1-2-3\n"
+                    "東京都○○区○○1-2-3\n"
                     "090-1234-5678"
                 )
                 
-            elif "展示場" in message_text and "予約" in message_text:
+            elif "展示場" in message_text and ("予約" in message_text or "来場" in message_text):
                 response_text = (
                     "展示場のご予約を承ります📍\n\n"
                     "ご希望の日時をお知らせください。\n"
                     "営業時間：9:00〜18:00\n\n"
                     "例：\n"
-                    "「1月15日（水）14時に予約したいです」\n\n"
+                    "「2月15日（木）14時に予約したいです」\n\n"
                     "※土日は混雑することがございます。\n"
                     "平日のご来場がおすすめです😊"
                 )
@@ -418,33 +441,12 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     "※営業時間外のメッセージは翌営業日に返信いたします。"
                 )
             
-            # 個人情報の入力への対応
-            elif any(keyword in message_text for keyword in ["〒", "郵便番号", "住所"]) and len(message_text) > 20:
-                response_text = (
-                    "資料請求を受け付けました📮\n\n"
-                    "ご記入いただいた住所に資料をお送りいたします。\n"
-                    "到着まで3〜5営業日ほどお待ちください。\n\n"
-                    "ご不明な点がございましたら、お気軽にお問い合わせください😊"
-                )
-                
-            elif any(keyword in message_text for keyword in ["月", "日", "時", "予約"]) and "展示場" not in message_text and len(message_text) > 10:
-                response_text = (
-                    "展示場のご予約を承りました📍\n\n"
-                    "ご希望の日時で仮予約いたしました。\n"
-                    "確定後、改めてご連絡いたします。\n\n"
-                    "当日は以下をご持参ください：\n"
-                    "・ご家族の情報\n"
-                    "・ご希望の間取りイメージ\n"
-                    "・ご予算の目安\n\n"
-                    "お会いできるのを楽しみにしています！"
-                )
-            
             # 通常のメッセージ（RAGチャット処理）
             if not response_text:
-                # RAG処理を呼び出し（改良版クリーンアップ適用）
-                response_text = process_rag_query_sync(message_text, user_id)
+                # 安全なRAG処理を呼び出し
+                response_text = process_rag_query_safe(message_text, user_id)
             
-            # 応答を送信
+            # 応答を送信（エラーハンドリング強化）
             try:
                 line_bot_api.reply_message_with_http_info(
                     ReplyMessageRequest(
@@ -452,14 +454,16 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                         messages=[TextMessage(text=response_text)]
                     )
                 )
-                logger.info(f"Sent response to {user_id}: {response_text[:50]}...")
+                logger.info(f"Successfully sent response to {user_id}: {response_text[:50]}...")
             except Exception as api_error:
-                logger.error(f"Failed to send response: {api_error}")
+                logger.error(f"Failed to send LINE response: {api_error}")
+                logger.error(traceback.format_exc())
             
         except Exception as e:
             logger.error(f"Error handling text message: {e}")
             logger.error(traceback.format_exc())
             
+            # エラー時の緊急対応
             try:
                 error_message = "申し訳ございません。一時的にエラーが発生しています。しばらくしてから再度お試しください。"
                 line_bot_api.reply_message_with_http_info(
@@ -469,11 +473,11 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                     )
                 )
             except:
-                pass
+                logger.error("Failed to send error message")
 
     @handler.add(FollowEvent)
     def handle_follow(event):
-        """友達追加時の処理 (v3対応)"""
+        """友達追加時の処理 (改善版)"""
         try:
             user_id = event.source.user_id
             logger.info(f"New follower: {user_id}")
@@ -483,12 +487,12 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                 "キノエデザインホームです。\n"
                 "家づくりに関するご相談を承っております。\n\n"
                 "下のメニューから、お好きな項目をお選びください：\n"
-                "A: AI相談 - AIが質問に即座に回答\n"
-                "B: AI住まいサイト - 準備中\n"
-                "C: 資料請求 - パンフレットをお送りします\n"
-                "D: 展示場予約 - 実際の家を見学\n"
-                "E: 資金計画 - お金の相談\n"
-                "F: チャット相談 - スタッフと直接相談\n\n"
+                "• AI相談 - AIが質問に即座に回答\n"
+                "• AI住まいサイト - 準備中\n"
+                "• 資料請求 - パンフレットをお送りします\n"
+                "• 展示場予約 - 実際の家を見学\n"
+                "• 資金計画 - お金の相談\n"
+                "• チャット相談 - スタッフと直接相談\n\n"
                 "お気軽にご利用ください！"
             )
             
@@ -501,7 +505,7 @@ if LINE_SDK_AVAILABLE and handler and line_bot_api:
                 )
                 logger.info(f"Sent welcome message to new follower: {user_id}")
             except Exception as api_error:
-                logger.error(f"Failed to send welcome message to follower: {api_error}")
+                logger.error(f"Failed to send welcome message: {api_error}")
             
         except Exception as e:
             logger.error(f"Error handling follow event: {e}")
@@ -525,35 +529,17 @@ def test_line_bot_connection():
     if not LINE_SDK_AVAILABLE:
         return {
             "status": "error",
-            "message": "LINE Bot SDK not available. Please install: pip install line-bot-sdk==3.5.0",
-            "config": {
-                "access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
-                "channel_secret_set": bool(LINE_CHANNEL_SECRET)
-            }
+            "message": "LINE Bot SDK not available. Please install: pip install line-bot-sdk==3.5.0"
         }
     
     if not line_bot_api:
         return {
             "status": "error",
-            "message": "LINE Bot not configured",
-            "config": {
-                "access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
-                "channel_secret_set": bool(LINE_CHANNEL_SECRET)
-            }
+            "message": "LINE Bot not configured"
         }
     
-    try:
-        return {
-            "status": "success",
-            "message": "LINE Bot API is configured correctly (SDK v3.5.0)",
-            "webhook_url": "https://rag-api-190389115361.asia-northeast1.run.app/line/webhook",
-            "config": {
-                "access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
-                "channel_secret_set": bool(LINE_CHANNEL_SECRET)
-            }
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"LINE Bot API test failed: {str(e)}"
-        }
+    return {
+        "status": "success",
+        "message": "LINE Bot API is configured correctly (SDK v3.5.0)",
+        "webhook_url": "https://rag-api-190389115361.asia-northeast1.run.app/line/webhook"
+    }
