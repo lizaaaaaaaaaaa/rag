@@ -32,23 +32,25 @@ except ImportError as e:
     logger.error(f"❌ LINE Bot SDK not available: {e}")
     LINE_SDK_AVAILABLE = False
 
-# LINE Bot設定の改善
+# LINE Bot設定
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 
-# デバッグ用ログ
+# デバッグ用ログ（修正版）
 logger.info(f"ENV: {os.getenv('ENV')}")
 logger.info(f"ACCESS_TOKEN available: {bool(LINE_CHANNEL_ACCESS_TOKEN)}")
 logger.info(f"SECRET available: {bool(LINE_CHANNEL_SECRET)}")
 if LINE_CHANNEL_ACCESS_TOKEN:
-    logger.info(f"ACCESS_TOKEN prefix: {LINE_CHANNEL_ACCESS_TOKEN[:10]}...")
+    logger.info(f"ACCESS_TOKEN prefix: {LINE_CHANNEL_ACCESS_TOKEN[:20]}...")
+if LINE_CHANNEL_SECRET:
+    logger.info(f"SECRET prefix: {LINE_CHANNEL_SECRET[:10]}...")
 
 # グローバル変数でAPI clientを保持
 line_bot_api = None
 handler = None
 
-# LINE Bot APIの初期化（エラーハンドリング強化）
 def initialize_line_bot():
+    """LINE Bot APIの初期化（エラーハンドリング強化版）"""
     global line_bot_api, handler
     
     if not LINE_SDK_AVAILABLE:
@@ -69,7 +71,7 @@ def initialize_line_bot():
             access_token=LINE_CHANNEL_ACCESS_TOKEN
         )
         
-        # Handler作成
+        # Handler作成（署名検証を厳格に）
         handler = WebhookHandler(LINE_CHANNEL_SECRET)
         
         # APIクライアント作成
@@ -102,50 +104,88 @@ def get_app_globals():
         logger.error(f"Failed to get app globals: {e}")
         return {'vectorstore': None, 'rag_chain_template': None, 'llm_instance': None}
 
-# リッチメニューメッセージの改善された判定
 def detect_richmenu_action(message_text: str) -> str:
-    """リッチメニューのアクションを検出（部分一致で柔軟に対応）"""
+    """リッチメニューのアクションを検出（改良版）"""
     text = message_text.strip()
+    logger.info(f"🔍 Analyzing message: '{text}'")
     
-    # AI相談の判定（複数パターンに対応）
-    if any(keyword in text for keyword in ["AI相談", "AIとお話", "🤖"]):
+    # AI相談の判定（より柔軟に）
+    ai_patterns = ["AI相談", "AIとお話", "🤖", "ai相談", "エーアイ相談"]
+    if any(keyword in text for keyword in ai_patterns):
+        logger.info("✅ Detected: ai_consultation")
         return "ai_consultation"
     
     # AI住まいサイトの判定
-    if any(keyword in text for keyword in ["AI住まいサイ", "住まいホーム", "🌐", "準備中"]):
+    site_patterns = ["AI住まいサイ", "住まいホーム", "🌐", "準備中"]
+    if any(keyword in text for keyword in site_patterns):
+        logger.info("✅ Detected: ai_website")
         return "ai_website"
     
     # 資料請求の判定
-    if any(keyword in text for keyword in ["資料請求", "📋", "送付先"]):
+    doc_patterns = ["資料請求", "📋", "送付先"]
+    if any(keyword in text for keyword in doc_patterns):
+        logger.info("✅ Detected: document_request")
         return "document_request"
     
     # 展示場予約の判定
-    if any(keyword in text for keyword in ["展示場", "来場", "予約", "📍"]):
+    showroom_patterns = ["展示場", "来場", "予約", "📍"]
+    if any(keyword in text for keyword in showroom_patterns):
+        logger.info("✅ Detected: showroom_booking")
         return "showroom_booking"
     
     # 資金計画の判定
-    if any(keyword in text for keyword in ["資金計画", "💰", "金融相談"]):
+    finance_patterns = ["資金計画", "💰", "金融相談"]
+    if any(keyword in text for keyword in finance_patterns):
+        logger.info("✅ Detected: financial_planning")
         return "financial_planning"
     
     # チャット相談の判定
-    if any(keyword in text for keyword in ["チャット相談", "💬", "スタッフ"]):
+    chat_patterns = ["チャット相談", "💬", "スタッフ"]
+    if any(keyword in text for keyword in chat_patterns):
+        logger.info("✅ Detected: chat_consultation")
         return "chat_consultation"
     
-    return "unknown"
+    logger.info("⚠️ No specific action detected, treating as general query")
+    return "general_query"
 
-def process_richmenu_message(action: str, user_id: str) -> str:
-    """リッチメニューアクションに対する応答を生成"""
+def process_richmenu_message(action: str, user_id: str, message_text: str) -> str:
+    """リッチメニューアクションに対する応答を生成（改良版）"""
     
     if action == "ai_consultation":
-        return (
-            "AI相談を開始します！🤖\n\n"
-            "住宅に関するご質問やお悩みを自由にご入力ください。\n"
-            "例えば：\n"
-            "・住宅の坪単価について教えて\n"
-            "・標準仕様はどのような内容ですか？\n"
-            "・ZEH住宅について知りたい\n\n"
-            "どんなことでもお気軽にどうぞ！😊"
-        )
+        logger.info("🤖 Processing AI consultation request")
+        
+        # RAGチェーンを使用してAI回答を生成
+        try:
+            globals_dict = get_app_globals()
+            if globals_dict['rag_chain_template']:
+                # 実際の質問として処理
+                if "開始" in message_text or "お話" in message_text:
+                    return (
+                        "AI相談を開始します！🤖\n\n"
+                        "住宅に関するご質問やお悩みを自由にご入力ください。\n"
+                        "例えば：\n"
+                        "・住宅の坪単価について教えて\n"
+                        "・標準仕様はどのような内容ですか？\n"
+                        "・ZEH住宅について知りたい\n\n"
+                        "どんなことでもお気軽にどうぞ！😊"
+                    )
+                else:
+                    # 具体的な質問として処理
+                    result = globals_dict['rag_chain_template'].invoke({"query": message_text})
+                    return result.get("result", "申し訳ございません。回答を生成できませんでした。")
+            else:
+                return (
+                    "AI相談を開始します！🤖\n\n"
+                    "申し訳ございません。現在システムが準備中です。\n"
+                    "しばらくしてから再度お試しください。"
+                )
+        except Exception as e:
+            logger.error(f"AI consultation error: {e}")
+            return (
+                "AI相談を開始します！🤖\n\n"
+                "申し訳ございません。一時的にエラーが発生しました。\n"
+                "しばらくしてから再度お試しください。"
+            )
     
     elif action == "ai_website":
         return (
@@ -203,6 +243,19 @@ def process_richmenu_message(action: str, user_id: str) -> str:
             "※営業時間外のメッセージは翌営業日に返信いたします。"
         )
     
+    elif action == "general_query":
+        # 一般的なクエリとしてRAG処理
+        try:
+            globals_dict = get_app_globals()
+            if globals_dict['rag_chain_template']:
+                result = globals_dict['rag_chain_template'].invoke({"query": message_text})
+                return result.get("result", "申し訳ございません。回答を生成できませんでした。")
+            else:
+                return "申し訳ございません。システムが準備中です。"
+        except Exception as e:
+            logger.error(f"General query processing error: {e}")
+            return "申し訳ございません。一時的にエラーが発生しました。"
+    
     else:
         return (
             "メッセージを受信いたしました。\n\n"
@@ -213,7 +266,7 @@ def process_richmenu_message(action: str, user_id: str) -> str:
 # Webhook エンドポイント
 @router.post("/webhook")
 async def line_webhook(request: Request):
-    """LINE Webhook エンドポイント"""
+    """LINE Webhook エンドポイント（署名検証強化版）"""
     if not initialization_success:
         logger.error("LINE Bot not properly initialized")
         raise HTTPException(status_code=503, detail="LINE Bot service unavailable")
@@ -221,16 +274,22 @@ async def line_webhook(request: Request):
     body = await request.body()
     signature = request.headers.get("X-Line-Signature", "")
     
-    logger.info(f"Received webhook: body_size={len(body)}")
+    logger.info(f"📨 Received webhook: body_size={len(body)}, signature_present={bool(signature)}")
+    
+    if not signature:
+        logger.error("❌ Missing X-Line-Signature header")
+        raise HTTPException(status_code=400, detail="Missing signature")
     
     try:
+        # 署名検証を実行
         handler.handle(body.decode('utf-8'), signature)
+        logger.info("✅ Webhook processed successfully")
         return {"status": "ok"}
     except InvalidSignatureError:
-        logger.error("Invalid signature")
+        logger.error("❌ Invalid signature - webhook rejected")
         raise HTTPException(status_code=400, detail="Invalid signature")
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error(f"❌ Webhook processing error: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -238,35 +297,20 @@ async def line_webhook(request: Request):
 if initialization_success and handler:
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """テキストメッセージの処理"""
+        """テキストメッセージの処理（改良版）"""
         try:
             user_id = event.source.user_id
             message_text = event.message.text.strip()
             
-            logger.info(f"📨 Received message from {user_id}: '{message_text}'")
+            logger.info(f"📨 Processing message from {user_id}: '{message_text}'")
             
             # リッチメニューアクションを検出
             action = detect_richmenu_action(message_text)
-            logger.info(f"🔍 Detected action: {action}")
             
-            if action == "ai_consultation":
-                # AI相談の場合は直接RAG処理を開始
-                response_text = process_richmenu_message(action, user_id)
-            elif action != "unknown":
-                # その他のリッチメニューアクション
-                response_text = process_richmenu_message(action, user_id)
-            else:
-                # 通常のAI回答（RAGチェーン使用）
-                try:
-                    globals_dict = get_app_globals()
-                    if globals_dict['rag_chain_template']:
-                        result = globals_dict['rag_chain_template'].invoke({"query": message_text})
-                        response_text = result.get("result", "申し訳ございません。回答を生成できませんでした。")
-                    else:
-                        response_text = "申し訳ございません。システムが準備中です。"
-                except Exception as rag_error:
-                    logger.error(f"RAG processing error: {rag_error}")
-                    response_text = "申し訳ございません。一時的にエラーが発生しました。"
+            # 応答メッセージを生成
+            response_text = process_richmenu_message(action, user_id, message_text)
+            
+            logger.info(f"📤 Sending response ({len(response_text)} chars): {response_text[:100]}...")
             
             # 応答を送信
             try:
@@ -279,6 +323,7 @@ if initialization_success and handler:
                 logger.info(f"✅ Successfully sent response to {user_id}")
             except Exception as api_error:
                 logger.error(f"❌ Failed to send response: {api_error}")
+                logger.error(traceback.format_exc())
             
         except Exception as e:
             logger.error(f"❌ Error handling message: {e}")
@@ -289,7 +334,7 @@ if initialization_success and handler:
         """友達追加時の処理"""
         try:
             user_id = event.source.user_id
-            logger.info(f"New follower: {user_id}")
+            logger.info(f"👥 New follower: {user_id}")
             
             welcome_message = (
                 "友達追加ありがとうございます！🎉\n\n"
@@ -314,6 +359,7 @@ if initialization_success and handler:
             
         except Exception as e:
             logger.error(f"❌ Error handling follow event: {e}")
+            logger.error(traceback.format_exc())
 
 # ステータス確認エンドポイント
 @router.get("/status")
