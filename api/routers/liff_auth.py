@@ -182,3 +182,65 @@ async def get_liff_config():
         "liff_id": os.getenv("LIFF_APP_ID"),
         "api_endpoint": os.getenv("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
     }
+    
+
+# api/routers/liff_auth.py に追加するデバッグエンドポイント
+
+@router.get("/debug", summary="LIFF設定デバッグ情報")
+async def debug_liff_config():
+    """
+    LIFF設定の詳細なデバッグ情報を返す
+    """
+    return {
+        "environment_variables": {
+            "LINE_LOGIN_CHANNEL_ID": os.getenv("LINE_LOGIN_CHANNEL_ID"),
+            "LINE_LOGIN_CHANNEL_SECRET_SET": bool(os.getenv("LINE_LOGIN_CHANNEL_SECRET")),
+            "LIFF_APP_ID": os.getenv("LIFF_APP_ID"),
+            "JWT_SECRET_SET": bool(os.getenv("JWT_SECRET")),
+            "API_URL": os.getenv("API_URL"),
+            "FRONTEND_URL": os.getenv("FRONTEND_URL")
+        },
+        "expected_urls": {
+            "liff_endpoint": f"{os.getenv('FRONTEND_URL', 'https://rag-frontend-190389115361.asia-northeast1.run.app')}/liff-chat.html",
+            "api_verify_token": f"{os.getenv('API_URL', 'https://rag-api-190389115361.asia-northeast1.run.app')}/liff/verify-token",
+            "api_config": f"{os.getenv('API_URL', 'https://rag-api-190389115361.asia-northeast1.run.app')}/liff/config"
+        },
+        "validation": {
+            "liff_id_format_valid": _validate_liff_id_format(os.getenv("LIFF_APP_ID")),
+            "channel_id_matches": _validate_channel_id_match(),
+            "https_urls": _validate_https_urls()
+        }
+    }
+
+def _validate_liff_id_format(liff_id: str) -> bool:
+    """LIFF IDの形式を検証"""
+    if not liff_id:
+        return False
+    
+    # 正しい形式: チャネルID-英数字
+    import re
+    pattern = r'^\d+-[a-zA-Z0-9]+$'
+    return bool(re.match(pattern, liff_id))
+
+def _validate_channel_id_match() -> bool:
+    """チャネルIDとLIFF IDの一致を確認"""
+    channel_id = os.getenv("LINE_LOGIN_CHANNEL_ID")
+    liff_id = os.getenv("LIFF_APP_ID")
+    
+    if not channel_id or not liff_id:
+        return False
+    
+    return liff_id.startswith(channel_id)
+
+def _validate_https_urls() -> dict:
+    """URL設定のHTTPS確認"""
+    api_url = os.getenv("API_URL", "")
+    frontend_url = os.getenv("FRONTEND_URL", "")
+    
+    return {
+        "api_url_https": api_url.startswith("https://"),
+        "frontend_url_https": frontend_url.startswith("https://"),
+        "api_url": api_url,
+        "frontend_url": frontend_url
+    }    
+        
