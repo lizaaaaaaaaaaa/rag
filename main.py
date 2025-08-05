@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from api.routers import upload, chat, google_oauth, healthz, line_bot, liff_auth
+from api.routers import upload, chat, google_oauth, healthz, line_bot, liff_auth, line_login
 
 # ログ設定
 logging.basicConfig(
@@ -166,6 +168,8 @@ app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(google_oauth.router, tags=["auth"])
 app.include_router(healthz.router, prefix="", tags=["healthz"])
 app.include_router(line_bot.router, tags=["line"])
+app.include_router(liff_auth.router, tags=["liff"])
+app.include_router(line_login.router, tags=["line-login"])
 
 # 静的ファイル
 pdf_dir = os.path.join("rag", "vectorstore", "pdfs")
@@ -247,6 +251,29 @@ def test_langsmith():
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@app.get("/debug/liff")
+def debug_liff():
+    """LIFF設定のデバッグ情報"""
+    return {
+        "line_login_channel_id": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID")),
+        "line_login_channel_secret": bool(os.environ.get("LINE_LOGIN_CHANNEL_SECRET")),
+        "liff_app_id": os.environ.get("LIFF_APP_ID"),
+        "jwt_secret_set": bool(os.environ.get("JWT_SECRET")),
+        "api_url": os.environ.get("API_URL")
+    }    
+
+@app.get("/debug/line-login")
+def debug_line_login():
+    """LINEログイン設定のデバッグ情報"""
+    return {
+        "line_login_channel_id": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID")),
+        "line_login_channel_secret": bool(os.environ.get("LINE_LOGIN_CHANNEL_SECRET")),
+        "jwt_secret_set": bool(os.environ.get("JWT_SECRET")),
+        "callback_url": f"{os.environ.get('API_URL')}/line-login/callback",
+        "auth_url": f"{os.environ.get('API_URL')}/line-login/auth",
+        "frontend_url": os.environ.get("FRONTEND_URL"),
+    }
 
 # CORS preflight handling
 @app.options("/{path:path}")
