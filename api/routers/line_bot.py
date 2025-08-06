@@ -1,4 +1,4 @@
-# api/routers/line_bot.py - 修正版
+# api/routers/line_bot.py - 修正版（リッチメニュー完全対応）
 
 import os
 import logging
@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request, HTTPException
 
 logger = logging.getLogger(__name__)
 
-# LINE Bot SDK v3 imports with error handling
+# LINE Bot SDK v3 imports
 try:
     from linebot.v3 import WebhookHandler
     from linebot.v3.exceptions import InvalidSignatureError
@@ -36,14 +36,10 @@ except ImportError as e:
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 
-# デバッグ用ログ（修正版）
+# デバッグ用ログ
 logger.info(f"ENV: {os.getenv('ENV')}")
 logger.info(f"ACCESS_TOKEN available: {bool(LINE_CHANNEL_ACCESS_TOKEN)}")
 logger.info(f"SECRET available: {bool(LINE_CHANNEL_SECRET)}")
-if LINE_CHANNEL_ACCESS_TOKEN:
-    logger.info(f"ACCESS_TOKEN prefix: {LINE_CHANNEL_ACCESS_TOKEN[:20]}...")
-if LINE_CHANNEL_SECRET:
-    logger.info(f"SECRET prefix: {LINE_CHANNEL_SECRET[:10]}...")
 
 # グローバル変数でAPI clientを保持
 line_bot_api = None
@@ -71,7 +67,7 @@ def initialize_line_bot():
             access_token=LINE_CHANNEL_ACCESS_TOKEN
         )
         
-        # Handler作成（署名検証を厳格に）
+        # Handler作成
         handler = WebhookHandler(LINE_CHANNEL_SECRET)
         
         # APIクライアント作成
@@ -104,99 +100,116 @@ def get_app_globals():
         logger.error(f"Failed to get app globals: {e}")
         return {'vectorstore': None, 'rag_chain_template': None, 'llm_instance': None}
 
-def detect_richmenu_action(message_text: str) -> str:
-    """リッチメニューのアクションを検出（改良版）"""
-    text = message_text.strip()
-    logger.info(f"🔍 Analyzing message: '{text}'")
-    
-    # AI相談の判定（より柔軟に）
-    ai_patterns = ["AI相談", "AIとお話", "🤖", "ai相談", "エーアイ相談"]
-    if any(keyword in text for keyword in ai_patterns):
-        logger.info("✅ Detected: ai_consultation")
-        return "ai_consultation"
-    
-    # AI住まいサイトの判定
-    site_patterns = ["AI住まいサイ", "住まいホーム", "🌐", "準備中"]
-    if any(keyword in text for keyword in site_patterns):
-        logger.info("✅ Detected: ai_website")
-        return "ai_website"
-    
-    # 資料請求の判定
-    doc_patterns = ["資料請求", "📋", "送付先"]
-    if any(keyword in text for keyword in doc_patterns):
-        logger.info("✅ Detected: document_request")
-        return "document_request"
-    
-    # 展示場予約の判定
-    showroom_patterns = ["展示場", "来場", "予約", "📍"]
-    if any(keyword in text for keyword in showroom_patterns):
-        logger.info("✅ Detected: showroom_booking")
-        return "showroom_booking"
-    
-    # 資金計画の判定
-    finance_patterns = ["資金計画", "💰", "金融相談"]
-    if any(keyword in text for keyword in finance_patterns):
-        logger.info("✅ Detected: financial_planning")
-        return "financial_planning"
-    
-    # チャット相談の判定
-    chat_patterns = ["チャット相談", "💬", "スタッフ"]
-    if any(keyword in text for keyword in chat_patterns):
-        logger.info("✅ Detected: chat_consultation")
-        return "chat_consultation"
-    
-    logger.info("⚠️ No specific action detected, treating as general query")
-    return "general_query"
-
-def process_richmenu_message(action: str, user_id: str, message_text: str) -> str:
-    """リッチメニューアクションに対する応答を生成（改良版）"""
-    
-    if action == "ai_consultation":
-        logger.info("🤖 Processing AI consultation request")
+def process_message_with_rag(message_text: str, user_id: str) -> str:
+    """RAGを使用してメッセージを処理"""
+    try:
+        globals_dict = get_app_globals()
         
-        # RAGチェーンを使用してAI回答を生成
-        try:
-            globals_dict = get_app_globals()
-            if globals_dict['rag_chain_template']:
-                # 実際の質問として処理
-                if "開始" in message_text or "お話" in message_text:
-                    return (
-                        "AI相談を開始します！🤖\n\n"
-                        "住宅に関するご質問やお悩みを自由にご入力ください。\n"
-                        "例えば：\n"
-                        "・住宅の坪単価について教えて\n"
-                        "・標準仕様はどのような内容ですか？\n"
-                        "・ZEH住宅について知りたい\n\n"
-                        "どんなことでもお気軽にどうぞ！😊"
-                    )
-                else:
-                    # 具体的な質問として処理
-                    result = globals_dict['rag_chain_template'].invoke({"query": message_text})
-                    return result.get("result", "申し訳ございません。回答を生成できませんでした。")
-            else:
-                return (
-                    "AI相談を開始します！🤖\n\n"
-                    "申し訳ございません。現在システムが準備中です。\n"
-                    "しばらくしてから再度お試しください。"
-                )
-        except Exception as e:
-            logger.error(f"AI consultation error: {e}")
-            return (
-                "AI相談を開始します！🤖\n\n"
-                "申し訳ございません。一時的にエラーが発生しました。\n"
-                "しばらくしてから再度お試しください。"
-            )
+        # LLMが利用可能な場合は直接使用
+        if globals_dict['llm_instance']:
+            llm = globals_dict['llm_instance']
+            prompt = f"""あなたは親切で知識豊富な住宅・建築の専門アドバイザーです。
+以下の質問に対して、自然で分かりやすい日本語で回答してください。
+
+質問: {message_text}
+
+回答は簡潔で具体的にお願いします。"""
+            
+            response = llm.invoke(prompt)
+            result = response.content if hasattr(response, 'content') else str(response)
+            return result
+            
+        # RAGチェーンが利用可能な場合
+        elif globals_dict['rag_chain_template']:
+            result = globals_dict['rag_chain_template'].invoke({"query": message_text})
+            return result.get("result", "申し訳ございません。回答を生成できませんでした。")
+        
+        # どちらも利用できない場合
+        else:
+            return "申し訳ございません。現在システムが準備中です。しばらくしてから再度お試しください。"
+            
+    except Exception as e:
+        logger.error(f"RAG processing error: {e}")
+        return "申し訳ございません。一時的にエラーが発生しました。しばらくしてから再度お試しください。"
+
+def detect_and_process_message(message_text: str, user_id: str) -> str:
+    """メッセージを検出して適切な応答を返す（完全版）"""
     
-    elif action == "ai_website":
-        return (
+    text = message_text.strip()
+    logger.info(f"🔍 Received message from {user_id}: '{text}'")
+    
+    # まず完全一致を試みる（リッチメニューからの定型メッセージ）
+    exact_responses = {
+        "AI相談": "ai_consultation",
+        "AI住まいサイト": "ai_website",
+        "資料請求": "document_request",
+        "展示場来場予約": "showroom_booking",
+        "資金計画": "financial_planning",
+        "チャット相談": "chat_consultation"
+    }
+    
+    # 完全一致チェック
+    for key, action in exact_responses.items():
+        if text == key:
+            logger.info(f"✅ Exact match detected: {action}")
+            return generate_action_response(action, user_id, text)
+    
+    # 部分一致チェック（リッチメニューのテキストが複雑な場合）
+    # AI相談関連
+    if any(keyword in text for keyword in ["AI相談", "AIとお話", "AI相談を開始", "🤖"]):
+        logger.info("✅ Detected: AI consultation request")
+        return generate_action_response("ai_consultation", user_id, text)
+    
+    # AI住まいサイト関連
+    elif any(keyword in text for keyword in ["AI住まいサイト", "AIまよいサイト", "住まいホーム", "🌐"]):
+        logger.info("✅ Detected: AI website")
+        return generate_action_response("ai_website", user_id, text)
+    
+    # 資料請求関連
+    elif any(keyword in text for keyword in ["資料請求", "📋", "送付先"]):
+        logger.info("✅ Detected: document request")
+        return generate_action_response("document_request", user_id, text)
+    
+    # 展示場予約関連
+    elif any(keyword in text for keyword in ["展示場", "来場", "予約", "📍"]):
+        logger.info("✅ Detected: showroom booking")
+        return generate_action_response("showroom_booking", user_id, text)
+    
+    # 資金計画関連
+    elif any(keyword in text for keyword in ["資金計画", "💰", "金融相談"]):
+        logger.info("✅ Detected: financial planning")
+        return generate_action_response("financial_planning", user_id, text)
+    
+    # チャット相談関連
+    elif any(keyword in text for keyword in ["チャット相談", "💬", "スタッフ"]):
+        logger.info("✅ Detected: chat consultation")
+        return generate_action_response("chat_consultation", user_id, text)
+    
+    # どれにも該当しない場合は通常のAI回答として処理
+    else:
+        logger.info("ℹ️ Processing as general AI query")
+        return process_message_with_rag(text, user_id)
+
+def generate_action_response(action: str, user_id: str, original_message: str) -> str:
+    """アクションに応じた応答を生成"""
+    
+    responses = {
+        "ai_consultation": (
+            "AI相談を開始します！🤖\n\n"
+            "住宅に関するご質問やお悩みを自由にご入力ください。\n"
+            "例えば：\n"
+            "・住宅の坪単価について教えて\n"
+            "・標準仕様はどのような内容ですか？\n"
+            "・ZEH住宅について知りたい\n\n"
+            "どんなことでもお気軽にどうぞ！😊"
+        ),
+        "ai_website": (
             "AI住まいサイトは現在準備中です🏗️\n\n"
             "近日公開予定ですので、もうしばらくお待ちください。\n"
             "公開されましたらお知らせいたします！\n\n"
             "他にご質問がございましたら、お気軽にお尋ねください😊"
-        )
-    
-    elif action == "document_request":
-        return (
+        ),
+        "document_request": (
             "資料請求を承ります📋\n\n"
             "以下の情報をお送りください：\n"
             "1. お名前（フルネーム）\n"
@@ -208,10 +221,8 @@ def process_richmenu_message(action: str, user_id: str, message_text: str) -> st
             "〒123-4567\n"
             "東京都○○区○○1-2-3\n"
             "090-1234-5678"
-        )
-    
-    elif action == "showroom_booking":
-        return (
+        ),
+        "showroom_booking": (
             "展示場のご予約を承ります📍\n\n"
             "ご希望の日時をお知らせください。\n"
             "営業時間：9:00〜18:00\n\n"
@@ -219,10 +230,8 @@ def process_richmenu_message(action: str, user_id: str, message_text: str) -> st
             "「2月15日（木）14時に予約したいです」\n\n"
             "※土日は混雑することがございます。\n"
             "平日のご来場がおすすめです😊"
-        )
-    
-    elif action == "financial_planning":
-        return (
+        ),
+        "financial_planning": (
             "資金計画のご相談を承ります💰\n\n"
             "まず、以下の情報をお送りください：\n"
             "1. お名前\n"
@@ -232,47 +241,39 @@ def process_richmenu_message(action: str, user_id: str, message_text: str) -> st
             "   - 来店相談\n"
             "   - 電話相談\n\n"
             "専門スタッフが丁寧にご対応いたします！"
-        )
-    
-    elif action == "chat_consultation":
-        return (
+        ),
+        "chat_consultation": (
             "チャット相談を開始します💬\n\n"
             "スタッフが対応いたします。\n"
             "お気軽にご相談内容をお送りください！\n\n"
             "営業時間：9:00〜18:00\n"
             "※営業時間外のメッセージは翌営業日に返信いたします。"
         )
+    }
     
-    elif action == "general_query":
-        # 一般的なクエリとしてRAG処理
-        try:
-            globals_dict = get_app_globals()
-            if globals_dict['rag_chain_template']:
-                result = globals_dict['rag_chain_template'].invoke({"query": message_text})
-                return result.get("result", "申し訳ございません。回答を生成できませんでした。")
-            else:
-                return "申し訳ございません。システムが準備中です。"
-        except Exception as e:
-            logger.error(f"General query processing error: {e}")
-            return "申し訳ございません。一時的にエラーが発生しました。"
-    
-    else:
-        return (
-            "メッセージを受信いたしました。\n\n"
-            "下のメニューから選択していただくか、\n"
-            "直接ご質問をお送りください😊"
-        )
+    return responses.get(action, process_message_with_rag(original_message, user_id))
 
 # Webhook エンドポイント
 @router.post("/webhook")
 async def line_webhook(request: Request):
-    """LINE Webhook エンドポイント（署名検証強化版）"""
+    """LINE Webhook エンドポイント"""
     if not initialization_success:
         logger.error("LINE Bot not properly initialized")
         raise HTTPException(status_code=503, detail="LINE Bot service unavailable")
     
     body = await request.body()
     signature = request.headers.get("X-Line-Signature", "")
+    
+    # 受信したメッセージの内容をログ出力（デバッグ用）
+    try:
+        import json
+        body_json = json.loads(body)
+        if 'events' in body_json:
+            for event in body_json['events']:
+                if event.get('type') == 'message' and event.get('message', {}).get('type') == 'text':
+                    logger.info(f"📨 Webhook received text: '{event['message']['text']}'")
+    except:
+        pass
     
     logger.info(f"📨 Received webhook: body_size={len(body)}, signature_present={bool(signature)}")
     
@@ -297,20 +298,17 @@ async def line_webhook(request: Request):
 if initialization_success and handler:
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """テキストメッセージの処理（改良版）"""
+        """テキストメッセージの処理"""
         try:
             user_id = event.source.user_id
             message_text = event.message.text.strip()
             
             logger.info(f"📨 Processing message from {user_id}: '{message_text}'")
             
-            # リッチメニューアクションを検出
-            action = detect_richmenu_action(message_text)
+            # メッセージを検出して処理
+            response_text = detect_and_process_message(message_text, user_id)
             
-            # 応答メッセージを生成
-            response_text = process_richmenu_message(action, user_id, message_text)
-            
-            logger.info(f"📤 Sending response ({len(response_text)} chars): {response_text[:100]}...")
+            logger.info(f"📤 Sending response ({len(response_text)} chars)")
             
             # 応答を送信
             try:
