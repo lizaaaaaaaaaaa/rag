@@ -1,4 +1,4 @@
-# api/routers/line_bot.py - 修正版（リッチメニュー完全対応）
+# api/routers/line_bot.py - 完全修正版（403エラー対応）
 
 import os
 import logging
@@ -41,12 +41,12 @@ logger.info(f"ENV: {os.getenv('ENV')}")
 logger.info(f"ACCESS_TOKEN available: {bool(LINE_CHANNEL_ACCESS_TOKEN)}")
 logger.info(f"SECRET available: {bool(LINE_CHANNEL_SECRET)}")
 
-# グローバル変数でAPI clientを保持
+# グローバル変数
 line_bot_api = None
 handler = None
 
 def initialize_line_bot():
-    """LINE Bot APIの初期化（エラーハンドリング強化版）"""
+    """LINE Bot APIの初期化"""
     global line_bot_api, handler
     
     if not LINE_SDK_AVAILABLE:
@@ -105,8 +105,10 @@ def process_message_with_rag(message_text: str, user_id: str) -> str:
     try:
         globals_dict = get_app_globals()
         
-        # LLMが利用可能な場合は直接使用
-        if globals_dict['llm_instance']:
+        if globals_dict['rag_chain_template']:
+            result = globals_dict['rag_chain_template'].invoke({"query": message_text})
+            return result.get("result", "申し訳ございません。回答を生成できませんでした。")
+        elif globals_dict['llm_instance']:
             llm = globals_dict['llm_instance']
             prompt = f"""あなたは親切で知識豊富な住宅・建築の専門アドバイザーです。
 以下の質問に対して、自然で分かりやすい日本語で回答してください。
@@ -118,77 +120,55 @@ def process_message_with_rag(message_text: str, user_id: str) -> str:
             response = llm.invoke(prompt)
             result = response.content if hasattr(response, 'content') else str(response)
             return result
-            
-        # RAGチェーンが利用可能な場合
-        elif globals_dict['rag_chain_template']:
-            result = globals_dict['rag_chain_template'].invoke({"query": message_text})
-            return result.get("result", "申し訳ございません。回答を生成できませんでした。")
-        
-        # どちらも利用できない場合
         else:
-            return "申し訳ございません。現在システムが準備中です。しばらくしてから再度お試しください。"
+            return "申し訳ございません。現在システムが準備中です。"
             
     except Exception as e:
         logger.error(f"RAG processing error: {e}")
-        return "申し訳ございません。一時的にエラーが発生しました。しばらくしてから再度お試しください。"
+        return "申し訳ございません。一時的にエラーが発生しました。"
 
-def detect_and_process_message(message_text: str, user_id: str) -> str:
-    """メッセージを検出して適切な応答を返す（完全版）"""
+def detect_richmenu_action(message_text: str) -> str:
+    """リッチメニューのアクションを検出（ログに基づいた修正版）"""
     
     text = message_text.strip()
-    logger.info(f"🔍 Received message from {user_id}: '{text}'")
+    logger.info(f"🔍 Analyzing message: '{text}'")
     
-    # まず完全一致を試みる（リッチメニューからの定型メッセージ）
-    exact_responses = {
-        "AI相談": "ai_consultation",
-        "AI住まいサイト": "ai_website",
-        "資料請求": "document_request",
-        "展示場来場予約": "showroom_booking",
-        "資金計画": "financial_planning",
-        "チャット相談": "chat_consultation"
-    }
-    
-    # 完全一致チェック
-    for key, action in exact_responses.items():
-        if text == key:
-            logger.info(f"✅ Exact match detected: {action}")
-            return generate_action_response(action, user_id, text)
-    
-    # 部分一致チェック（リッチメニューのテキストが複雑な場合）
-    # AI相談関連
-    if any(keyword in text for keyword in ["AI相談", "AIとお話", "AI相談を開始", "🤖"]):
-        logger.info("✅ Detected: AI consultation request")
-        return generate_action_response("ai_consultation", user_id, text)
-    
-    # AI住まいサイト関連
-    elif any(keyword in text for keyword in ["AI住まいサイト", "AIまよいサイト", "住まいホーム", "🌐"]):
+    # 完全一致チェック（ログから確認された実際のメッセージ）
+    if text == "🤖 AI相談":
+        logger.info("✅ Detected: AI consultation")
+        return "ai_consultation"
+    elif text == "🌐 AI住まいサイト":
         logger.info("✅ Detected: AI website")
-        return generate_action_response("ai_website", user_id, text)
-    
-    # 資料請求関連
-    elif any(keyword in text for keyword in ["資料請求", "📋", "送付先"]):
+        return "ai_website"
+    elif text == "📋 資料請求":
         logger.info("✅ Detected: document request")
-        return generate_action_response("document_request", user_id, text)
-    
-    # 展示場予約関連
-    elif any(keyword in text for keyword in ["展示場", "来場", "予約", "📍"]):
+        return "document_request"
+    elif text == "📍 展示場来場予約":
         logger.info("✅ Detected: showroom booking")
-        return generate_action_response("showroom_booking", user_id, text)
-    
-    # 資金計画関連
-    elif any(keyword in text for keyword in ["資金計画", "💰", "金融相談"]):
+        return "showroom_booking"
+    elif text == "💰 資金計画":
         logger.info("✅ Detected: financial planning")
-        return generate_action_response("financial_planning", user_id, text)
-    
-    # チャット相談関連
-    elif any(keyword in text for keyword in ["チャット相談", "💬", "スタッフ"]):
+        return "financial_planning"
+    elif text == "💬 チャット相談":
         logger.info("✅ Detected: chat consultation")
-        return generate_action_response("chat_consultation", user_id, text)
+        return "chat_consultation"
     
-    # どれにも該当しない場合は通常のAI回答として処理
+    # 部分一致チェック（フォールバック）
+    elif "AI相談" in text or "AIとお話" in text:
+        return "ai_consultation"
+    elif "AI住まいサイト" in text:
+        return "ai_website"
+    elif "資料請求" in text:
+        return "document_request"
+    elif "展示場" in text or "来場" in text:
+        return "showroom_booking"
+    elif "資金計画" in text:
+        return "financial_planning"
+    elif "チャット相談" in text:
+        return "chat_consultation"
     else:
-        logger.info("ℹ️ Processing as general AI query")
-        return process_message_with_rag(text, user_id)
+        logger.info("ℹ️ No specific action detected, treating as general query")
+        return "general_query"
 
 def generate_action_response(action: str, user_id: str, original_message: str) -> str:
     """アクションに応じた応答を生成"""
@@ -196,59 +176,37 @@ def generate_action_response(action: str, user_id: str, original_message: str) -
     responses = {
         "ai_consultation": (
             "AI相談を開始します！🤖\n\n"
-            "住宅に関するご質問やお悩みを自由にご入力ください。\n"
-            "例えば：\n"
-            "・住宅の坪単価について教えて\n"
-            "・標準仕様はどのような内容ですか？\n"
-            "・ZEH住宅について知りたい\n\n"
-            "どんなことでもお気軽にどうぞ！😊"
+            "住宅に関するご質問をどうぞ！\n"
+            "例：坪単価、標準仕様、ZEH住宅など"
         ),
         "ai_website": (
-            "AI住まいサイトは現在準備中です🏗️\n\n"
-            "近日公開予定ですので、もうしばらくお待ちください。\n"
-            "公開されましたらお知らせいたします！\n\n"
-            "他にご質問がございましたら、お気軽にお尋ねください😊"
+            "AI住まいサイトへようこそ！🏠\n\n"
+            "Webサイト: https://leafy-kitsune-eb4566.netlify.app\n"
+            "詳しい情報はWebサイトでご確認ください。"
         ),
         "document_request": (
             "資料請求を承ります📋\n\n"
-            "以下の情報をお送りください：\n"
-            "1. お名前（フルネーム）\n"
-            "2. 郵便番号\n"
-            "3. ご住所\n"
-            "4. お電話番号\n\n"
-            "例：\n"
-            "山田太郎\n"
-            "〒123-4567\n"
-            "東京都○○区○○1-2-3\n"
-            "090-1234-5678"
+            "以下をお送りください：\n"
+            "・お名前\n"
+            "・ご住所\n"
+            "・電話番号"
         ),
         "showroom_booking": (
-            "展示場のご予約を承ります📍\n\n"
+            "展示場予約を承ります📍\n\n"
             "ご希望の日時をお知らせください。\n"
-            "営業時間：9:00〜18:00\n\n"
-            "例：\n"
-            "「2月15日（木）14時に予約したいです」\n\n"
-            "※土日は混雑することがございます。\n"
-            "平日のご来場がおすすめです😊"
+            "営業時間：9:00〜18:00"
         ),
         "financial_planning": (
             "資金計画のご相談を承ります💰\n\n"
-            "まず、以下の情報をお送りください：\n"
-            "1. お名前\n"
-            "2. ご連絡先（電話番号）\n"
-            "3. ご希望の相談方法\n"
-            "   - オンライン相談\n"
-            "   - 来店相談\n"
-            "   - 電話相談\n\n"
-            "専門スタッフが丁寧にご対応いたします！"
+            "お名前とご連絡先をお送りください。\n"
+            "専門スタッフがご対応いたします。"
         ),
         "chat_consultation": (
             "チャット相談を開始します💬\n\n"
-            "スタッフが対応いたします。\n"
-            "お気軽にご相談内容をお送りください！\n\n"
-            "営業時間：9:00〜18:00\n"
-            "※営業時間外のメッセージは翌営業日に返信いたします。"
-        )
+            "ご相談内容をお送りください。\n"
+            "営業時間：9:00〜18:00"
+        ),
+        "general_query": process_message_with_rag(original_message, user_id)
     }
     
     return responses.get(action, process_message_with_rag(original_message, user_id))
@@ -263,17 +221,6 @@ async def line_webhook(request: Request):
     
     body = await request.body()
     signature = request.headers.get("X-Line-Signature", "")
-    
-    # 受信したメッセージの内容をログ出力（デバッグ用）
-    try:
-        import json
-        body_json = json.loads(body)
-        if 'events' in body_json:
-            for event in body_json['events']:
-                if event.get('type') == 'message' and event.get('message', {}).get('type') == 'text':
-                    logger.info(f"📨 Webhook received text: '{event['message']['text']}'")
-    except:
-        pass
     
     logger.info(f"📨 Received webhook: body_size={len(body)}, signature_present={bool(signature)}")
     
@@ -292,7 +239,8 @@ async def line_webhook(request: Request):
     except Exception as e:
         logger.error(f"❌ Webhook processing error: {e}")
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail="Internal server error")
+        # エラーでも200を返す（LINEプラットフォーム対応）
+        return {"status": "ok"}
 
 # イベントハンドラー登録
 if initialization_success and handler:
@@ -305,23 +253,33 @@ if initialization_success and handler:
             
             logger.info(f"📨 Processing message from {user_id}: '{message_text}'")
             
-            # メッセージを検出して処理
-            response_text = detect_and_process_message(message_text, user_id)
+            # リッチメニューアクションを検出
+            action = detect_richmenu_action(message_text)
             
-            logger.info(f"📤 Sending response ({len(response_text)} chars)")
+            # 応答メッセージを生成
+            response_text = generate_action_response(action, user_id, message_text)
             
-            # 応答を送信
+            logger.info(f"📤 Detected action: {action}")
+            
+            # 応答を送信（エラーハンドリング強化）
             try:
-                line_bot_api.reply_message_with_http_info(
-                    ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text=response_text)]
-                    )
+                reply_request = ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=response_text)]
                 )
+                
+                # reply_message_with_http_info の代わりに reply_message を使用
+                line_bot_api.reply_message(reply_request)
                 logger.info(f"✅ Successfully sent response to {user_id}")
+                
             except Exception as api_error:
+                # 403エラーの詳細をログ出力
                 logger.error(f"❌ Failed to send response: {api_error}")
-                logger.error(traceback.format_exc())
+                if hasattr(api_error, 'body'):
+                    logger.error(f"Error body: {api_error.body}")
+                if hasattr(api_error, 'status'):
+                    logger.error(f"Error status: {api_error.status}")
+                # エラーでも処理は続行
             
         except Exception as e:
             logger.error(f"❌ Error handling message: {e}")
@@ -336,24 +294,23 @@ if initialization_success and handler:
             
             welcome_message = (
                 "友達追加ありがとうございます！🎉\n\n"
-                "キノエデザインホームです。\n"
-                "家づくりに関するご相談を承っております。\n\n"
-                "下のメニューから、お好きな項目をお選びください：\n"
-                "• AI相談 - AIが質問に即座に回答\n"
-                "• 資料請求 - パンフレットをお送りします\n"
-                "• 展示場予約 - 実際の家を見学\n"
-                "• 資金計画 - お金の相談\n"
-                "• チャット相談 - スタッフと直接相談\n\n"
-                "お気軽にご利用ください！"
+                "下のメニューからお選びください：\n"
+                "• 🤖 AI相談\n"
+                "• 📋 資料請求\n"
+                "• 📍 展示場予約\n"
+                "• 💰 資金計画\n"
+                "• 💬 チャット相談"
             )
             
-            line_bot_api.reply_message_with_http_info(
-                ReplyMessageRequest(
+            try:
+                reply_request = ReplyMessageRequest(
                     reply_token=event.reply_token,
                     messages=[TextMessage(text=welcome_message)]
                 )
-            )
-            logger.info(f"✅ Sent welcome message to {user_id}")
+                line_bot_api.reply_message(reply_request)
+                logger.info(f"✅ Sent welcome message to {user_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to send welcome message: {e}")
             
         except Exception as e:
             logger.error(f"❌ Error handling follow event: {e}")
