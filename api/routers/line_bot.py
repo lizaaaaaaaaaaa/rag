@@ -1,4 +1,4 @@
-# api/routers/line_bot.py - 完全修正版（403エラー対応）
+# api/routers/line_bot.py - 完全修正版（リッチメニュー対応）
 
 import os
 import logging
@@ -128,95 +128,126 @@ def process_message_with_rag(message_text: str, user_id: str) -> str:
         return "申し訳ございません。一時的にエラーが発生しました。"
 
 def detect_richmenu_action(message_text: str) -> str:
-    """リッチメニューのアクションを検出（ログに基づいた修正版）"""
+    """リッチメニューのアクションを検出（実際のメッセージに対応）"""
     
     text = message_text.strip()
     logger.info(f"🔍 Analyzing message: '{text}'")
+    logger.info(f"📏 Message length: {len(text)}")
+    logger.info(f"🔤 Message bytes: {text.encode('utf-8')}")
     
-    # 完全一致チェック（ログから確認された実際のメッセージ）
-    if text == "🤖 AI相談":
+    # 実際のリッチメニューメッセージに対応した判定
+    # 部分一致で判定（より柔軟性を持たせる）
+    
+    # AI相談の判定（複数パターンに対応）
+    if any(pattern in text for pattern in [
+        "AIとお話", "AI相談", "💬", "🤖", "テスト・", "AIと話"
+    ]):
         logger.info("✅ Detected: AI consultation")
         return "ai_consultation"
-    elif text == "🌐 AI住まいサイト":
+    
+    # AI住まいサイトの判定
+    elif any(pattern in text for pattern in [
+        "AI住まいサイト", "🏢", "住まいホームページ", "準備中", "😴"
+    ]):
         logger.info("✅ Detected: AI website")
         return "ai_website"
-    elif text == "📋 資料請求":
+    
+    # 資料請求の判定
+    elif any(pattern in text for pattern in [
+        "資料請求", "📋", "をご入力ください", "😊", "おるも和歌付き"
+    ]):
         logger.info("✅ Detected: document request")
         return "document_request"
-    elif text == "📍 展示場来場予約":
+    
+    # 展示場来場予約の判定
+    elif any(pattern in text for pattern in [
+        "展示場来場", "📍", "予約手続き", "メッセージください"
+    ]):
         logger.info("✅ Detected: showroom booking")
         return "showroom_booking"
-    elif text == "💰 資金計画":
+    
+    # 資金計画の判定
+    elif any(pattern in text for pattern in [
+        "資金計画", "💰", "AI金融相談", "年収", "自己資金", "調査"
+    ]):
         logger.info("✅ Detected: financial planning")
         return "financial_planning"
-    elif text == "💬 チャット相談":
+    
+    # チャット相談の判定
+    elif any(pattern in text for pattern in [
+        "チャット相談", "💬", "スタッフと", "気転に", "営業時間"
+    ]):
         logger.info("✅ Detected: chat consultation")
         return "chat_consultation"
     
-    # 部分一致チェック（フォールバック）
-    elif "AI相談" in text or "AIとお話" in text:
-        return "ai_consultation"
-    elif "AI住まいサイト" in text:
-        return "ai_website"
-    elif "資料請求" in text:
-        return "document_request"
-    elif "展示場" in text or "来場" in text:
-        return "showroom_booking"
-    elif "資金計画" in text:
-        return "financial_planning"
-    elif "チャット相談" in text:
-        return "chat_consultation"
+    # どのパターンにも該当しない場合
     else:
-        logger.info("ℹ️ No specific action detected, treating as general query")
+        logger.info(f"ℹ️ No specific action detected for: '{text}', treating as general query")
         return "general_query"
 
 def generate_action_response(action: str, user_id: str, original_message: str) -> str:
     """アクションに応じた応答を生成"""
     
+    logger.info(f"📤 Generating response for action: {action}")
+    
     responses = {
         "ai_consultation": (
             "AI相談を開始します！🤖\n\n"
             "住宅に関するご質問をどうぞ！\n"
-            "例：坪単価、標準仕様、ZEH住宅など"
+            "例：坪単価、標準仕様、ZEH住宅など\n\n"
+            "何でもお気軽にご質問ください✨"
         ),
         "ai_website": (
             "AI住まいサイトへようこそ！🏠\n\n"
-            "Webサイト: https://leafy-kitsune-eb4566.netlify.app\n"
-            "詳しい情報はWebサイトでご確認ください。"
+            "現在準備中です。今しばらくお待ちください😴\n\n"
+            "詳しい情報は以下でご確認いただけます：\n"
+            "https://leafy-kitsune-eb4566.netlify.app"
         ),
         "document_request": (
             "資料請求を承ります📋\n\n"
-            "以下をお送りください：\n"
+            "以下の情報をお送りください：\n"
             "・お名前\n"
             "・ご住所\n"
-            "・電話番号"
+            "・電話番号\n"
+            "・ご希望の資料（カタログ・プラン集など）"
         ),
         "showroom_booking": (
             "展示場予約を承ります📍\n\n"
-            "ご希望の日時をお知らせください。\n"
+            "ご希望の日時をお知らせください：\n"
+            "・第1希望日時\n"
+            "・第2希望日時\n"
+            "・お名前\n"
+            "・電話番号\n\n"
             "営業時間：9:00〜18:00"
         ),
         "financial_planning": (
             "資金計画のご相談を承ります💰\n\n"
-            "お名前とご連絡先をお送りください。\n"
-            "専門スタッフがご対応いたします。"
+            "以下の情報をお教えください：\n"
+            "・年収\n"
+            "・自己資金\n"
+            "・ご希望の建築エリア\n"
+            "・ご家族構成\n\n"
+            "専門スタッフがご対応いたします✨"
         ),
         "chat_consultation": (
             "チャット相談を開始します💬\n\n"
             "ご相談内容をお送りください。\n"
+            "スタッフが丁寧にお答えいたします。\n\n"
             "営業時間：9:00〜18:00"
         ),
         "general_query": process_message_with_rag(original_message, user_id)
     }
     
-    return responses.get(action, process_message_with_rag(original_message, user_id))
+    response = responses.get(action, process_message_with_rag(original_message, user_id))
+    logger.info(f"✅ Generated response for {action}: {len(response)} characters")
+    return response
 
 # Webhook エンドポイント
 @router.post("/webhook")
 async def line_webhook(request: Request):
-    """LINE Webhook エンドポイント"""
+    """LINE Webhook エンドポイント（修正版）"""
     if not initialization_success:
-        logger.error("LINE Bot not properly initialized")
+        logger.error("❌ LINE Bot not properly initialized")
         raise HTTPException(status_code=503, detail="LINE Bot service unavailable")
     
     body = await request.body()
@@ -246,12 +277,14 @@ async def line_webhook(request: Request):
 if initialization_success and handler:
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """テキストメッセージの処理"""
+        """テキストメッセージの処理（修正版）"""
         try:
             user_id = event.source.user_id
             message_text = event.message.text.strip()
             
-            logger.info(f"📨 Processing message from {user_id}: '{message_text}'")
+            logger.info(f"📨 Processing message from {user_id}")
+            logger.info(f"📝 Message content: '{message_text}'")
+            logger.info(f"📏 Message length: {len(message_text)}")
             
             # リッチメニューアクションを検出
             action = detect_richmenu_action(message_text)
@@ -259,27 +292,25 @@ if initialization_success and handler:
             # 応答メッセージを生成
             response_text = generate_action_response(action, user_id, message_text)
             
-            logger.info(f"📤 Detected action: {action}")
+            logger.info(f"🎯 Detected action: {action}")
+            logger.info(f"📤 Response length: {len(response_text)}")
             
-            # 応答を送信（エラーハンドリング強化）
+            # 応答を送信
             try:
                 reply_request = ReplyMessageRequest(
                     reply_token=event.reply_token,
                     messages=[TextMessage(text=response_text)]
                 )
                 
-                # reply_message_with_http_info の代わりに reply_message を使用
                 line_bot_api.reply_message(reply_request)
-                logger.info(f"✅ Successfully sent response to {user_id}")
+                logger.info(f"✅ Successfully sent response to {user_id} for action: {action}")
                 
             except Exception as api_error:
-                # 403エラーの詳細をログ出力
                 logger.error(f"❌ Failed to send response: {api_error}")
                 if hasattr(api_error, 'body'):
                     logger.error(f"Error body: {api_error.body}")
                 if hasattr(api_error, 'status'):
                     logger.error(f"Error status: {api_error.status}")
-                # エラーでも処理は続行
             
         except Exception as e:
             logger.error(f"❌ Error handling message: {e}")
@@ -287,19 +318,22 @@ if initialization_success and handler:
 
     @handler.add(FollowEvent)
     def handle_follow(event):
-        """友達追加時の処理"""
+        """友達追加時の処理（修正版）"""
         try:
             user_id = event.source.user_id
             logger.info(f"👥 New follower: {user_id}")
             
             welcome_message = (
                 "友達追加ありがとうございます！🎉\n\n"
+                "キノエデザインホームの公式LINEへようこそ✨\n\n"
                 "下のメニューからお選びください：\n"
-                "• 🤖 AI相談\n"
-                "• 📋 資料請求\n"
-                "• 📍 展示場予約\n"
-                "• 💰 資金計画\n"
-                "• 💬 チャット相談"
+                "🤖 AI相談 - 住宅に関する質問にAIがお答え\n"
+                "🏢 AI住まいサイト - ホームページをご覧\n"
+                "📋 資料請求 - カタログ等の資料をお送り\n"
+                "📍 展示場予約 - 展示場見学のご予約\n"
+                "💰 資金計画 - 住宅ローン等のご相談\n"
+                "💬 チャット相談 - スタッフとの直接相談\n\n"
+                "お気軽にお使いください！"
             )
             
             try:
@@ -327,5 +361,33 @@ def get_line_bot_status():
         "channel_secret_set": bool(LINE_CHANNEL_SECRET),
         "api_client_ready": bool(line_bot_api),
         "handler_ready": bool(handler),
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "debug_info": {
+            "env": os.getenv("ENV"),
+            "access_token_prefix": LINE_CHANNEL_ACCESS_TOKEN[:10] + "..." if LINE_CHANNEL_ACCESS_TOKEN else "None",
+            "secret_prefix": LINE_CHANNEL_SECRET[:10] + "..." if LINE_CHANNEL_SECRET else "None"
+        }
+    }
+
+# デバッグエンドポイント
+@router.get("/debug/richmenu")
+def debug_richmenu():
+    """リッチメニューデバッグ情報"""
+    return {
+        "expected_messages": [
+            "A：テスト・ 💬AIとお話",
+            "B：テスト・ 🏢AI住まいサイト AI住まいホームページ。準備中です 今しばらくお待ちください😴",
+            "C：テスト・ 📋資料請求します！ おるも和歌付き をご入力ください😊",
+            "D：テスト・ 📍展示場来場 予約手続き を メッセージください",
+            "E：テスト・ 💰資金計画 AI金融相談スタート！ 年収・自己資金など 調査にお間にします😊",
+            "F：チャット相談 スタッフとチャット相談 気転にメッセージどうぞ！ 営業時間9-18時"
+        ],
+        "detection_keywords": {
+            "ai_consultation": ["AIとお話", "AI相談", "💬", "🤖"],
+            "ai_website": ["AI住まいサイト", "🏢", "住まいホームページ"],
+            "document_request": ["資料請求", "📋", "をご入力ください"],
+            "showroom_booking": ["展示場来場", "📍", "予約手続き"],
+            "financial_planning": ["資金計画", "💰", "AI金融相談"],
+            "chat_consultation": ["チャット相談", "💬", "スタッフと"]
+        }
     }
