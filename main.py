@@ -5,7 +5,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 
 # ログ設定
 logging.basicConfig(
@@ -27,29 +27,33 @@ else:
 logger.info("==== Environment Variables ====")
 logger.info("ENV: %s", os.environ.get("ENV"))
 logger.info("OPENAI_API_KEY: %s****", (os.environ.get("OPENAI_API_KEY") or "")[:10])
-logger.info("GCS_BUCKET_NAME: %s", os.environ.get("GCS_BUCKET_NAME"))
-logger.info("LINE_CHANNEL_ACCESS_TOKEN: %s****", (os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") or "")[:10])
-logger.info("LINE_CHANNEL_SECRET: %s****", (os.environ.get("LINE_CHANNEL_SECRET") or "")[:10])
-logger.info("LANGSMITH_API_KEY: %s****", (os.environ.get("LANGSMITH_API_KEY") or "")[:10])
-logger.info("LANGCHAIN_TRACING_V2: %s", os.environ.get("LANGCHAIN_TRACING_V2"))
+logger.info("LINE_LOGIN_CHANNEL_ID: %s****", (os.environ.get("LINE_LOGIN_CHANNEL_ID") or "")[:10])
+logger.info("LINE_LOGIN_CHANNEL_SECRET: %s****", (os.environ.get("LINE_LOGIN_CHANNEL_SECRET") or "")[:10])
+logger.info("LINE_LOGIN_REDIRECT_URI: %s", os.environ.get("LINE_LOGIN_REDIRECT_URI"))
+logger.info("LIFF_ID: %s", os.environ.get("LIFF_ID"))
 logger.info("=================================")
 
 # FastAPI初期化
 app = FastAPI(
-    title="RAG FastAPI Backend with LINE Bot",
-    description="RAG + LLM連携API (Cloud Run対応) + LINE Messaging API",
-    version="1.0.0"
+    title="RAG FastAPI Backend with LINE Login & LIFF",
+    description="RAG + LLM連携API (Cloud Run対応) + LINE Login + LIFF",
+    version="1.0.1"
 )
 
-# CORS設定
+# CORS設定（LIFFのドメインを追加）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://leafy-kitsune-eb4566.netlify.app",
-        "https://preview.studio.site",
+        "https://preview.studio.site", 
         "https://*.studio.site",
+        "https://liff.line.me",  # LIFF用
+        "https://liff-v2.line.me",  # LIFF用
+        f"https://liff.line.me/2007887876-vMNe74eX",  # あなたの具体的なLIFF URL
+        "https://rag-frontend-190389115361.asia-northeast1.run.app",  # 自分のフロントエンド
         "http://localhost:3000",
         "http://localhost:8501",
+        "*"  # 開発時のみ
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
@@ -64,8 +68,10 @@ async def add_security_headers(request, call_next):
     response = await call_next(request)
     response.headers["Content-Security-Policy"] = (
         "default-src 'self' https:; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; "
-        "style-src 'self' 'unsafe-inline' https:;"
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https: https://static.line-scdn.net; "
+        "style-src 'self' 'unsafe-inline' https:; "
+        "connect-src 'self' https: https://api.line.me https://access.line.me; "
+        "img-src 'self' https: data:; "
     )
     return response
 
@@ -156,36 +162,98 @@ async def load_models_on_startup():
     logger.info(f"  VectorStore: {'✅ Loaded' if vectorstore else '❌ Not loaded'}")
     logger.info(f"  RAG Chain: {'✅ Created' if rag_chain_template else '❌ Not created'}")
     logger.info(f"  LINE Bot: {'✅ Configured' if os.environ.get('LINE_CHANNEL_ACCESS_TOKEN') else '❌ Not configured'}")
+    logger.info(f"  LINE Login: {'✅ Configured' if os.environ.get('LINE_LOGIN_CHANNEL_ID') else '❌ Not configured'}")
+    logger.info(f"  LIFF: {'✅ Configured' if os.environ.get('LIFF_ID') else '❌ Not configured'}")
     logger.info("========================")
 
 # ルーター登録
-from api.routers import upload, chat, google_oauth, healthz, line_bot
+from api.routers import upload, chat, google_oauth, healthz, line_bot, line_login
 
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(google_oauth.router, tags=["auth"])
 app.include_router(healthz.router, prefix="", tags=["healthz"])
 app.include_router(line_bot.router, tags=["line"])
+app.include_router(line_login.router, tags=["line-login"])  # 追加
 
 # 静的ファイル
 pdf_dir = os.path.join("rag", "vectorstore", "pdfs")
 if os.path.isdir(pdf_dir):
     app.mount("/pdfs", StaticFiles(directory=pdf_dir), name="pdfs")
 
+# LIFF アプリのホスティング
+@app.get("/liff")
+async def serve_liff_app():
+    """LIFF アプリを提供"""
+    liff_id = os.environ.get("LIFF_ID", "YOUR_LIFF_ID")
+    
+    # liff_app.htmlの内容を読み込んで、LIFF IDを置換
+    try:
+        with open("liff_app.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        
+        # LIFF IDを実際の値に置換
+        html_content = html_content.replace("YOUR_LIFF_ID", liff_id)
+        
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        return HTMLResponse(
+            content="""
+            <html>
+                <body>
+                    <h1>LIFF App</h1>
+                    <p>LIFF アプリファイルが見つかりません。</p>
+                    <p>liff_app.htmlを作成してください。</p>
+                </body>
+            </html>
+            """,
+            status_code=404
+        )
+
 # ルートエンドポイント
 @app.get("/")
 def read_root():
     """ルートエンドポイント"""
     return {
-        "message": "RAG FastAPI Backend with LINE Bot",
-        "version": "1.0.0",
+        "message": "RAG FastAPI Backend with LINE Bot & LINE Login & LIFF",
+        "version": "1.0.1",
         "status": {
             "llm": llm_instance is not None,
             "vectorstore": vectorstore is not None,
             "rag_chain": rag_chain_template is not None,
-            "line_bot": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
+            "line_bot": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")),
+            "line_login": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID")),
+            "liff": bool(os.environ.get("LIFF_ID"))
+        },
+        "endpoints": {
+            "chat": "/chat",
+            "line_webhook": "/line/webhook",
+            "line_login": "/line-login",
+            "liff_app": "/liff"
         }
     }
+
+@app.get("/status")
+def get_status():
+    """システムステータス確認"""
+    return {
+        "llm_loaded": llm_instance is not None,
+        "vectorstore_loaded": vectorstore is not None,
+        "rag_chain_loaded": rag_chain_template is not None,
+        "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY")),
+        "gcs_bucket": os.environ.get("GCS_BUCKET_NAME", "Not set"),
+        "line_bot_configured": bool(
+            os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") and 
+            os.environ.get("LINE_CHANNEL_SECRET")
+        ),
+        "line_login_configured": bool(
+            os.environ.get("LINE_LOGIN_CHANNEL_ID") and 
+            os.environ.get("LINE_LOGIN_CHANNEL_SECRET")
+        ),
+        "liff_configured": bool(os.environ.get("LIFF_ID")),
+        "langsmith_enabled": os.environ.get("LANGCHAIN_TRACING_V2") == "true"
+    }
+
 
 @app.get("/status")
 def get_status():
@@ -247,6 +315,25 @@ def test_langsmith():
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@app.get("/debug/line-config")
+def debug_line_config():
+    """LINE関連設定の確認"""
+    return {
+        "messaging_api": {
+            "access_token_set": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")),
+            "channel_secret_set": bool(os.environ.get("LINE_CHANNEL_SECRET"))
+        },
+        "line_login": {
+            "channel_id_set": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID")),
+            "channel_secret_set": bool(os.environ.get("LINE_LOGIN_CHANNEL_SECRET")),
+            "redirect_uri": os.environ.get("LINE_LOGIN_REDIRECT_URI", "Not set")
+        },
+        "liff": {
+            "liff_id_set": bool(os.environ.get("LIFF_ID")),
+            "liff_id": os.environ.get("LIFF_ID", "Not set")[:20] + "..." if os.environ.get("LIFF_ID") else "Not set"
+        }
+    }
 
 # CORS preflight handling
 @app.options("/{path:path}")
