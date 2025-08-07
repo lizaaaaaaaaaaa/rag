@@ -1,5 +1,4 @@
-# api/routers/line_bot.py - Updated for line-bot-sdk v3.5.0
-
+# api/routers/line_bot.py - 修正版（リッチメニュー完全対応）
 
 import os
 import logging
@@ -7,7 +6,6 @@ import traceback
 import asyncio
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
-
 
 # LINE Bot SDK v3 imports
 try:
@@ -46,23 +44,18 @@ except ImportError as e:
     class TextMessage:
         def __init__(self, *args, **kwargs): pass
 
-
 logger = logging.getLogger(__name__)
-
 
 # LINE Bot設定
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 
-
 # LINE Bot APIの初期化
 if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
     try:
-        # v3 Configuration
         configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
         handler = WebhookHandler(LINE_CHANNEL_SECRET)
        
-        # v3 API Client
         with ApiClient(configuration) as api_client:
             line_bot_api = MessagingApi(api_client)
        
@@ -79,9 +72,7 @@ else:
     else:
         logger.warning("⚠️ LINE Bot SDK not available")
 
-
 router = APIRouter(prefix="/line", tags=["line"])
-
 
 def get_app_globals():
     """mainモジュールからグローバル変数を取得"""
@@ -96,55 +87,191 @@ def get_app_globals():
         logger.error(f"Failed to get app globals: {e}")
         return {'vectorstore': None, 'rag_chain_template': None, 'llm_instance': None}
 
-
-def is_general_greeting_or_chat(query: str) -> bool:
-    """一般的な挨拶や雑談かどうかを判定"""
-    greetings = [
-        "こんにちは", "こんばんは", "おはよう", "はじめまして",
-        "hello", "hi", "hey", "ありがとう", "さようなら",
-        "元気", "調子はどう", "お疲れ様", "よろしく", "友達追加"
+def detect_richmenu_action(message_text: str) -> str:
+    """リッチメニューのアクションを検出（改良版）"""
+    
+    # メッセージをログ出力（デバッグ用）
+    logger.info(f"Detecting rich menu action for message: {message_text}")
+    
+    # 正規化（スペースや改行を削除）
+    normalized_text = message_text.replace(" ", "").replace("\n", "").replace("\r", "")
+    
+    # AI相談パターン
+    ai_patterns = [
+        "AI相談",
+        "🤖AI相談",
+        "AI相談を開始",
+        "AIとお話",
+        "AIと話",
+        "相談開始"
     ]
-    query_lower = query.lower()
-   
-    if any(greeting in query_lower for greeting in greetings):
-        return True
-   
-    if len(query.strip()) <= 5:
-        return True
-   
-    return False
+    for pattern in ai_patterns:
+        if pattern in normalized_text:
+            logger.info(f"Detected AI consultation: {pattern}")
+            return "ai_consultation"
+    
+    # AI住まいサイトパターン
+    site_patterns = [
+        "AI住まいサイト",
+        "🏢AI住まいサイト",
+        "住まいサイト",
+        "AIサイト"
+    ]
+    for pattern in site_patterns:
+        if pattern in normalized_text:
+            logger.info(f"Detected AI site: {pattern}")
+            return "ai_site"
+    
+    # 資料請求パターン
+    document_patterns = [
+        "資料請求",
+        "📋資料請求",
+        "資料を請求",
+        "パンフレット"
+    ]
+    for pattern in document_patterns:
+        if pattern in normalized_text:
+            logger.info(f"Detected document request: {pattern}")
+            return "document_request"
+    
+    # 展示場予約パターン
+    exhibition_patterns = [
+        "展示場",
+        "📍展示場",
+        "来場予約",
+        "見学予約",
+        "展示場予約"
+    ]
+    for pattern in exhibition_patterns:
+        if pattern in normalized_text:
+            logger.info(f"Detected exhibition reservation: {pattern}")
+            return "exhibition_reservation"
+    
+    # 資金計画パターン
+    finance_patterns = [
+        "資金計画",
+        "💰資金計画",
+        "AI金融相談",
+        "資金相談",
+        "ローン相談"
+    ]
+    for pattern in finance_patterns:
+        if pattern in normalized_text:
+            logger.info(f"Detected finance planning: {pattern}")
+            return "finance_planning"
+    
+    # チャット相談パターン
+    chat_patterns = [
+        "チャット相談",
+        "💬チャット",
+        "スタッフと",
+        "スタッフ相談"
+    ]
+    for pattern in chat_patterns:
+        if pattern in normalized_text:
+            logger.info(f"Detected chat consultation: {pattern}")
+            return "chat_consultation"
+    
+    # どのパターンにも一致しない場合
+    logger.info("No rich menu pattern detected, treating as general message")
+    return "general"
 
+def get_richmenu_response(action: str, user_id: str) -> str:
+    """リッチメニューアクションに対する応答を生成"""
+    
+    responses = {
+        "ai_consultation": (
+            "🤖 AI相談を開始します！\n\n"
+            "キノエデザインの住まいAIコンシェルジュです。\n"
+            "どのようなご質問でもお気軽にどうぞ！\n\n"
+            "例えば...\n"
+            "・坪単価について教えて\n"
+            "・標準仕様を知りたい\n"
+            "・耐震性能について\n"
+            "・断熱性能は？\n\n"
+            "ご質問をお待ちしております😊"
+        ),
+        "ai_site": (
+            "🏢 AI住まいサイト\n\n"
+            "申し訳ございません。\n"
+            "現在、AI住まいサイトは準備中です。\n\n"
+            "もうしばらくお待ちください😴\n"
+            "完成しましたらお知らせいたします！"
+        ),
+        "document_request": (
+            "📋 資料請求を承ります！\n\n"
+            "資料をお送りいたしますので、以下の情報をお教えください：\n\n"
+            "1️⃣ お名前（フルネーム）\n"
+            "2️⃣ ご住所（郵便番号から）\n"
+            "3️⃣ お電話番号\n"
+            "4️⃣ ご希望の資料\n"
+            "  ・総合カタログ\n"
+            "  ・実例集\n"
+            "  ・価格表\n\n"
+            "上記をメッセージでお送りください😊"
+        ),
+        "exhibition_reservation": (
+            "📍 展示場来場予約\n\n"
+            "展示場へのご来場予約を承ります！\n\n"
+            "【営業時間】\n"
+            "平日・土日祝：9:00〜18:00\n"
+            "定休日：水曜日\n\n"
+            "ご希望の日時を以下の形式でお送りください：\n"
+            "例）1月15日（土）14:00\n\n"
+            "スタッフ一同、心よりお待ちしております🏠"
+        ),
+        "finance_planning": (
+            "💰 資金計画・住宅ローン相談\n\n"
+            "マイホームの資金計画をサポートいたします！\n\n"
+            "以下についてお答えください：\n"
+            "1️⃣ ご年収（世帯年収）\n"
+            "2️⃣ 自己資金の額\n"
+            "3️⃣ ご希望の返済期間\n"
+            "4️⃣ 建築予定地の有無\n\n"
+            "プライバシーは厳守いたします。\n"
+            "お気軽にご相談ください💪"
+        ),
+        "chat_consultation": (
+            "💬 スタッフとのチャット相談\n\n"
+            "キノエデザインのスタッフが対応いたします！\n\n"
+            "【対応時間】\n"
+            "平日：9:00〜18:00\n"
+            "土日祝：9:00〜18:00\n\n"
+            "営業時間外の場合は、翌営業日に返信いたします。\n"
+            "どうぞお気軽にメッセージをお送りください😊"
+        ),
+        "general": None  # 一般メッセージはRAG処理へ
+    }
+    
+    return responses.get(action)
 
-def get_general_response_from_llm(query: str, llm_instance):
-    """一般的な質問への回答を生成"""
+async def process_message(message_text: str, user_id: str) -> str:
+    """メッセージを処理して応答を生成"""
     try:
-        prompt = f"""あなたは親切で丁寧な日本語のAIアシスタントです。
-以下のユーザーの入力に対して、自然で親しみやすい日本語で応答してください。
-LINEでのチャットのような短めで親しみやすい応答を心がけてください。
-
-
-ユーザー: {query}
-
-
-アシスタント:"""
-       
-        if hasattr(llm_instance, 'invoke'):
-            response = llm_instance.invoke(prompt)
-            return response.content if hasattr(response, 'content') else str(response)
-        else:
-            response = llm_instance(prompt)
-            return response if isinstance(response, str) else str(response)
-           
+        # リッチメニューアクションを検出
+        action = detect_richmenu_action(message_text)
+        
+        # リッチメニュー用の定型応答がある場合
+        richmenu_response = get_richmenu_response(action, user_id)
+        if richmenu_response:
+            return richmenu_response
+        
+        # AI相談または一般的な質問の場合はRAG処理
+        if action in ["ai_consultation", "general"]:
+            # AI相談開始メッセージの場合は、定型応答
+            if action == "ai_consultation" and len(message_text) < 50:
+                return get_richmenu_response("ai_consultation", user_id)
+            
+            # RAG処理
+            return await process_rag_query(message_text, user_id)
+        
+        # その他の場合も一般的なRAG処理
+        return await process_rag_query(message_text, user_id)
+        
     except Exception as e:
-        logger.error(f"Error generating general response: {e}")
-       
-        if "こんにちは" in query or "はじめまして" in query:
-            return "こんにちは！🌟\nRAGチャットボットです。何でもお気軽にご質問ください！"
-        elif "ありがとう" in query:
-            return "どういたしまして！😊\n他にもご質問がございましたら、いつでもお聞きください。"
-        else:
-            return "申し訳ございません。もう一度お聞かせいただけますか？"
-
+        logger.error(f"Error processing message: {e}")
+        logger.error(traceback.format_exc())
+        return "申し訳ございません。メッセージの処理中にエラーが発生しました。しばらくしてから再度お試しください。"
 
 async def process_rag_query(message_text: str, user_id: str) -> str:
     """RAGを使用してメッセージを処理"""
@@ -154,24 +281,15 @@ async def process_rag_query(message_text: str, user_id: str) -> str:
         rag_chain_template = globals_dict['rag_chain_template']
         llm_instance = globals_dict['llm_instance']
 
-
-        logger.info(f"Processing LINE message: {message_text[:50]}...")
-
+        logger.info(f"Processing LINE message with RAG: {message_text[:50]}...")
 
         if not vectorstore and not llm_instance:
             return "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
 
-
-        if is_general_greeting_or_chat(message_text):
-            logger.info("Detected general chat/greeting")
-            if llm_instance:
-                return get_general_response_from_llm(message_text, llm_instance)
-            else:
-                if "こんにちは" in message_text or "はじめまして" in message_text:
-                    return "こんにちは！🌟\nRAGチャットボットです。何でもお気軽にご質問ください！"
-                else:
-                    return "お手伝いできることがあれば、お気軽にお尋ねください。"
-
+        # 一般的な挨拶は簡単な応答
+        greetings = ["こんにちは", "こんばんは", "おはよう", "はじめまして", "よろしく"]
+        if any(greeting in message_text for greeting in greetings):
+            return "こんにちは！キノエデザインの住まいAIコンシェルジュです。住まいづくりのご質問をお気軽にどうぞ！🏠"
 
         if vectorstore and rag_chain_template:
             try:
@@ -216,12 +334,31 @@ async def process_rag_query(message_text: str, user_id: str) -> str:
             else:
                 return "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
 
-
     except Exception as e:
         logger.error(f"Error processing RAG query: {e}")
         logger.error(traceback.format_exc())
         return "システムエラーが発生しました。管理者にお問い合わせください。"
 
+def get_general_response_from_llm(query: str, llm_instance):
+    """一般的な質問への回答を生成"""
+    try:
+        prompt = f"""あなたはキノエデザインの住まいAIコンシェルジュです。
+お客様からの以下の質問に、親切で分かりやすい日本語で回答してください。
+
+質問: {query}
+
+回答:"""
+       
+        if hasattr(llm_instance, 'invoke'):
+            response = llm_instance.invoke(prompt)
+            return response.content if hasattr(response, 'content') else str(response)
+        else:
+            response = llm_instance(prompt)
+            return response if isinstance(response, str) else str(response)
+           
+    except Exception as e:
+        logger.error(f"Error generating general response: {e}")
+        return "申し訳ございません。回答の生成中にエラーが発生しました。"
 
 # Webhook エンドポイント
 @router.post("/webhook")
@@ -244,7 +381,6 @@ async def line_webhook(request: Request):
    
     return {"status": "ok"}
 
-
 # イベントハンドラー (v3対応)
 if LINE_SDK_AVAILABLE and handler:
     @handler.add(MessageEvent, message=TextMessageContent)
@@ -256,7 +392,8 @@ if LINE_SDK_AVAILABLE and handler:
            
             logger.info(f"Received LINE message from {user_id}: {message_text}")
            
-            answer = asyncio.run(process_rag_query(message_text, user_id))
+            # メッセージを処理
+            answer = asyncio.run(process_message(message_text, user_id))
            
             # v3対応のメッセージ送信
             with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
@@ -287,7 +424,6 @@ if LINE_SDK_AVAILABLE and handler:
             except:
                 pass
 
-
     @handler.add(FollowEvent)
     def handle_follow(event):
         """友達追加時の処理 (v3対応)"""
@@ -295,10 +431,16 @@ if LINE_SDK_AVAILABLE and handler:
             user_id = event.source.user_id
             logger.info(f"New follower: {user_id}")
            
-            welcome_message = ("友達追加ありがとうございます！🎉\n\n"
-                             "私はRAGチャットボットです。\n"
-                             "アップロードされた文書に基づいて、様々な質問にお答えします。\n\n"
-                             "何でもお気軽にご質問ください！")
+            welcome_message = (
+                "友達追加ありがとうございます！🎉\n\n"
+                "キノエデザインの住まいAIコンシェルジュです。\n\n"
+                "画面下のメニューから各種サービスをご利用いただけます：\n"
+                "🤖 AI相談：住まいに関する質問\n"
+                "📋 資料請求：カタログ送付\n"
+                "📍 展示場予約：見学予約\n"
+                "💰 資金計画：ローン相談\n\n"
+                "どうぞお気軽にご利用ください！"
+            )
            
             with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
                 line_bot_api = MessagingApi(api_client)
@@ -312,7 +454,6 @@ if LINE_SDK_AVAILABLE and handler:
         except Exception as e:
             logger.error(f"Error handling follow event: {e}")
 
-
 # 管理・テスト用エンドポイント
 @router.get("/status")
 def get_line_bot_status():
@@ -325,7 +466,6 @@ def get_line_bot_status():
         "channel_secret_set": bool(LINE_CHANNEL_SECRET),
         "timestamp": datetime.now().isoformat()
     }
-
 
 @router.get("/test")
 def test_line_bot_connection():
