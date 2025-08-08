@@ -87,120 +87,65 @@ def get_app_globals():
         logger.error(f"Failed to get app globals: {e}")
         return {'vectorstore': None, 'rag_chain_template': None, 'llm_instance': None}
 
+# api/routers/line_bot.py の修正部分
+
 def detect_richmenu_action(message_text: str) -> str:
-    """リッチメニューのアクションを検出（改良版）"""
+    """リッチメニューのアクションを検出（シンプル版）"""
     
-    # メッセージをログ出力（デバッグ用）
     logger.info(f"Detecting rich menu action for message: {message_text}")
     
-    # 正規化（スペースや改行を削除）
-    normalized_text = message_text.replace(" ", "").replace("\n", "").replace("\r", "")
+    # 完全一致でチェック（最も確実）
+    action_map = {
+        "AI相談を開始": "ai_consultation",
+        "AI住まいサイト": "ai_site",
+        "資料請求": "document_request",
+        "展示場予約": "exhibition_reservation",
+        "資金計画相談": "finance_planning",
+        "チャット相談": "chat_consultation"
+    }
     
-    # AI相談パターン
-    ai_patterns = [
-        "AI相談",
-        "🤖AI相談",
-        "AI相談を開始",
-        "AIとお話",
-        "AIと話",
-        "相談開始"
-    ]
-    for pattern in ai_patterns:
-        if pattern in normalized_text:
-            logger.info(f"Detected AI consultation: {pattern}")
-            return "ai_consultation"
+    # 完全一致チェック
+    if message_text in action_map:
+        action = action_map[message_text]
+        logger.info(f"Detected action (exact match): {action}")
+        return action
     
-    # AI住まいサイトパターン
-    site_patterns = [
-        "AI住まいサイト",
-        "🏢AI住まいサイト",
-        "住まいサイト",
-        "AIサイト"
-    ]
-    for pattern in site_patterns:
-        if pattern in normalized_text:
-            logger.info(f"Detected AI site: {pattern}")
-            return "ai_site"
+    # 部分一致チェック（フォールバック）
+    for key, value in action_map.items():
+        if key in message_text:
+            logger.info(f"Detected action (partial match): {value}")
+            return value
     
-    # 資料請求パターン
-    document_patterns = [
-        "資料請求",
-        "📋資料請求",
-        "資料を請求",
-        "パンフレット"
-    ]
-    for pattern in document_patterns:
-        if pattern in normalized_text:
-            logger.info(f"Detected document request: {pattern}")
-            return "document_request"
-    
-    # 展示場予約パターン
-    exhibition_patterns = [
-        "展示場",
-        "📍展示場",
-        "来場予約",
-        "見学予約",
-        "展示場予約"
-    ]
-    for pattern in exhibition_patterns:
-        if pattern in normalized_text:
-            logger.info(f"Detected exhibition reservation: {pattern}")
-            return "exhibition_reservation"
-    
-    # 資金計画パターン
-    finance_patterns = [
-        "資金計画",
-        "💰資金計画",
-        "AI金融相談",
-        "資金相談",
-        "ローン相談"
-    ]
-    for pattern in finance_patterns:
-        if pattern in normalized_text:
-            logger.info(f"Detected finance planning: {pattern}")
-            return "finance_planning"
-    
-    # チャット相談パターン
-    chat_patterns = [
-        "チャット相談",
-        "💬チャット",
-        "スタッフと",
-        "スタッフ相談"
-    ]
-    for pattern in chat_patterns:
-        if pattern in normalized_text:
-            logger.info(f"Detected chat consultation: {pattern}")
-            return "chat_consultation"
-    
-    # どのパターンにも一致しない場合
+    # どのパターンにも一致しない場合は一般的な質問として処理
     logger.info("No rich menu pattern detected, treating as general message")
     return "general"
 
 def get_richmenu_response(action: str, user_id: str) -> str:
-    """リッチメニューアクションに対する応答を生成"""
+    """リッチメニューアクションに対する応答を生成（改善版）"""
     
     responses = {
         "ai_consultation": (
             "🤖 AI相談を開始します！\n\n"
             "キノエデザインの住まいAIコンシェルジュです。\n"
-            "どのようなご質問でもお気軽にどうぞ！\n\n"
+            "住まいに関するご質問をなんでもお聞きください。\n\n"
             "例えば...\n"
             "・坪単価について教えて\n"
-            "・標準仕様を知りたい\n"
-            "・耐震性能について\n"
-            "・断熱性能は？\n\n"
-            "ご質問をお待ちしております😊"
+            "・標準仕様について知りたい\n"
+            "・耐震性能は？\n"
+            "・断熱性能について\n\n"
+            "お気軽にご質問ください😊"
         ),
         "ai_site": (
-            "🏢 AI住まいサイト\n\n"
-            "申し訳ございません。\n"
-            "現在、AI住まいサイトは準備中です。\n\n"
-            "もうしばらくお待ちください😴\n"
-            "完成しましたらお知らせいたします！"
+            "🏠 AI住まいサイト\n\n"
+            "キノエデザインのAI住まいサイトへようこそ！\n\n"
+            "現在準備中です。\n"
+            "もうしばらくお待ちください。\n\n"
+            "完成次第、お知らせいたします📢"
         ),
         "document_request": (
-            "📋 資料請求を承ります！\n\n"
-            "資料をお送りいたしますので、以下の情報をお教えください：\n\n"
+            "📋 資料請求承ります\n\n"
+            "キノエデザインの資料をお送りいたします。\n\n"
+            "以下の情報をメッセージでお送りください：\n"
             "1️⃣ お名前（フルネーム）\n"
             "2️⃣ ご住所（郵便番号から）\n"
             "3️⃣ お電話番号\n"
@@ -208,37 +153,43 @@ def get_richmenu_response(action: str, user_id: str) -> str:
             "  ・総合カタログ\n"
             "  ・実例集\n"
             "  ・価格表\n\n"
-            "上記をメッセージでお送りください😊"
+            "お待ちしております📮"
         ),
         "exhibition_reservation": (
             "📍 展示場来場予約\n\n"
-            "展示場へのご来場予約を承ります！\n\n"
+            "キノエデザイン展示場へのご来場予約を承ります。\n\n"
             "【営業時間】\n"
             "平日・土日祝：9:00〜18:00\n"
             "定休日：水曜日\n\n"
-            "ご希望の日時を以下の形式でお送りください：\n"
-            "例）1月15日（土）14:00\n\n"
-            "スタッフ一同、心よりお待ちしております🏠"
+            "【展示場住所】\n"
+            "〒XXX-XXXX\n"
+            "住所をここに記載\n\n"
+            "ご希望の日時をメッセージでお送りください。\n"
+            "例）1月20日（土）14:00\n\n"
+            "スタッフ一同、お待ちしております🏠"
         ),
         "finance_planning": (
-            "💰 資金計画・住宅ローン相談\n\n"
-            "マイホームの資金計画をサポートいたします！\n\n"
-            "以下についてお答えください：\n"
-            "1️⃣ ご年収（世帯年収）\n"
-            "2️⃣ 自己資金の額\n"
-            "3️⃣ ご希望の返済期間\n"
-            "4️⃣ 建築予定地の有無\n\n"
-            "プライバシーは厳守いたします。\n"
-            "お気軽にご相談ください💪"
+            "💰 資金計画相談\n\n"
+            "マイホームの資金計画をサポートいたします。\n\n"
+            "住宅ローンシミュレーション、返済計画など\n"
+            "お客様に最適なプランをご提案します。\n\n"
+            "ご相談内容をメッセージでお送りください：\n"
+            "・ご年収（世帯年収）\n"
+            "・自己資金の額\n"
+            "・ご希望の借入額\n"
+            "・返済期間\n\n"
+            "プライバシーは厳守いたします🔒"
         ),
         "chat_consultation": (
-            "💬 スタッフとのチャット相談\n\n"
-            "キノエデザインのスタッフが対応いたします！\n\n"
+            "💬 チャット相談\n\n"
+            "キノエデザインのスタッフが対応いたします。\n\n"
             "【対応時間】\n"
             "平日：9:00〜18:00\n"
-            "土日祝：9:00〜18:00\n\n"
-            "営業時間外の場合は、翌営業日に返信いたします。\n"
-            "どうぞお気軽にメッセージをお送りください😊"
+            "土日祝：9:00〜18:00\n"
+            "定休日：水曜日\n\n"
+            "住まいに関するご相談、ご質問など\n"
+            "お気軽にメッセージをお送りください。\n\n"
+            "営業時間外の場合は、翌営業日に返信いたします📱"
         ),
         "general": None  # 一般メッセージはRAG処理へ
     }
