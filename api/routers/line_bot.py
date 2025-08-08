@@ -445,7 +445,7 @@ def test_line_bot_connection():
         return {
             "status": "success",
             "message": "LINE Bot API is configured correctly (SDK v3.5.0)",
-            "webhook_url": "https://your-domain.com/line/webhook",
+            "webhook_url": "https://rag-api-190389115361.asia-northeast1.run.app/line/webhook",
             "config": {
                 "access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
                 "channel_secret_set": bool(LINE_CHANNEL_SECRET)
