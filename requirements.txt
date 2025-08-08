@@ -110,22 +110,33 @@ gitpython==3.1.45
     # via streamlit
 google-api-core[grpc]==2.25.1
     # via
+    #   google-cloud-appengine-logging
     #   google-cloud-core
     #   google-cloud-firestore
+    #   google-cloud-logging
     #   google-cloud-secret-manager
     #   google-cloud-storage
 google-auth==2.29.0
     # via
     #   -r requirements.in
     #   google-api-core
+    #   google-cloud-appengine-logging
     #   google-cloud-core
     #   google-cloud-firestore
+    #   google-cloud-logging
     #   google-cloud-storage
+google-cloud-appengine-logging==1.6.2
+    # via google-cloud-logging
+google-cloud-audit-log==0.3.2
+    # via google-cloud-logging
 google-cloud-core==2.4.3
     # via
     #   google-cloud-firestore
+    #   google-cloud-logging
     #   google-cloud-storage
 google-cloud-firestore==2.20.2
+    # via -r requirements.in
+google-cloud-logging==3.12.1
     # via -r requirements.in
 google-cloud-secret-manager==2.16.1
     # via -r requirements.in
@@ -140,12 +151,15 @@ google-resumable-media==2.7.2
 googleapis-common-protos[grpc]==1.70.0
     # via
     #   google-api-core
+    #   google-cloud-audit-log
     #   grpc-google-iam-v1
     #   grpcio-status
 greenlet==3.2.3
     # via sqlalchemy
 grpc-google-iam-v1==0.14.2
-    # via google-cloud-secret-manager
+    # via
+    #   google-cloud-logging
+    #   google-cloud-secret-manager
 grpcio==1.74.0
     # via
     #   google-api-core
@@ -174,6 +188,8 @@ idna==3.10
     #   httpx
     #   requests
     #   yarl
+importlib-metadata==8.7.0
+    # via opentelemetry-api
 jinja2==3.1.6
     # via
     #   altair
@@ -284,6 +300,8 @@ openai==1.82.1
     #   -r requirements.in
     #   langchain-openai
     #   ragas
+opentelemetry-api==1.36.0
+    # via google-cloud-logging
 orjson==3.11.0
     # via langsmith
 packaging==23.2
@@ -312,13 +330,18 @@ propcache==0.3.2
 proto-plus==1.26.1
     # via
     #   google-api-core
+    #   google-cloud-appengine-logging
     #   google-cloud-firestore
+    #   google-cloud-logging
     #   google-cloud-secret-manager
 protobuf==4.25.3
     # via
     #   -r requirements.in
     #   google-api-core
+    #   google-cloud-appengine-logging
+    #   google-cloud-audit-log
     #   google-cloud-firestore
+    #   google-cloud-logging
     #   google-cloud-secret-manager
     #   googleapis-common-protos
     #   grpc-google-iam-v1
@@ -326,7 +349,9 @@ protobuf==4.25.3
     #   proto-plus
     #   streamlit
 psutil==7.0.0
-    # via accelerate
+    # via
+    #   -r requirements.in
+    #   accelerate
 psycopg2-binary==2.9.10
     # via -r requirements.in
 pyarrow==21.0.0
@@ -503,6 +528,7 @@ typing-extensions==4.14.1
     #   fastapi
     #   huggingface-hub
     #   openai
+    #   opentelemetry-api
     #   pydantic
     #   pydantic-core
     #   referencing
@@ -530,3 +556,5 @@ xxhash==3.5.0
     # via datasets
 yarl==1.20.1
     # via aiohttp
+zipp==3.23.0
+    # via importlib-metadata
