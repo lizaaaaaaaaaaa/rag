@@ -1,5 +1,5 @@
 steps:
-  # ステップ1: APIサーバー用イメージをビルド
+  # 1. APIサーバー用イメージをビルド
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
@@ -8,17 +8,18 @@ steps:
       '-f', 'Dockerfile.api',
       '.'
     ]
-    timeout: '1200s'
+    timeout: '900s'
 
-  # ステップ2: APIサーバーイメージをArtifact Registryにプッシュ
+
+  # 2. APIサーバーイメージをArtifact Registryにプッシュ
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
       'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
     ]
-    timeout: '600s'
 
-  # ステップ3: フロントエンド用イメージをビルド
+
+  # 3. フロントエンド用イメージをビルド
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
@@ -27,17 +28,18 @@ steps:
       '-f', 'Dockerfile.front',
       '.'
     ]
-    timeout: '1200s'
+    timeout: '900s'
 
-  # ステップ4: フロントエンドイメージをArtifact Registryにプッシュ
+
+  # 4. フロントエンドイメージをArtifact Registryにプッシュ
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
       'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest'
     ]
-    timeout: '600s'
 
-  # ステップ5: APIサーバーをCloud Runにデプロイ（完全版・監視対応）
+
+  # 5. APIサーバーをCloud Runにデプロイ（完全版）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -48,27 +50,21 @@ steps:
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
-      # リソース設定（監視システム対応）
       - --memory=32Gi
       - --cpu=8
-      - --timeout=900s
+      - --timeout=600s
       - --min-instances=1
-      - --max-instances=30
-      - --concurrency=1000
+      - --max-instances=25
+      - --concurrency=100
       - --port=8080
-      # 環境変数設定
-      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=512,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,OPENAI_TEMPERATURE=0.3,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app,GOOGLE_CLOUD_REGION=asia-northeast1,REDIS_URL=redis://your-redis-instance,LANGCHAIN_TRACING_V2=false,LANGCHAIN_PROJECT=default,DISABLE_LANGSMITH=true
-      # Secret Manager統合
+      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=512,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,REDIS_URL=redis://your-redis-instance,LANGCHAIN_TRACING_V2=false,LANGCHAIN_PROJECT=default,DISABLE_LANGSMITH=true,OPENAI_TEMPERATURE=0.3,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app
       - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest,GOOGLE_SEARCH_API_KEY=GOOGLE_SEARCH_API_KEY:latest,GOOGLE_SEARCH_ENGINE_ID=GOOGLE_SEARCH_ENGINE_ID:latest,LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,LINE_LOGIN_CHANNEL_ID=LINE_LOGIN_CHANNEL_ID:latest,LINE_LOGIN_CHANNEL_SECRET=LINE_LOGIN_CHANNEL_SECRET:latest,LINE_LOGIN_REDIRECT_URI=LINE_LOGIN_REDIRECT_URI:latest,LIFF_ID=LIFF_ID:latest,JWT_SECRET=JWT_SECRET:latest,LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest
-      # ネットワークとサービスアカウント
       - --service-account=190389115361-compute@developer.gserviceaccount.com
       - --vpc-egress=private-ranges-only
-      # ヘルスチェック設定
-      - --cpu-boost
-      - --execution-environment=gen2
-    timeout: '900s'
+    timeout: '600s'
 
-  # ステップ6: フロントエンドをCloud Runにデプロイ
+
+  # 6. フロントエンドをCloud Runにデプロイ
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -81,124 +77,21 @@ steps:
       - --allow-unauthenticated
       - --memory=4Gi
       - --cpu=4
-      - --timeout=600s
+      - --timeout=300s
       - --min-instances=1
-      - --max-instances=50
+      - --max-instances=30
       - --concurrency=80
       - --port=8080
-      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,DB_HOST=127.0.0.1,DB_PORT=5432,DB_USER=raguser,DB_NAME=rag_db,ENV=production
+      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,DB_HOST=127.0.0.1,DB_PORT=5432,DB_USER=raguser,DB_NAME=rag_db
       - --set-secrets=DB_PASSWORD=db-password:latest
     timeout: '600s'
 
-  # ステップ7: デプロイ後のヘルスチェック
-  - name: 'gcr.io/cloud-builders/curl'
-    args: [
-      '-f',
-      '-s',
-      '-S',
-      '--retry', '5',
-      '--retry-delay', '10',
-      '--max-time', '30',
-      'https://rag-api-190389115361.asia-northeast1.run.app/system-health'
-    ]
-    timeout: '300s'
 
-  # ステップ8: LINE Bot設定の確認
-  - name: 'gcr.io/cloud-builders/curl'
-    args: [
-      '-f',
-      '-s',
-      '-S',
-      '--max-time', '30',
-      'https://rag-api-190389115361.asia-northeast1.run.app/line-bot-diagnostics'
-    ]
-    timeout: '300s'
-
-  # ステップ9: リッチメニュー設定（オプション）
-  - name: 'gcr.io/cloud-builders/gcloud'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        echo "🔧 Post-deployment setup initiated..."
-        
-        # 必要に応じてリッチメニュー設定スクリプト実行
-        # python3 scripts/setup_fixed_richmenu.py
-        
-        echo "✅ Post-deployment setup completed"
-    timeout: '300s'
-
-# イメージ一覧
 images:
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest'
 
-# ビルド設定オプション
+
 options:
-  # 高性能マシンタイプを使用
-  machineType: 'E2_HIGHCPU_32'
-  # ログ設定
+  machineType: 'E2_HIGHCPU_8'
   logging: CLOUD_LOGGING_ONLY
-  # 環境変数
-  env:
-    - 'DOCKER_BUILDKIT=1'
-
-# Secret Manager設定（利用可能なシークレット）
-availableSecrets:
-  secretManager:
-    # 基本認証
-    - versionName: projects/rag-cloud-project/secrets/OPENAI_API_KEY/versions/latest
-      env: 'OPENAI_API_KEY'
-    
-    # Google OAuth
-    - versionName: projects/rag-cloud-project/secrets/GOOGLE_CLIENT_ID/versions/latest
-      env: 'GOOGLE_CLIENT_ID'
-    - versionName: projects/rag-cloud-project/secrets/GOOGLE_CLIENT_SECRET/versions/latest
-      env: 'GOOGLE_CLIENT_SECRET'
-    - versionName: projects/rag-cloud-project/secrets/GOOGLE_REDIRECT_URI/versions/latest
-      env: 'GOOGLE_REDIRECT_URI'
-    
-    # Google Search API
-    - versionName: projects/rag-cloud-project/secrets/GOOGLE_SEARCH_API_KEY/versions/latest
-      env: 'GOOGLE_SEARCH_API_KEY'
-    - versionName: projects/rag-cloud-project/secrets/GOOGLE_SEARCH_ENGINE_ID/versions/latest
-      env: 'GOOGLE_SEARCH_ENGINE_ID'
-    
-    # LINE Messaging API
-    - versionName: projects/rag-cloud-project/secrets/LINE_CHANNEL_ACCESS_TOKEN/versions/latest
-      env: 'LINE_CHANNEL_ACCESS_TOKEN'
-    - versionName: projects/rag-cloud-project/secrets/LINE_CHANNEL_SECRET/versions/latest
-      env: 'LINE_CHANNEL_SECRET'
-    
-    # LINE Login & LIFF
-    - versionName: projects/rag-cloud-project/secrets/LINE_LOGIN_CHANNEL_ID/versions/latest
-      env: 'LINE_LOGIN_CHANNEL_ID'
-    - versionName: projects/rag-cloud-project/secrets/LINE_LOGIN_CHANNEL_SECRET/versions/latest
-      env: 'LINE_LOGIN_CHANNEL_SECRET'
-    - versionName: projects/rag-cloud-project/secrets/LINE_LOGIN_REDIRECT_URI/versions/latest
-      env: 'LINE_LOGIN_REDIRECT_URI'
-    - versionName: projects/rag-cloud-project/secrets/LIFF_ID/versions/latest
-      env: 'LIFF_ID'
-    
-    # JWT & その他
-    - versionName: projects/rag-cloud-project/secrets/JWT_SECRET/versions/latest
-      env: 'JWT_SECRET'
-    - versionName: projects/rag-cloud-project/secrets/LANGSMITH_API_KEY/versions/latest
-      env: 'LANGSMITH_API_KEY'
-    
-    # データベース
-    - versionName: projects/rag-cloud-project/secrets/db-name/versions/latest
-      env: 'DB_NAME'
-    - versionName: projects/rag-cloud-project/secrets/db-user/versions/latest
-      env: 'DB_USER'
-    - versionName: projects/rag-cloud-project/secrets/db-password/versions/latest
-      env: 'DB_PASSWORD'
-
-# 置換変数
-substitutions:
-  _PROJECT_ID: 'rag-cloud-project'
-  _REGION: 'asia-northeast1'
-  _SERVICE_NAME_API: 'rag-api'
-  _SERVICE_NAME_FRONTEND: 'rag-frontend'
-  _REGISTRY_HOST: 'asia-northeast1-docker.pkg.dev'
-  _REPOSITORY: 'rag-chat-pro'
