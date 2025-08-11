@@ -372,74 +372,29 @@ def get_app_globals():
         return {'vectorstore': None, 'rag_chain_template': None, 'llm_instance': None}
 
 def detect_richmenu_action(message_text: str) -> str:
-    """高度なリッチメニューアクション検出"""
+    """シンプルなメッセージマッチング"""
     
-    logger.info(f"Detecting rich menu action for message: {message_text[:50]}...")
-    
-    # 完全一致マッピング
-    exact_match_map = {
-        "AI相談を開始": "ai_consultation",
-        "AI住まいサイト": "ai_site", 
+    # 完全一致でシンプルに判定
+    action_map = {
+        "AI相談": "ai_consultation",
         "資料請求": "document_request",
         "展示場予約": "exhibition_reservation",
-        "展示場来場予約": "exhibition_reservation",
-        "資金計画相談": "finance_planning",
-        "チャット相談": "chat_consultation"
+        "資金計画": "finance_planning",
+        "チャット相談": "chat_consultation",
+        "ヘルプ": "help"
     }
     
-    # 完全一致チェック
-    if message_text.strip() in exact_match_map:
-        action = exact_match_map[message_text.strip()]
-        logger.info(f"Detected action (exact match): {action}")
-        return action
+    # 空白や改行を削除してマッチング
+    clean_text = message_text.strip()
     
-    # パターンマッチング（改良版）
-    pattern_map = {
-        'ai_consultation': [
-            r'AI.*相談', r'ai.*相談', r'エーアイ.*相談',
-            r'🤖.*相談', r'AI.*開始', r'相談.*開始'
-        ],
-        'ai_site': [
-            r'AI.*サイト', r'ai.*サイト', r'AI.*ホームページ',
-            r'🌐.*サイト', r'住まい.*サイト'
-        ],
-        'document_request': [
-            r'資料.*請求', r'📋.*請求', r'カタログ.*請求',
-            r'資料.*欲しい', r'パンフレット'
-        ],
-        'exhibition_reservation': [
-            r'展示場.*予約', r'📍.*予約', r'見学.*予約',
-            r'展示場.*来場', r'モデルハウス.*予約'
-        ],
-        'finance_planning': [
-            r'資金.*計画', r'💰.*計画', r'ローン.*相談',
-            r'資金.*相談', r'金融.*相談'
-        ],
-        'chat_consultation': [
-            r'チャット.*相談', r'💬.*相談', r'スタッフ.*相談',
-            r'直接.*相談'
-        ]
-    }
+    if clean_text in action_map:
+        return action_map[clean_text]
     
-    # パターンマッチング実行
-    for action, patterns in pattern_map.items():
-        for pattern in patterns:
-            if re.search(pattern, message_text, re.IGNORECASE):
-                logger.info(f"Detected action (pattern match): {action} via pattern: {pattern}")
-                return action
+    # 部分一致でも確認
+    for key, value in action_map.items():
+        if key in clean_text:
+            return value
     
-    # 挨拶・一般的なメッセージの検出
-    greeting_patterns = [
-        r'^(こんにちは|こんばんは|おはよう|はじめまして)',
-        r'^(hello|hi|hey)',
-        r'(ありがとう|どうも|お疲れ)'
-    ]
-    
-    for pattern in greeting_patterns:
-        if re.search(pattern, message_text, re.IGNORECASE):
-            return "greeting"
-    
-    logger.info("No specific pattern detected, treating as general message")
     return "general"
 
 def get_richmenu_response(action: str, user_id: str, context: dict = None) -> str:
