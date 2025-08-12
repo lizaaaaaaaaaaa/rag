@@ -1,4 +1,4 @@
-# main.py - 完全版（ヘルスチェック・監視・LINE Bot統合）
+# main.py - 完全版（ヘルスチェック・監視・LINE Bot統合 + /healthz追加）
 
 import os
 import sys
@@ -102,8 +102,6 @@ app.add_middleware(
 async def add_comprehensive_security_headers(request, call_next):
     """包括的セキュリティヘッダーの追加"""
     response = await call_next(request)
-    
-    # CSPヘッダー（LIFF対応）
     response.headers["Content-Security-Policy"] = (
         "default-src 'self' https:; "
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' https: https://static.line-scdn.net https://d.line-scdn.net; "
@@ -115,17 +113,13 @@ async def add_comprehensive_security_headers(request, call_next):
         "object-src 'none'; "
         "base-uri 'self';"
     )
-    
-    # その他のセキュリティヘッダー
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
-    
     if os.getenv("ENV") == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    
     return response
 
 # パフォーマンス監視ミドルウェア
@@ -133,24 +127,14 @@ async def add_comprehensive_security_headers(request, call_next):
 async def monitor_performance(request: Request, call_next):
     """リクエストパフォーマンスの監視"""
     start_time = datetime.now()
-    
-    # リクエスト情報をログ
     client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
     user_agent = request.headers.get("User-Agent", "unknown")
-    
     response = await call_next(request)
-    
-    # パフォーマンスメトリクス計算
     process_time = (datetime.now() - start_time).total_seconds()
-    
-    # 遅いリクエストの警告
     if process_time > 5.0:
         logger.warning(f"Slow request: {request.method} {request.url.path} took {process_time:.2f}s")
-    
-    # レスポンスヘッダーにパフォーマンス情報を追加
     response.headers["X-Process-Time"] = str(process_time)
     response.headers["X-Timestamp"] = start_time.isoformat()
-    
     return response
 
 # ★★★ システム監視クラス ★★★
@@ -163,25 +147,18 @@ class SystemMonitor:
         self.last_health_check = None
     
     def record_request(self):
-        """リクエスト数をカウント"""
         self.request_count += 1
     
     def record_error(self):
-        """エラー数をカウント"""
         self.error_count += 1
     
     def get_system_metrics(self) -> Dict[str, Any]:
-        """システムメトリクスを取得"""
         try:
-            # CPU・メモリ使用率
             cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
             disk = psutil.disk_usage('/')
-            
-            # プロセス情報
             process = psutil.Process()
             process_memory = process.memory_info()
-            
             return {
                 "system": {
                     "cpu_percent": cpu_percent,
@@ -221,42 +198,32 @@ llm_instance = None
 # ★★★ 拡張スタートアップ処理 ★★★
 @app.on_event("startup")
 async def enhanced_startup():
-    """包括的な起動処理とヘルスチェック"""
     global startup_time, vectorstore, rag_chain_template, llm_instance
-    
     startup_time = datetime.now()
     logger.info("🚀 Enhanced startup process initiated")
     logger.info("=" * 60)
-    
-    # ★ 1. 起動時システムチェック
+
+    # 1. システムチェック
     try:
         logger.info("📊 System Resource Check:")
-        
-        # システムリソースチェック
         cpu_count = psutil.cpu_count()
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
-        
         logger.info(f"  CPU cores: {cpu_count}")
         logger.info(f"  Total memory: {memory.total / (1024**3):.2f} GB")
         logger.info(f"  Available memory: {memory.available / (1024**3):.2f} GB")
         logger.info(f"  Memory usage: {memory.percent:.1f}%")
         logger.info(f"  Disk usage: {(disk.used / disk.total) * 100:.1f}%")
-        
-        # 最小リソース要件チェック
-        if memory.available < 1 * (1024**3):  # 1GB未満
+        if memory.available < 1 * (1024**3):
             logger.warning("⚠️ Low memory warning: Less than 1GB available")
-        
-        if (disk.used / disk.total) > 0.9:  # 90%以上使用
+        if (disk.used / disk.total) > 0.9:
             logger.warning("⚠️ High disk usage warning: Over 90% used")
-            
     except Exception as e:
         logger.error(f"❌ System resource check failed: {e}")
-    
-    # ★ 2. Cloud Run環境情報
+
+    # 2. Cloud Run環境情報
     try:
         logger.info("☁️ Cloud Run Environment:")
-        
         cloud_run_info = {
             "service_name": os.environ.get("K_SERVICE", "local"),
             "revision": os.environ.get("K_REVISION", "local"),
@@ -264,44 +231,35 @@ async def enhanced_startup():
             "region": os.environ.get("GOOGLE_CLOUD_REGION", "unknown"),
             "project": os.environ.get("GOOGLE_CLOUD_PROJECT", "unknown")
         }
-        
         for key, value in cloud_run_info.items():
             logger.info(f"  {key}: {value}")
-            
     except Exception as e:
         logger.error(f"❌ Cloud Run info collection failed: {e}")
-    
-    # ★ 3. LLM初期化
+
+    # 3. LLM初期化
     try:
         logger.info("🧠 Loading LLM...")
         from llm.llm_runner import load_llm
-        
         llm, tokenizer, max_tokens = load_llm()
         llm_instance = llm
         logger.info(f"✅ LLM loaded: {type(llm).__name__}")
-        
-        # LLMテスト
         try:
             test_response = llm.invoke("こんにちは") if hasattr(llm, "invoke") else llm("こんにちは")
             logger.info("✅ LLM test successful")
         except Exception as e:
             logger.warning(f"⚠️ LLM test warning (non-critical): {e}")
-            
     except Exception as e:
         logger.error(f"❌ LLM load failed: {e}")
         logger.error(traceback.format_exc())
         llm_instance = None
 
-    # ★ 4. ベクトルストア初期化
+    # 4. ベクトルストア初期化
     try:
         logger.info("🔍 Loading Vectorstore...")
         from rag.ingested_text import load_vectorstore
-        
         vectorstore = load_vectorstore()
         if vectorstore:
             logger.info("✅ Vectorstore loaded successfully")
-            
-            # ベクトルストアテスト
             try:
                 test_results = vectorstore.similarity_search("住宅", k=1)
                 logger.info(f"✅ Vectorstore test successful: {len(test_results)} results")
@@ -309,21 +267,17 @@ async def enhanced_startup():
                 logger.warning(f"⚠️ Vectorstore test warning: {e}")
         else:
             logger.warning("⚠️ Vectorstore is None")
-            
     except Exception as e:
         logger.warning(f"⚠️ Vectorstore load failed: {e}")
         vectorstore = None
 
-    # ★ 5. RAGチェーン構築
+    # 5. RAGチェーン構築
     try:
         if vectorstore and llm_instance:
             logger.info("⛓️ Building RAG chain...")
             from rag.ingested_text import get_rag_chain
-            
             rag_chain_template = get_rag_chain(vectorstore=vectorstore, return_source=True)
             logger.info("✅ RAG chain created with LLM and Vectorstore")
-            
-            # RAGチェーンテスト
             try:
                 test_query = "テスト"
                 test_result = rag_chain_template.invoke({"query": test_query})
@@ -333,20 +287,16 @@ async def enhanced_startup():
                     logger.warning("⚠️ RAG chain returned empty result")
             except Exception as e:
                 logger.warning(f"⚠️ RAG chain test warning: {e}")
-                
         elif vectorstore:
             logger.info("⛓️ Building search-only chain...")
-            # LLMなしの検索専用チェーン
             class SimpleSearchChain:
                 def __init__(self, vectorstore):
                     self.vectorstore = vectorstore
                     self.retriever = vectorstore.as_retriever()
                     self.callbacks = []
-
                 def invoke(self, inputs):
                     query = inputs.get("query", "")
                     docs = self.retriever.invoke(query)
-                    
                     if docs:
                         result = "関連情報:\n\n"
                         for i, doc in enumerate(docs[:3], 1):
@@ -356,24 +306,20 @@ async def enhanced_startup():
                             result += f"{i}. {content}...\n出典: {source} (p{page})\n\n"
                     else:
                         result = "関連する文書が見つかりませんでした。"
-                    
                     return {"result": result, "source_documents": docs[:3]}
-
             rag_chain_template = SimpleSearchChain(vectorstore)
             logger.info("✅ Search-only chain created")
         else:
             logger.warning("⚠️ No vectorstore available for RAG chain")
             rag_chain_template = None
-            
     except Exception as e:
         logger.error(f"❌ RAG chain creation failed: {e}")
         logger.error(traceback.format_exc())
         rag_chain_template = None
 
-    # ★ 6. LINE Bot設定確認
+    # 6. LINE Bot設定確認
     try:
         logger.info("📱 LINE Bot Configuration Check:")
-        
         line_checks = {
             "LINE_CHANNEL_ACCESS_TOKEN": bool(os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')),
             "LINE_CHANNEL_SECRET": bool(os.environ.get('LINE_CHANNEL_SECRET')),
@@ -381,42 +327,33 @@ async def enhanced_startup():
             "LINE_LOGIN_CHANNEL_SECRET": bool(os.environ.get('LINE_LOGIN_CHANNEL_SECRET')),
             "LIFF_ID": bool(os.environ.get('LIFF_ID'))
         }
-        
         for key, status in line_checks.items():
             logger.info(f"  {key}: {'✅ Set' if status else '❌ Not set'}")
-            
-        # LINE SDK確認
         try:
             from linebot.v3 import WebhookHandler
             logger.info("  LINE SDK: ✅ Available (v3.5.0)")
         except ImportError:
             logger.warning("  LINE SDK: ⚠️ Not available")
-            
     except Exception as e:
         logger.error(f"❌ LINE Bot configuration check failed: {e}")
 
-    # ★ 7. 起動完了サマリー
+    # 7. 起動完了サマリー
     startup_duration = (datetime.now() - startup_time).total_seconds()
-    
     logger.info("=" * 60)
     logger.info("🎉 Enhanced Startup Complete!")
     logger.info(f"⏱️ Startup duration: {startup_duration:.2f} seconds")
     logger.info("=" * 60)
-    
-    # コンポーネント状態サマリー
     components_status = {
         "LLM": "✅ Loaded" if llm_instance else "❌ Not loaded",
-        "VectorStore": "✅ Loaded" if vectorstore else "❌ Not loaded", 
+        "VectorStore": "✅ Loaded" if vectorstore else "❌ Not loaded",
         "RAG Chain": "✅ Created" if rag_chain_template else "❌ Not created",
-        "LINE Bot": "✅ Configured" if line_checks.get('LINE_CHANNEL_ACCESS_TOKEN') and line_checks.get('LINE_CHANNEL_SECRET') else "❌ Not configured",
-        "LINE Login": "✅ Configured" if line_checks.get('LINE_LOGIN_CHANNEL_ID') and line_checks.get('LINE_LOGIN_CHANNEL_SECRET') else "❌ Not configured",
-        "LIFF": "✅ Configured" if line_checks.get('LIFF_ID') else "❌ Not configured"
+        "LINE Bot": "✅ Configured" if os.environ.get('LINE_CHANNEL_ACCESS_TOKEN') and os.environ.get('LINE_CHANNEL_SECRET') else "❌ Not configured",
+        "LINE Login": "✅ Configured" if os.environ.get('LINE_LOGIN_CHANNEL_ID') and os.environ.get('LINE_LOGIN_CHANNEL_SECRET') else "❌ Not configured",
+        "LIFF": "✅ Configured" if os.environ.get('LIFF_ID') else "❌ Not configured"
     }
-    
     logger.info("📊 Component Status:")
     for component, status in components_status.items():
         logger.info(f"  {component}: {status}")
-    
     logger.info("=" * 60)
     logger.info(f"🌐 Service ready at: {datetime.now().isoformat()}")
     logger.info("=" * 60)
@@ -428,7 +365,11 @@ from api.routers import upload, chat, google_oauth, healthz, line_bot, line_logi
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(google_oauth.router, tags=["auth"])
-app.include_router(healthz.router, prefix="", tags=["healthz"])
+
+# NOTE:
+# /healthz は本ファイル(main.py)で提供するため、既存 healthz ルーターは競合回避のため /ops 配下にマウント。
+# （/ops/healthz でより詳細なチェックを実行可能）
+app.include_router(healthz.router, prefix="/ops", tags=["healthz-ops"])
 
 # LINE関連ルーター
 app.include_router(line_bot.router, tags=["line"])
@@ -442,24 +383,16 @@ if os.path.isdir(pdf_dir):
 # ★★★ LIFF アプリ対応 ★★★
 @app.get("/liff")
 async def serve_liff_app():
-    """LIFF アプリを提供"""
     liff_id = os.environ.get("LIFF_ID", "2007887876-vMNe74eX")
-    
     try:
-        # LIFF アプリのHTMLを読み込み
         liff_html_path = "liff_app.html"
-        
         if os.path.exists(liff_html_path):
             with open(liff_html_path, "r", encoding="utf-8") as f:
                 html_content = f.read()
-            
-            # LIFF IDを実際の値に置換
             html_content = html_content.replace("YOUR_LIFF_ID", liff_id)
             html_content = html_content.replace("YOUR_API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
-            
             return HTMLResponse(content=html_content)
         else:
-            # 簡単なLIFFアプリのHTMLを動的生成
             html_content = f"""
 <!DOCTYPE html>
 <html lang="ja">
@@ -509,49 +442,33 @@ async def serve_liff_app():
         async function sendMessage() {{
             const input = document.getElementById('messageInput');
             const message = input.value.trim();
-            
             if (!message) return;
-            
             const chatArea = document.getElementById('chatArea');
-            
-            // ユーザーメッセージを表示
             chatArea.innerHTML += `<div class="message user">${{message}}</div>`;
             input.value = '';
-            
             try {{
-                // APIに送信
                 const response = await fetch('https://rag-api-190389115361.asia-northeast1.run.app/chat/', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ question: message, username: 'liff-user' }})
                 }});
-                
                 const data = await response.json();
-                
-                // AI回答を表示
                 chatArea.innerHTML += `<div class="message ai">${{data.answer || 'エラーが発生しました'}}</div>`;
-                
             }} catch (error) {{
                 chatArea.innerHTML += `<div class="message ai">エラーが発生しました。再度お試しください。</div>`;
             }}
-            
             chatArea.scrollTop = chatArea.scrollHeight;
         }}
-
-        // エンターキーでメッセージ送信
         document.getElementById('messageInput').addEventListener('keypress', function(e) {{
             if (e.key === 'Enter') {{
                 sendMessage();
             }}
         }});
-
-        // LIFF初期化
         initializeLiff();
     </script>
 </body>
 </html>
             """
-            
             return HTMLResponse(content=html_content)
     except Exception as e:
         logger.error(f"LIFF app error: {e}")
@@ -568,51 +485,33 @@ async def serve_liff_app():
             status_code=500
         )
 
-# ★★★ システムヘルスチェック ★★★
+# ★★★ システムヘルスチェック（包括版）★★★
 @app.get("/system-health")
 def comprehensive_system_health():
-    """システム全体の包括的ヘルスチェック"""
     try:
-        # システムメトリクス取得
         metrics = system_monitor.get_system_metrics()
-        
-        # 各コンポーネントの状態
         components_status = {
             "llm": llm_instance is not None,
             "vectorstore": vectorstore is not None,
             "rag_chain": rag_chain_template is not None,
-            "line_bot": bool(
-                os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") and
-                os.environ.get("LINE_CHANNEL_SECRET")
-            ),
-            "line_login": bool(
-                os.environ.get("LINE_LOGIN_CHANNEL_ID") and 
-                os.environ.get("LINE_LOGIN_CHANNEL_SECRET")
-            ),
+            "line_bot": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") and os.environ.get("LINE_CHANNEL_SECRET")),
+            "line_login": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID") and os.environ.get("LINE_LOGIN_CHANNEL_SECRET")),
             "liff": bool(os.environ.get("LIFF_ID"))
         }
-        
-        # Cloud Run環境情報
         cloud_run_info = {
             "service_name": os.environ.get("K_SERVICE", "local"),
             "revision": os.environ.get("K_REVISION", "local"),
             "configuration": os.environ.get("K_CONFIGURATION", "local"),
             "region": os.environ.get("GOOGLE_CLOUD_REGION", "unknown")
         }
-        
-        # 全体的な健全性判定
         all_critical_healthy = all([
-            components_status["llm"] or components_status["vectorstore"],  # LLMまたはベクトルストアのどちらかは必要
+            components_status["llm"] or components_status["vectorstore"],
             metrics.get("system", {}).get("cpu_percent", 100) < 90,
             metrics.get("system", {}).get("memory_percent", 100) < 90
         ])
-        
         health_status = "healthy" if all_critical_healthy else "degraded"
-        
-        # エラー率チェック
         if metrics.get("application", {}).get("error_rate", 0) > 0.1:
             health_status = "degraded"
-        
         return {
             "status": health_status,
             "timestamp": datetime.now().isoformat(),
@@ -629,61 +528,72 @@ def comprehensive_system_health():
             },
             "recommendations": generate_health_recommendations(metrics, components_status)
         }
-        
     except Exception as e:
         logger.error(f"System health check failed: {e}")
+        return {"status": "error", "error": str(e), "timestamp": datetime.now().isoformat()}
+
+def generate_health_recommendations(metrics: Dict, components: Dict) -> List[str]:
+    recommendations = []
+    system_metrics = metrics.get("system", {})
+    app_metrics = metrics.get("application", {})
+    if system_metrics.get("cpu_percent", 0) > 80:
+        recommendations.append("CPU使用率が高いです。負荷分散を検討してください。")
+    if system_metrics.get("memory_percent", 0) > 80:
+        recommendations.append("メモリ使用率が高いです。インスタンスサイズの増強を検討してください。")
+    if system_metrics.get("disk_percent", 0) > 80:
+        recommendations.append("ディスク使用率が高いです。ログローテーションを確認してください。")
+    if app_metrics.get("error_rate", 0) > 0.05:
+        recommendations.append("エラー率が高いです。ログを確認してください。")
+    if not components.get("llm"):
+        recommendations.append("LLMが読み込まれていません。OPENAI_API_KEYを確認してください。")
+    if not components.get("vectorstore"):
+        recommendations.append("ベクトルストアが読み込まれていません。")
+    if not components.get("line_bot"):
+        recommendations.append("LINE Botが設定されていません。認証情報を確認してください。")
+    if not recommendations:
+        recommendations.append("システムは正常に動作しています。")
+    return recommendations
+
+# ★★★ ここから：要求通りの /healthz（基本版）★★★
+@app.get("/healthz")
+def health_check():
+    """基本的なヘルスチェックエンドポイント"""
+    try:
+        health_status = {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "service": "rag-api",
+            "version": "2.0.0"
+        }
+        components_ok = True
+
+        # LLMインスタンスチェック
+        if llm_instance is None:
+            health_status.setdefault("warnings", []).append("LLM instance not loaded")
+            components_ok = False
+
+        # LINE Bot設定チェック（警告のみ）
+        if not os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"):
+            health_status.setdefault("warnings", []).append("LINE credentials not configured")
+
+        # 全体ステータス判定
+        if not components_ok:
+            health_status["status"] = "degraded"
+
+        return health_status
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
         return {
-            "status": "error", 
+            "status": "unhealthy",
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
 
-def generate_health_recommendations(metrics: Dict, components: Dict) -> List[str]:
-    """健康状態に基づく推奨事項を生成"""
-    recommendations = []
-    
-    system_metrics = metrics.get("system", {})
-    app_metrics = metrics.get("application", {})
-    
-    # CPU使用率チェック
-    if system_metrics.get("cpu_percent", 0) > 80:
-        recommendations.append("CPU使用率が高いです。負荷分散を検討してください。")
-    
-    # メモリ使用率チェック
-    if system_metrics.get("memory_percent", 0) > 80:
-        recommendations.append("メモリ使用率が高いです。インスタンスサイズの増強を検討してください。")
-    
-    # ディスク使用率チェック
-    if system_metrics.get("disk_percent", 0) > 80:
-        recommendations.append("ディスク使用率が高いです。ログローテーションを確認してください。")
-    
-    # エラー率チェック
-    if app_metrics.get("error_rate", 0) > 0.05:
-        recommendations.append("エラー率が高いです。ログを確認してください。")
-    
-    # コンポーネントチェック
-    if not components.get("llm"):
-        recommendations.append("LLMが読み込まれていません。OPENAI_API_KEYを確認してください。")
-    
-    if not components.get("vectorstore"):
-        recommendations.append("ベクトルストアが読み込まれていません。")
-    
-    if not components.get("line_bot"):
-        recommendations.append("LINE Botが設定されていません。認証情報を確認してください。")
-    
-    if not recommendations:
-        recommendations.append("システムは正常に動作しています。")
-    
-    return recommendations
-
 # ★★★ LINE Bot診断 ★★★
 @app.get("/line-bot-diagnostics")
 def comprehensive_line_bot_diagnostics():
-    """LINE Bot特化の包括的診断情報"""
     try:
         diagnostics = {}
-        
-        # 環境変数チェック
         env_vars = {
             "LINE_CHANNEL_ACCESS_TOKEN": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")),
             "LINE_CHANNEL_SECRET": bool(os.environ.get("LINE_CHANNEL_SECRET")),
@@ -691,30 +601,23 @@ def comprehensive_line_bot_diagnostics():
             "LINE_LOGIN_CHANNEL_SECRET": bool(os.environ.get("LINE_LOGIN_CHANNEL_SECRET")),
             "LIFF_ID": bool(os.environ.get("LIFF_ID"))
         }
-        
-        # Secret Manager接続テスト
         def test_secret_access():
             try:
                 from google.cloud import secretmanager
                 client = secretmanager.SecretManagerServiceClient()
                 project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "rag-cloud-project")
-                
-                # テスト用Secret取得
                 secret_name = f"projects/{project_id}/secrets/LINE_CHANNEL_ACCESS_TOKEN/versions/latest"
                 response = client.access_secret_version(request={"name": secret_name})
                 return len(response.payload.data) > 0
             except Exception as e:
                 logger.error(f"Secret Manager test failed: {e}")
                 return False
-        
-        # LINE API接続テスト
         def test_line_api():
             try:
                 import requests
                 token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
                 if not token:
                     return False
-                    
                 response = requests.get(
                     "https://api.line.me/v2/bot/info",
                     headers={"Authorization": f"Bearer {token}"},
@@ -724,31 +627,23 @@ def comprehensive_line_bot_diagnostics():
             except Exception as e:
                 logger.error(f"LINE API test failed: {e}")
                 return False
-        
-        # Webhook URL疎通テスト
         def test_webhook_endpoint():
             try:
                 import requests
                 service_name = os.environ.get('K_SERVICE', 'rag-api')
                 region = os.environ.get('GOOGLE_CLOUD_REGION', 'asia-northeast1')
-                
                 webhook_url = f"https://{service_name}-190389115361.{region}.run.app/line/status"
-                
                 response = requests.get(webhook_url, timeout=10)
                 return response.status_code == 200
             except Exception as e:
                 logger.error(f"Webhook endpoint test failed: {e}")
                 return False
-        
-        # LINE SDK確認
         def test_line_sdk():
             try:
                 from linebot.v3 import WebhookHandler, MessagingApi
                 return True
             except ImportError:
                 return False
-        
-        # テスト実行
         diagnostics = {
             "environment_variables": env_vars,
             "secret_manager_access": test_secret_access(),
@@ -756,17 +651,12 @@ def comprehensive_line_bot_diagnostics():
             "webhook_endpoint": test_webhook_endpoint(),
             "line_sdk_available": test_line_sdk()
         }
-        
-        # 全体評価
         critical_tests = [
             diagnostics["line_api_connection"],
             diagnostics["webhook_endpoint"], 
             diagnostics["line_sdk_available"]
         ]
-        
         all_tests_passed = all(critical_tests)
-        
-        # 推奨アクション
         recommendations = []
         if not diagnostics["secret_manager_access"]:
             recommendations.append("Secret Manager permissions確認")
@@ -776,7 +666,6 @@ def comprehensive_line_bot_diagnostics():
             recommendations.append("Cloud Run deployment確認")
         if not diagnostics["line_sdk_available"]:
             recommendations.append("LINE Bot SDK installation確認")
-        
         return {
             "overall_status": "healthy" if all_tests_passed else "needs_attention",
             "diagnostics": diagnostics,
@@ -789,76 +678,57 @@ def comprehensive_line_bot_diagnostics():
                 "environment": os.environ.get("ENV", "unknown")
             }
         }
-        
     except Exception as e:
         logger.error(f"LINE Bot diagnostics failed: {e}")
-        return {
-            "overall_status": "error",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
+        return {"overall_status": "error", "error": str(e), "timestamp": datetime.now().isoformat()}
 
 # ★★★ 簡易診断 ★★★
 @app.get("/quick-diagnosis")
 def quick_system_diagnosis():
-    """1分で分かる問題診断"""
     issues = []
     suggestions = []
     critical_issues = []
-    
-    # 基本設定チェック
     if not os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"):
         critical_issues.append("LINE_CHANNEL_ACCESS_TOKEN not found")
         suggestions.append("Set LINE_CHANNEL_ACCESS_TOKEN in Secret Manager")
-    
     if not os.environ.get("LINE_CHANNEL_SECRET"):
         critical_issues.append("LINE_CHANNEL_SECRET not found") 
         suggestions.append("Set LINE_CHANNEL_SECRET in Secret Manager")
-    
     if not llm_instance:
         issues.append("LLM not loaded")
         suggestions.append("Check OPENAI_API_KEY and model loading")
-    
     if not vectorstore:
         issues.append("Vectorstore not loaded")
         suggestions.append("Check vectorstore initialization")
-    
     if not rag_chain_template:
         issues.append("RAG chain not created")
         suggestions.append("Check RAG chain initialization")
-    
-    # システムリソースチェック
     try:
         cpu_percent = psutil.cpu_percent(interval=0.1)
         memory = psutil.virtual_memory()
-        
         if cpu_percent > 90:
             issues.append("High CPU usage")
             suggestions.append("Consider scaling up resources")
-        
         if memory.percent > 90:
             critical_issues.append("High memory usage")
             suggestions.append("Restart service or scale up memory")
     except:
         pass
-    
-    # 全体的な状態判定
     if critical_issues:
         status = "🚨 Critical Issues Detected"
-        priority_actions = critical_issues[:3]  # 上位3つの重要問題
+        priority_actions = critical_issues[:3]
     elif issues:
         status = "⚠️ Issues Detected"
         priority_actions = issues[:3]
     else:
         status = "✅ All Systems Operational"
         priority_actions = []
-    
     return {
         "status": status,
         "critical_issues": critical_issues,
         "issues": issues,
         "priority_actions": priority_actions,
-        "immediate_suggestions": suggestions[:5],  # 上位5つの提案
+        "immediate_suggestions": suggestions[:5],
         "next_steps": [
             "Test rich menu buttons manually",
             "Check Cloud Run logs",
@@ -879,9 +749,7 @@ def quick_system_diagnosis():
 # ★★★ メインエンドポイント ★★★
 @app.get("/")
 def comprehensive_root():
-    """包括的なルートエンドポイント情報"""
     uptime = (datetime.now() - system_monitor.startup_time).total_seconds()
-    
     return {
         "service": {
             "name": "RAG FastAPI Backend with Comprehensive Monitoring",
@@ -905,7 +773,9 @@ def comprehensive_root():
             "liff_app": "/liff",
             "health_check": "/system-health",
             "diagnostics": "/line-bot-diagnostics",
-            "quick_diagnosis": "/quick-diagnosis"
+            "quick_diagnosis": "/quick-diagnosis",
+            "healthz": "/healthz",
+            "ops_healthz": "/ops/healthz"
         },
         "monitoring": {
             "requests_processed": system_monitor.request_count,
@@ -922,7 +792,6 @@ def comprehensive_root():
 
 @app.get("/status")
 def get_comprehensive_status():
-    """包括的なシステムステータス"""
     return {
         "llm_loaded": llm_instance is not None,
         "vectorstore_loaded": vectorstore is not None,
@@ -941,35 +810,9 @@ def get_comprehensive_status():
         "langsmith_enabled": os.environ.get("LANGCHAIN_TRACING_V2") == "true"
     }
 
-# ★★★ デバッグエンドポイント（開発時のみ） ★★★
-if os.getenv("ENV") != "production":
-    @app.get("/debug/env")
-    def debug_environment_variables():
-        """環境変数デバッグ情報（開発時のみ）"""
-        sensitive_keys = ["TOKEN", "SECRET", "KEY", "PASSWORD"]
-        
-        debug_info = {}
-        for key, value in os.environ.items():
-            if any(sensitive in key.upper() for sensitive in sensitive_keys):
-                debug_info[key] = mask_sensitive_data(value) if value else "未設定"
-            else:
-                debug_info[key] = value
-        
-        return {
-            "environment": debug_info,
-            "total_env_vars": len(os.environ),
-            "important_checks": {
-                "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY")),
-                "line_credentials_set": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") and os.environ.get("LINE_CHANNEL_SECRET")),
-                "gcs_bucket_set": bool(os.environ.get("GCS_BUCKET_NAME")),
-                "cloud_run_env": bool(os.environ.get("K_SERVICE"))
-            }
-        }
-
 # CORS preflight handling
 @app.options("/{path:path}")
 async def handle_options_requests(path: str):
-    """CORS preflight requests処理"""
     return JSONResponse(
         content={"message": "OK"},
         headers={
@@ -982,12 +825,9 @@ async def handle_options_requests(path: str):
 # エラーハンドラー
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """グローバル例外ハンドラー"""
     system_monitor.record_error()
-    
     logger.error(f"Global exception: {exc}")
     logger.error(traceback.format_exc())
-    
     return JSONResponse(
         status_code=500,
         content={
