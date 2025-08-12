@@ -1,4 +1,5 @@
-# api/routers/line_bot.py - 完全版（監視・復旧・ヘルスチェック統合）
+# api/routers/line_bot.py - 完全修正版（JSONシリアライズエラー対応・監視・復旧・ヘルスチェック統合）
+
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -10,7 +11,7 @@ import json
 import asyncio
 from typing import Dict, Optional, Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse, JSONResponse
 
@@ -55,7 +56,38 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
-# ★★★ 包括的監視システム ★★★
+# ★★★ JSONシリアライズ対応のユーティリティ関数 ★★★
+def make_json_serializable(obj: Any) -> Any:
+    """オブジェクトをJSONシリアライズ可能に変換"""
+    try:
+        if obj is None:
+            return None
+        elif isinstance(obj, (str, int, float, bool)):
+            return obj
+        elif isinstance(obj, (list, tuple)):
+            return [make_json_serializable(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {str(k): make_json_serializable(v) for k, v in obj.items()}
+        elif hasattr(obj, '__dict__'):
+            return make_json_serializable(obj.__dict__)
+        elif hasattr(obj, 'isoformat'):  # datetime objects
+            return obj.isoformat()
+        else:
+            return str(obj)
+    except Exception as e:
+        logger.warning(f"Failed to serialize object {type(obj)}: {e}")
+        return str(obj)
+
+def safe_json_dumps(obj: Any, **kwargs) -> str:
+    """安全なJSON文字列変換"""
+    try:
+        serializable_obj = make_json_serializable(obj)
+        return json.dumps(serializable_obj, ensure_ascii=False, **kwargs)
+    except Exception as e:
+        logger.error(f"JSON serialization failed: {e}")
+        return f'{{"error": "serialization_failed", "type": "{type(obj).__name__}"}}'
+
+# ★★★ 包括的監視システム（修正版） ★★★
 class ComprehensiveMonitor:
     def __init__(self):
         self.stats = {
@@ -83,8 +115,8 @@ class ComprehensiveMonitor:
         except Exception as e:
             logger.warning(f"Cloud Logging setup failed: {e}")
     
-    def log_webhook_event(self, event_type: str, success: bool = True, details: dict = None):
-        """包括的なWebhookイベントログ記録"""
+    def log_webhook_event(self, event_type: str, success: bool = True, event_data: dict = None):
+        """包括的なWebhookイベントログ記録（JSONシリアライズエラー対応版）"""
         self.stats['webhook_received'] += 1
         self.stats['last_activity'] = datetime.now()
         
@@ -101,24 +133,51 @@ class ComprehensiveMonitor:
         if not success:
             self.stats['errors'] += 1
         
-        # 詳細ログデータ
+        # 詳細ログデータ（JSONシリアライズ対応）
         log_data = {
             'event_type': event_type,
             'success': success,
             'timestamp': self.stats['last_activity'].isoformat(),
-            'stats_snapshot': self.stats.copy(),
-            'details': details or {},
             'error_rate': self.get_error_rate()
         }
         
+        # event_dataをシリアライズ可能な形式に変換
+        if event_data:
+            try:
+                log_data['event_data'] = make_json_serializable(event_data)
+            except Exception as e:
+                logger.warning(f"Failed to serialize event_data: {e}")
+                log_data['event_data'] = {"error": "serialization_failed", "type": str(type(event_data))}
+        
+        # statsのスナップショットも安全に追加
+        try:
+            stats_copy = self.stats.copy()
+            # datetime オブジェクトの処理
+            if stats_copy.get('last_activity'):
+                stats_copy['last_activity'] = stats_copy['last_activity'].isoformat()
+            # user_activity の set オブジェクトを処理
+            if 'richmenu_interactions' in stats_copy:
+                for action, data in stats_copy['richmenu_interactions'].items():
+                    if isinstance(data, dict) and 'users' in data and isinstance(data['users'], set):
+                        data['users'] = list(data['users'])
+            log_data['stats_snapshot'] = make_json_serializable(stats_copy)
+        except Exception as e:
+            logger.warning(f"Failed to include stats snapshot: {e}")
+            log_data['stats_snapshot'] = {"error": "serialization_failed"}
+        
         # 重要度に応じたログレベル
-        if not success:
-            logger.error(f"LINE Event Error: {json.dumps(log_data, ensure_ascii=False)}")
-        else:
-            logger.info(f"LINE Event Success: {json.dumps(log_data, ensure_ascii=False)}")
+        try:
+            log_message = safe_json_dumps(log_data)
+            if not success:
+                logger.error(f"LINE Event Error: {log_message}")
+            else:
+                logger.info(f"LINE Event Success: {log_message}")
+        except Exception as e:
+            # 最後の手段として簡単なログ
+            logger.error(f"LINE Event Log Error - Type: {event_type}, Success: {success}, Error: {e}")
     
     def track_richmenu_interaction(self, action: str, user_id: str, response_time: float = None):
-        """リッチメニューインタラクション詳細追跡"""
+        """リッチメニューインタラクション詳細追跡（修正版）"""
         if action not in self.stats['richmenu_interactions']:
             self.stats['richmenu_interactions'][action] = {
                 'count': 0,
@@ -160,7 +219,7 @@ class ComprehensiveMonitor:
         return self.stats['errors'] / total_events
     
     def get_health_status(self) -> dict:
-        """包括的ヘルス状態返却"""
+        """包括的ヘルス状態返却（JSONシリアライズ対応）"""
         error_rate = self.get_error_rate()
         
         # アクティビティレベル計算
@@ -171,17 +230,21 @@ class ComprehensiveMonitor:
             activity_level = "medium"
         
         # 人気アクション分析
-        popular_actions = sorted(
-            self.stats['richmenu_interactions'].items(),
-            key=lambda x: x[1]['count'] if isinstance(x[1], dict) else 0,
-            reverse=True
-        )[:3]
+        popular_actions = []
+        for action, data in self.stats['richmenu_interactions'].items():
+            if isinstance(data, dict) and 'count' in data:
+                popular_actions.append({'action': action, 'count': data['count']})
+            else:
+                popular_actions.append({'action': action, 'count': data if isinstance(data, int) else 0})
+        
+        popular_actions.sort(key=lambda x: x['count'], reverse=True)
+        popular_actions = popular_actions[:3]
         
         return {
             'overall_status': 'healthy' if error_rate < 0.1 else 'degraded',
             'error_rate': error_rate,
             'activity_level': activity_level,
-            'last_activity': self.stats['last_activity'],
+            'last_activity': self.stats['last_activity'].isoformat() if self.stats['last_activity'] else None,
             'total_events': self.stats['webhook_received'],
             'event_breakdown': {
                 'messages': self.stats['message_events'],
@@ -191,11 +254,10 @@ class ComprehensiveMonitor:
             },
             'richmenu_analytics': {
                 'total_interactions': sum(
-                    interaction['count'] if isinstance(interaction, dict) else interaction
-                    for interaction in self.stats['richmenu_interactions'].values()
+                    data['count'] if isinstance(data, dict) and 'count' in data else (data if isinstance(data, int) else 0)
+                    for data in self.stats['richmenu_interactions'].values()
                 ),
-                'popular_actions': [{'action': action, 'count': data['count'] if isinstance(data, dict) else data} 
-                                   for action, data in popular_actions],
+                'popular_actions': popular_actions,
                 'unique_users': len(self.stats['user_activity'])
             },
             'performance': {
@@ -377,10 +439,13 @@ def detect_richmenu_action(message_text: str) -> str:
     # 完全一致でシンプルに判定
     action_map = {
         "AI相談": "ai_consultation",
+        "AI相談を開始": "ai_consultation",
         "資料請求": "document_request",
         "展示場予約": "exhibition_reservation",
         "資金計画": "finance_planning",
+        "資金計画相談": "finance_planning",
         "チャット相談": "chat_consultation",
+        "AI住まいサイト": "ai_site",
         "ヘルプ": "help"
     }
     
@@ -550,12 +615,16 @@ def get_richmenu_response(action: str, user_id: str, context: dict = None) -> st
     return base_response
 
 async def process_message(message_text: str, user_id: str) -> str:
-    """包括的メッセージ処理システム"""
+    """包括的メッセージ処理システム（デバッグログ強化版）"""
     start_time = datetime.now()
+    
+    logger.info(f"🔍 Processing message from {user_id}: '{message_text[:50]}...'")
     
     try:
         # リッチメニューアクションを検出
         action = detect_richmenu_action(message_text)
+        logger.info(f"📱 Detected action: {action}")
+        
         monitor.track_richmenu_interaction(action, user_id)
         
         # 定型応答がある場合
@@ -563,39 +632,44 @@ async def process_message(message_text: str, user_id: str) -> str:
         if richmenu_response and action != "general":
             response_time = (datetime.now() - start_time).total_seconds()
             monitor.track_richmenu_interaction(action, user_id, response_time)
+            logger.info(f"✅ Returned richmenu response for action: {action}")
             return richmenu_response
         
         # AI相談または一般的な質問の場合はRAG処理
         if action in ["ai_consultation", "general", "greeting"]:
+            logger.info(f"🤖 Processing RAG query for action: {action}")
             return await process_rag_query(message_text, user_id)
         
         # その他の場合も一般的なRAG処理
+        logger.info(f"🔄 Fallback to RAG processing for action: {action}")
         return await process_rag_query(message_text, user_id)
         
     except Exception as e:
-        logger.error(f"Error processing message: {e}")
+        logger.error(f"❌ Error processing message: {e}")
         logger.error(traceback.format_exc())
         
         # 自動復旧試行
         try:
             fallback_response = recovery.get_fallback_response('general_error', {'error_type': type(e).__name__})
+            logger.info(f"🆘 Using fallback response due to error")
             return fallback_response
         except Exception as recovery_error:
-            logger.error(f"Recovery also failed: {recovery_error}")
+            logger.error(f"💥 Recovery also failed: {recovery_error}")
             return "申し訳ございません。システムに問題が発生しています。しばらくしてから再度お試しください。"
 
 async def process_rag_query(message_text: str, user_id: str) -> str:
-    """RAGを使用した高度なメッセージ処理"""
+    """RAGを使用した高度なメッセージ処理（デバッグログ強化版）"""
     try:
         globals_dict = get_app_globals()
         vectorstore = globals_dict['vectorstore']
         rag_chain_template = globals_dict['rag_chain_template']
         llm_instance = globals_dict['llm_instance']
 
-        logger.info(f"Processing LINE message with RAG: {message_text[:50]}...")
+        logger.info(f"🧠 Processing LINE message with RAG - Vectorstore: {vectorstore is not None}, RAG Chain: {rag_chain_template is not None}, LLM: {llm_instance is not None}")
 
         # システム準備チェック
         if not vectorstore and not llm_instance:
+            logger.warning("⚠️ Neither vectorstore nor LLM instance available")
             return "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
 
         # 一般的な挨拶の処理
@@ -609,12 +683,13 @@ async def process_rag_query(message_text: str, user_id: str) -> str:
         
         for greeting, response in greeting_responses.items():
             if greeting in message_text:
+                logger.info(f"👋 Detected greeting: {greeting}")
                 return response
 
         # RAG処理
         if vectorstore and rag_chain_template:
             try:
-                logger.info("Using RAG chain for query processing")
+                logger.info("📚 Using RAG chain for query processing")
                
                 result = None
                 if hasattr(rag_chain_template, '__call__'):
@@ -625,47 +700,56 @@ async def process_rag_query(message_text: str, user_id: str) -> str:
                     result = rag_chain_template({"query": message_text}, callbacks=[])
                
                 answer = result.get("result", "") if result else ""
+                logger.info(f"📝 RAG result length: {len(answer)} characters")
                
                 # Web検索で補強（必要に応じて）
                 if not answer or "関連する情報が見つかりませんでした" in answer:
-                    logger.info("No relevant documents found, trying web search")
+                    logger.info("🌐 No relevant documents found, trying web search")
                     try:
                         from utils.web_search import GoogleSearcher
                         web_searcher = GoogleSearcher()
                         answer = web_searcher.get_enhanced_answer(
                             message_text, context="", use_web_search=True
                         )
+                        logger.info(f"🔍 Web search enhanced answer length: {len(answer)} characters")
                     except Exception as web_error:
-                        logger.error(f"Web search error: {web_error}")
+                        logger.error(f"🌐 Web search error: {web_error}")
                         answer = "申し訳ございません。関連する情報が見つかりませんでした。詳しくはスタッフまでお問い合わせください。"
                
                 # LINEメッセージの文字数制限を考慮（2000文字以内）
                 if len(answer) > 1800:
                     answer = answer[:1800] + "...\n\n詳細については、お気軽にお尋ねください。"
+                    logger.info("✂️ Answer truncated due to LINE character limit")
                
                 return answer
                
             except Exception as e:
-                logger.error(f"RAG chain error: {e}")
+                logger.error(f"❌ RAG chain error: {e}")
+                logger.error(traceback.format_exc())
                 if llm_instance:
+                    logger.info("🔄 Falling back to general LLM response")
                     return get_general_response_from_llm(message_text, llm_instance)
                 else:
                     return "申し訳ございません。質問の処理中にエラーが発生しました。"
         else:
             # RAGが利用できない場合の一般的な応答
+            logger.warning("⚠️ RAG not available, trying general LLM")
             if llm_instance:
                 return get_general_response_from_llm(message_text, llm_instance)
             else:
+                logger.warning("⚠️ No LLM instance available")
                 return "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
 
     except Exception as e:
-        logger.error(f"Error processing RAG query: {e}")
+        logger.error(f"💥 Error processing RAG query: {e}")
         logger.error(traceback.format_exc())
         return recovery.get_fallback_response('general_error', {'error_type': type(e).__name__})
 
 def get_general_response_from_llm(query: str, llm_instance):
-    """一般的な質問への回答を生成"""
+    """一般的な質問への回答を生成（デバッグログ付き）"""
     try:
+        logger.info(f"🤖 Generating general LLM response for query: {query[:50]}...")
+        
         prompt = f"""あなたはキノエデザインの住まいAIコンシェルジュです。
 お客様からの以下の質問に対して、親切で分かりやすい日本語で回答してください。
 
@@ -678,56 +762,174 @@ def get_general_response_from_llm(query: str, llm_instance):
        
         if hasattr(llm_instance, 'invoke'):
             response = llm_instance.invoke(prompt)
-            return response.content if hasattr(response, 'content') else str(response)
+            result = response.content if hasattr(response, 'content') else str(response)
         else:
             response = llm_instance(prompt)
-            return response if isinstance(response, str) else str(response)
+            result = response if isinstance(response, str) else str(response)
+        
+        logger.info(f"✅ Generated LLM response length: {len(result)} characters")
+        return result
            
     except Exception as e:
-        logger.error(f"Error generating general response: {e}")
+        logger.error(f"❌ Error generating general response: {e}")
         return "申し訳ございません。回答の生成中にエラーが発生しました。スタッフまでお問い合わせください。"
 
-# ★★★ Webhookエンドポイント ★★★
+# ★★★ Webhookエンドポイント（完全修正版） ★★★
 @router.post("/webhook")
-async def line_webhook(request: Request):
-    """包括的監視機能付きWebhook エンドポイント"""
+async def line_webhook(request: Request, background_tasks: BackgroundTasks):
+    """包括的監視機能付きWebhook エンドポイント（デバッグログ強化版）"""
+    logger.info("🚀 LINE Webhook endpoint called")
+    
     if not line_bot_api or not handler:
-        monitor.log_webhook_event("error", False, {"error": "LINE Bot not configured"})
+        error_data = {"error": "LINE Bot not configured", "sdk_available": LINE_SDK_AVAILABLE}
+        monitor.log_webhook_event("error", False, error_data)
+        logger.error("❌ LINE Bot not configured")
         raise HTTPException(status_code=500, detail="LINE Bot not configured")
     
-    body = await request.body()
-    signature = request.headers.get("X-Line-Signature", "")
-    
     try:
-        handler.handle(body.decode('utf-8'), signature)
-        monitor.log_webhook_event("webhook", True)
-        return {"status": "ok", "timestamp": datetime.now().isoformat()}
+        # リクエストボディとヘッダーを取得
+        body = await request.body()
+        signature = request.headers.get("X-Line-Signature", "")
         
-    except InvalidSignatureError:
-        logger.error("Invalid signature")
-        monitor.log_webhook_event("signature_error", False, {"signature": signature[:10] + "..."})
+        logger.info(f"📨 Webhook received - Body length: {len(body)}, Signature present: {bool(signature)}")
+        
+        # リクエストボディをパース
+        try:
+            body_json = json.loads(body.decode('utf-8'))
+            events = body_json.get('events', [])
+            destination = body_json.get('destination', 'unknown')
+            
+            logger.info(f"📋 Parsed webhook - Destination: {destination}, Events count: {len(events)}")
+            
+            # 各イベントの詳細をログ
+            for i, event in enumerate(events):
+                event_type = event.get('type', 'unknown')
+                logger.info(f"📦 Event {i+1}: Type={event_type}")
+                
+                if event_type == 'message':
+                    message = event.get('message', {})
+                    message_type = message.get('type', 'unknown')
+                    message_text = message.get('text', '')
+                    user_id = event.get('source', {}).get('userId', 'unknown')
+                    
+                    logger.info(f"💬 Message details - Type: {message_type}, Text: '{message_text[:100]}...', User: {user_id}")
+                    
+                    # メッセージ処理の詳細ログデータを準備
+                    event_data = {
+                        'event_type': event_type,
+                        'message_type': message_type,
+                        'message_text': message_text[:100] + '...' if len(message_text) > 100 else message_text,
+                        'user_id': user_id,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    
+                elif event_type == 'postback':
+                    postback_data = event.get('postback', {}).get('data', '')
+                    user_id = event.get('source', {}).get('userId', 'unknown')
+                    
+                    logger.info(f"🔙 Postback details - Data: {postback_data}, User: {user_id}")
+                    
+                    # ポストバック処理の詳細ログデータを準備
+                    event_data = {
+                        'event_type': event_type,
+                        'postback_data': postback_data,
+                        'user_id': user_id,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    
+                elif event_type == 'follow':
+                    user_id = event.get('source', {}).get('userId', 'unknown')
+                    logger.info(f"👤 Follow event - User: {user_id}")
+                    
+                    event_data = {
+                        'event_type': event_type,
+                        'user_id': user_id,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    
+                elif event_type == 'unfollow':
+                    user_id = event.get('source', {}).get('userId', 'unknown')
+                    logger.info(f"👋 Unfollow event - User: {user_id}")
+                    
+                    event_data = {
+                        'event_type': event_type,
+                        'user_id': user_id,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                else:
+                    logger.info(f"❓ Unknown event type: {event_type}")
+                    event_data = {
+                        'event_type': event_type,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                
+                # 各イベントの処理ログを記録
+                monitor.log_webhook_event(event_type, True, event_data)
+                
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Failed to parse JSON body: {e}")
+            error_data = {"error": "json_decode_error", "body_length": len(body)}
+            monitor.log_webhook_event("parse_error", False, error_data)
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+        
+        # LINE SDKでイベントを処理
+        logger.info("🔄 Processing events with LINE SDK handler...")
+        handler.handle(body.decode('utf-8'), signature)
+        
+        # 成功ログ
+        success_data = {
+            "events_count": len(events),
+            "destination": destination,
+            "processing_time": (datetime.now() - datetime.now()).total_seconds()
+        }
+        monitor.log_webhook_event("webhook_success", True, success_data)
+        
+        logger.info("✅ Webhook processing completed successfully")
+        return {"status": "ok", "timestamp": datetime.now().isoformat(), "events_processed": len(events)}
+        
+    except InvalidSignatureError as e:
+        logger.error(f"❌ Invalid signature error: {e}")
+        error_data = {
+            "error": "invalid_signature",
+            "signature_provided": bool(signature),
+            "body_length": len(body) if 'body' in locals() else 0
+        }
+        monitor.log_webhook_event("signature_error", False, error_data)
         raise HTTPException(status_code=400, detail="Invalid signature")
         
+    except HTTPException:
+        # HTTPException は再発生させる
+        raise
+        
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        monitor.log_webhook_event("error", False, {"error": str(e)})
+        logger.error(f"💥 Unexpected webhook error: {e}")
+        logger.error(traceback.format_exc())
+        
+        error_data = {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "body_length": len(body) if 'body' in locals() else 0
+        }
+        monitor.log_webhook_event("unexpected_error", False, error_data)
         raise HTTPException(status_code=500, detail="Internal server error")
 
-# ★★★ イベントハンドラー（完全版） ★★★
+# ★★★ イベントハンドラー（完全版・デバッグログ強化） ★★★
 if LINE_SDK_AVAILABLE and handler:
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """包括的テキストメッセージ処理"""
+        """包括的テキストメッセージ処理（デバッグログ強化版）"""
         start_time = datetime.now()
         
         try:
             user_id = event.source.user_id
             message_text = event.message.text
            
-            logger.info(f"Received LINE message from {user_id}: {message_text[:100]}")
+            logger.info(f"📱 Received LINE message from {user_id}: '{message_text[:100]}...'")
            
             # メッセージを非同期処理
             answer = asyncio.run(process_message(message_text, user_id))
+           
+            logger.info(f"🤖 Generated answer length: {len(answer)} characters")
            
             # 応答送信（v3対応）
             with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
@@ -743,24 +945,32 @@ if LINE_SDK_AVAILABLE and handler:
             processing_time = (datetime.now() - start_time).total_seconds()
             monitor.stats['response_times'].append(processing_time)
             
-            logger.info(f"Sent reply to {user_id}: {answer[:50]}... (processing_time: {processing_time:.2f}s)")
-            monitor.log_webhook_event("message", True, {
-                "user_id": user_id, 
+            logger.info(f"✅ Sent reply to {user_id} (processing_time: {processing_time:.2f}s)")
+            
+            # 成功ログデータ
+            success_data = {
+                "user_id": user_id,
                 "processing_time": processing_time,
                 "message_length": len(message_text),
-                "response_length": len(answer)
-            })
+                "response_length": len(answer),
+                "message_preview": message_text[:50] + "..." if len(message_text) > 50 else message_text
+            }
+            monitor.log_webhook_event("message", True, success_data)
            
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
-            logger.error(f"Error handling text message: {e}")
+            logger.error(f"❌ Error handling text message: {e}")
             logger.error(traceback.format_exc())
             
-            monitor.log_webhook_event("message", False, {
+            # エラーログデータ
+            error_data = {
                 "error": str(e),
+                "error_type": type(e).__name__,
                 "processing_time": processing_time,
-                "user_id": user_id if 'user_id' in locals() else 'unknown'
-            })
+                "user_id": user_id if 'user_id' in locals() else 'unknown',
+                "message_text": message_text[:50] + "..." if 'message_text' in locals() and len(message_text) > 50 else message_text if 'message_text' in locals() else 'unknown'
+            }
+            monitor.log_webhook_event("message", False, error_data)
            
             # エラー時のフォールバック応答
             try:
@@ -773,12 +983,13 @@ if LINE_SDK_AVAILABLE and handler:
                             messages=[TextMessage(text=error_message)]
                         )
                     )
+                logger.info("🆘 Sent fallback error message")
             except Exception as final_error:
-                logger.error(f"Final error response failed: {final_error}")
+                logger.error(f"💥 Final error response failed: {final_error}")
 
     @handler.add(PostbackEvent)
     def handle_postback(event):
-        """包括的Postbackイベント処理"""
+        """包括的Postbackイベント処理（デバッグログ強化版）"""
         start_time = datetime.now()
         
         try:
@@ -786,14 +997,15 @@ if LINE_SDK_AVAILABLE and handler:
             postback_data = event.postback.data
             display_text = getattr(event.postback, 'display_text', '')
             
-            logger.info(f"Postback received: {postback_data} from {user_id}")
+            logger.info(f"🔙 Postback received from {user_id}: {postback_data}")
             
             # パラメータ解析
             params = {}
             try:
                 params = dict(param.split('=') for param in postback_data.split('&'))
+                logger.info(f"📊 Parsed postback params: {params}")
             except Exception as parse_error:
-                logger.error(f"Postback data parsing failed: {parse_error}")
+                logger.error(f"❌ Postback data parsing failed: {parse_error}")
                 params = {'action': 'unknown'}
             
             action = params.get('action', 'unknown')
@@ -806,6 +1018,8 @@ if LINE_SDK_AVAILABLE and handler:
             try:
                 response_text = get_richmenu_response(action, user_id) or f"アクション '{action}' を受信しました。処理中です..."
                 
+                logger.info(f"🎯 Generated postback response for action: {action}")
+                
                 # 返信送信
                 with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
                     messaging_api = MessagingApi(api_client)
@@ -817,15 +1031,21 @@ if LINE_SDK_AVAILABLE and handler:
                     )
                 
                 processing_time = (datetime.now() - start_time).total_seconds()
-                monitor.log_webhook_event("postback", True, {
-                    "action": action, 
+                
+                # 成功ログデータ
+                success_data = {
+                    "action": action,
+                    "source": source,
                     "user_id": user_id,
-                    "processing_time": processing_time
-                })
-                logger.info(f"Postback processed successfully: {action} (time: {processing_time:.2f}s)")
+                    "processing_time": processing_time,
+                    "display_text": display_text,
+                    "postback_data": postback_data
+                }
+                monitor.log_webhook_event("postback", True, success_data)
+                logger.info(f"✅ Postback processed successfully: {action} (time: {processing_time:.2f}s)")
                 
             except Exception as process_error:
-                logger.error(f"Postback processing error: {process_error}")
+                logger.error(f"❌ Postback processing error: {process_error}")
                 
                 # エラー時のフォールバック応答
                 fallback_text = recovery.get_fallback_response(action)
@@ -838,32 +1058,44 @@ if LINE_SDK_AVAILABLE and handler:
                                 messages=[TextMessage(text=fallback_text)]
                             )
                         )
+                    logger.info("🆘 Sent fallback response for postback error")
                 except Exception as fallback_error:
-                    logger.error(f"Fallback response failed: {fallback_error}")
+                    logger.error(f"💥 Fallback response failed: {fallback_error}")
                 
                 processing_time = (datetime.now() - start_time).total_seconds()
-                monitor.log_webhook_event("postback", False, {
+                
+                # エラーログデータ
+                error_data = {
                     "action": action,
+                    "source": source,
                     "error": str(process_error),
-                    "processing_time": processing_time
-                })
+                    "error_type": type(process_error).__name__,
+                    "processing_time": processing_time,
+                    "user_id": user_id,
+                    "postback_data": postback_data
+                }
+                monitor.log_webhook_event("postback", False, error_data)
                 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
-            logger.error(f"Postback handler error: {e}")
+            logger.error(f"💥 Postback handler error: {e}")
             logger.error(traceback.format_exc())
-            monitor.log_webhook_event("postback", False, {
+            
+            # 全体エラーログデータ
+            error_data = {
                 "error": str(e),
-                "processing_time": processing_time
-            })
+                "error_type": type(e).__name__,
+                "processing_time": processing_time,
+                "user_id": user_id if 'user_id' in locals() else 'unknown'
+            }
+            monitor.log_webhook_event("postback", False, error_data)
 
     @handler.add(FollowEvent)
     def handle_follow(event):
-        """友達追加時の包括的処理"""
+        """友達追加時の包括的処理（デバッグログ強化版）"""
         try:
             user_id = event.source.user_id
-            logger.info(f"New follower: {user_id}")
-            monitor.log_webhook_event("follow", True, {"user_id": user_id})
+            logger.info(f"👤 New follower: {user_id}")
            
             welcome_message = """🎉 友達追加ありがとうございます！
 
@@ -898,21 +1130,46 @@ if LINE_SDK_AVAILABLE and handler:
                         messages=[TextMessage(text=welcome_message)]
                     )
                 )
+            
+            # 成功ログデータ
+            success_data = {
+                "user_id": user_id,
+                "welcome_message_sent": True,
+                "timestamp": datetime.now().isoformat()
+            }
+            monitor.log_webhook_event("follow", True, success_data)
+            logger.info(f"✅ Welcome message sent to new follower: {user_id}")
            
         except Exception as e:
-            logger.error(f"Error handling follow event: {e}")
-            monitor.log_webhook_event("follow", False, {"error": str(e)})
+            logger.error(f"❌ Error handling follow event: {e}")
+            error_data = {
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "user_id": user_id if 'user_id' in locals() else 'unknown'
+            }
+            monitor.log_webhook_event("follow", False, error_data)
 
     @handler.add(UnfollowEvent)
     def handle_unfollow(event):
-        """フォロー解除時の処理"""
+        """フォロー解除時の処理（デバッグログ強化版）"""
         try:
             user_id = event.source.user_id
-            logger.info(f"User unfollowed: {user_id}")
-            monitor.log_webhook_event("unfollow", True, {"user_id": user_id})
+            logger.info(f"👋 User unfollowed: {user_id}")
+            
+            # アンフォローデータ
+            unfollow_data = {
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            monitor.log_webhook_event("unfollow", True, unfollow_data)
+            
         except Exception as e:
-            logger.error(f"Error handling unfollow event: {e}")
-            monitor.log_webhook_event("unfollow", False, {"error": str(e)})
+            logger.error(f"❌ Error handling unfollow event: {e}")
+            error_data = {
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+            monitor.log_webhook_event("unfollow", False, error_data)
 
 # ★★★ 管理・診断エンドポイント ★★★
 @router.get("/health")
@@ -955,10 +1212,22 @@ def get_detailed_line_status():
 
 @router.get("/analytics")
 def get_analytics():
-    """分析データ取得"""
-    return {
-        "richmenu_analytics": monitor.stats['richmenu_interactions'],
-        "user_analytics": {
+    """分析データ取得（JSONシリアライズ対応）"""
+    try:
+        # 安全なデータの準備
+        richmenu_analytics = {}
+        for action, data in monitor.stats['richmenu_interactions'].items():
+            if isinstance(data, dict):
+                # set型のusersを list に変換
+                safe_data = data.copy()
+                if 'users' in safe_data and isinstance(safe_data['users'], set):
+                    safe_data['users'] = list(safe_data['users'])
+                richmenu_analytics[action] = safe_data
+            else:
+                richmenu_analytics[action] = data
+        
+        # ユーザー分析データ
+        user_analytics = {
             "total_users": len(monitor.stats['user_activity']),
             "active_users_today": len([
                 uid for uid, data in monitor.stats['user_activity'].items() 
@@ -966,20 +1235,28 @@ def get_analytics():
                 data.get('last_interaction') and
                 (datetime.now() - data['last_interaction']).days == 0
             ])
-        },
-        "performance_metrics": {
-            "avg_response_time": sum(monitor.stats['response_times']) / len(monitor.stats['response_times']) 
-                                if monitor.stats['response_times'] else 0,
-            "total_events": monitor.stats['webhook_received'],
-            "error_rate": monitor.get_error_rate()
-        },
-        "timestamp": datetime.now().isoformat()
-    }
+        }
+        
+        return {
+            "richmenu_analytics": richmenu_analytics,
+            "user_analytics": user_analytics,
+            "performance_metrics": {
+                "avg_response_time": sum(monitor.stats['response_times']) / len(monitor.stats['response_times']) 
+                                    if monitor.stats['response_times'] else 0,
+                "total_events": monitor.stats['webhook_received'],
+                "error_rate": monitor.get_error_rate()
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Analytics error: {e}")
+        return {"error": "Failed to get analytics", "timestamp": datetime.now().isoformat()}
 
 @router.post("/test")
 async def test_line_bot():
-    """LINE Bot機能のテスト"""
+    """LINE Bot機能のテスト（デバッグログ強化版）"""
     if not line_bot_api:
+        logger.error("❌ LINE Bot not configured for testing")
         return {"status": "error", "message": "LINE Bot not configured"}
     
     try:
@@ -987,7 +1264,11 @@ async def test_line_bot():
         test_message = "テスト"
         test_user_id = "test-user"
         
+        logger.info(f"🧪 Testing LINE Bot with message: '{test_message}'")
+        
         response = await process_message(test_message, test_user_id)
+        
+        logger.info(f"✅ Test completed successfully - Response length: {len(response)}")
         
         return {
             "status": "success",
@@ -998,6 +1279,7 @@ async def test_line_bot():
         }
         
     except Exception as e:
+        logger.error(f"❌ Test failed: {e}")
         return {
             "status": "error",
             "error": str(e),
