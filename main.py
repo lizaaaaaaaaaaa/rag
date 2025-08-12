@@ -1,4 +1,4 @@
-# main.py - 完全版（ヘルスチェック・監視・LINE Bot統合 + /healthz追加）
+# main.py - 完全版（ヘルスチェック・監視・LINE Bot統合 + デバッグエンドポイント追加）
 
 import os
 import sys
@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List
 import psutil
 import asyncio
+import hmac
+import hashlib
+import base64
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,6 +56,15 @@ logger.info("LINE_LOGIN_REDIRECT_URI: %s", os.environ.get("LINE_LOGIN_REDIRECT_U
 logger.info("LIFF_ID: %s", os.environ.get("LIFF_ID"))
 logger.info("GOOGLE_CLOUD_PROJECT: %s", os.environ.get("GOOGLE_CLOUD_PROJECT"))
 logger.info("=====================================")
+
+# LINE SDK availability check
+try:
+    from linebot.v3 import WebhookHandler
+    LINE_SDK_AVAILABLE = True
+    logger.info("✅ LINE Bot SDK v3 available")
+except ImportError:
+    LINE_SDK_AVAILABLE = False
+    logger.warning("⚠️ LINE Bot SDK not available")
 
 # FastAPI初期化（高度な設定）
 app = FastAPI(
@@ -329,10 +341,9 @@ async def enhanced_startup():
         }
         for key, status in line_checks.items():
             logger.info(f"  {key}: {'✅ Set' if status else '❌ Not set'}")
-        try:
-            from linebot.v3 import WebhookHandler
+        if LINE_SDK_AVAILABLE:
             logger.info("  LINE SDK: ✅ Available (v3.5.0)")
-        except ImportError:
+        else:
             logger.warning("  LINE SDK: ⚠️ Not available")
     except Exception as e:
         logger.error(f"❌ LINE Bot configuration check failed: {e}")
@@ -379,6 +390,182 @@ app.include_router(line_login.router, tags=["line-login"])
 pdf_dir = os.path.join("rag", "vectorstore", "pdfs")
 if os.path.isdir(pdf_dir):
     app.mount("/pdfs", StaticFiles(directory=pdf_dir), name="pdfs")
+
+# ★★★ 新しく追加するデバッグエンドポイント ★★★
+@app.get("/line-debug")
+def line_debug_endpoint():
+    """LINE Bot設定のデバッグ情報"""
+    try:
+        return {
+            "line_credentials": {
+                "access_token_set": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")),
+                "channel_secret_set": bool(os.environ.get("LINE_CHANNEL_SECRET")),
+                "access_token_length": len(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")) if os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") else 0,
+                "secret_length": len(os.environ.get("LINE_CHANNEL_SECRET", "")) if os.environ.get("LINE_CHANNEL_SECRET") else 0,
+                "access_token_preview": (os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")[:20] + "...") if os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") else "未設定",
+                "secret_preview": (os.environ.get("LINE_CHANNEL_SECRET", "")[:10] + "...") if os.environ.get("LINE_CHANNEL_SECRET") else "未設定"
+            },
+            "line_login_credentials": {
+                "login_channel_id_set": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID")),
+                "login_channel_secret_set": bool(os.environ.get("LINE_LOGIN_CHANNEL_SECRET")),
+                "liff_id_set": bool(os.environ.get("LIFF_ID")),
+                "login_redirect_uri": os.environ.get("LINE_LOGIN_REDIRECT_URI", "未設定")
+            },
+            "webhook_info": {
+                "webhook_url": "https://rag-api-190389115361.asia-northeast1.run.app/line/webhook",
+                "liff_url": f"https://liff.line.me/{os.environ.get('LIFF_ID', 'not-set')}",
+                "expected_domain": "rag-api-190389115361.asia-northeast1.run.app"
+            },
+            "line_sdk_available": LINE_SDK_AVAILABLE,
+            "environment": os.environ.get("ENV", "unknown"),
+            "cloud_run_info": {
+                "service_name": os.environ.get("K_SERVICE", "local"),
+                "revision": os.environ.get("K_REVISION", "local"),
+                "region": os.environ.get("GOOGLE_CLOUD_REGION", "unknown")
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"error": str(e), "timestamp": datetime.now().isoformat()}
+
+@app.get("/test-line-signature")
+def test_line_signature():
+    """署名検証のテスト"""
+    try:
+        channel_secret = os.environ.get("LINE_CHANNEL_SECRET")
+        if not channel_secret:
+            return {"error": "LINE_CHANNEL_SECRET not found"}
+        
+        # テスト用のボディとシグネチャ
+        test_body = '{"events":[],"destination":"test"}'
+        
+        hash = hmac.new(
+            channel_secret.encode('utf-8'),
+            test_body.encode('utf-8'),
+            hashlib.sha256
+        ).digest()
+        signature = base64.b64encode(hash).decode('utf-8')
+        
+        return {
+            "test_body": test_body,
+            "generated_signature": signature,
+            "channel_secret_length": len(channel_secret),
+            "signature_format": f"X-Line-Signature: {signature}",
+            "verification_steps": [
+                "1. Get body as bytes",
+                "2. Get channel secret",
+                "3. HMAC-SHA256(secret, body)",
+                "4. Base64 encode result",
+                "5. Compare with X-Line-Signature header"
+            ],
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"error": str(e), "timestamp": datetime.now().isoformat()}
+
+@app.get("/line-webhook-test")
+def line_webhook_test():
+    """Webhook接続テスト"""
+    try:
+        import requests
+        webhook_url = "https://rag-api-190389115361.asia-northeast1.run.app/line/status"
+        
+        try:
+            response = requests.get(webhook_url, timeout=10)
+            webhook_accessible = response.status_code == 200
+            webhook_response = response.text if response.status_code == 200 else f"HTTP {response.status_code}"
+        except requests.exceptions.RequestException as e:
+            webhook_accessible = False
+            webhook_response = str(e)
+        
+        return {
+            "webhook_url": webhook_url,
+            "webhook_accessible": webhook_accessible,
+            "webhook_response": webhook_response,
+            "line_developers_settings": {
+                "webhook_url": "https://rag-api-190389115361.asia-northeast1.run.app/line/webhook",
+                "webhook_use": "Enable",
+                "auto_reply": "Disable",
+                "greeting_message": "Disable"
+            },
+            "dns_check": {
+                "domain": "rag-api-190389115361.asia-northeast1.run.app",
+                "expected_ip": "Cloud Run IP",
+                "note": "Domain should resolve to Google Cloud Run"
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"error": str(e), "timestamp": datetime.now().isoformat()}
+
+@app.get("/line-credentials-validation")
+def line_credentials_validation():
+    """LINE認証情報の詳細検証"""
+    try:
+        results = {
+            "validation_results": {},
+            "recommendations": [],
+            "critical_issues": [],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Access Token検証
+        access_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+        if access_token:
+            if access_token.startswith("Bearer "):
+                results["critical_issues"].append("Access token should not include 'Bearer ' prefix")
+            elif len(access_token) < 100:
+                results["critical_issues"].append("Access token seems too short")
+            else:
+                results["validation_results"]["access_token"] = "Format OK"
+        else:
+            results["critical_issues"].append("LINE_CHANNEL_ACCESS_TOKEN not set")
+        
+        # Channel Secret検証
+        channel_secret = os.environ.get("LINE_CHANNEL_SECRET")
+        if channel_secret:
+            if len(channel_secret) < 20:
+                results["critical_issues"].append("Channel secret seems too short")
+            else:
+                results["validation_results"]["channel_secret"] = "Format OK"
+        else:
+            results["critical_issues"].append("LINE_CHANNEL_SECRET not set")
+        
+        # LINE Bot API接続テスト
+        if access_token:
+            try:
+                import requests
+                api_response = requests.get(
+                    "https://api.line.me/v2/bot/info",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=10
+                )
+                if api_response.status_code == 200:
+                    results["validation_results"]["api_connection"] = "Success"
+                    bot_info = api_response.json()
+                    results["validation_results"]["bot_info"] = {
+                        "displayName": bot_info.get("displayName", "Unknown"),
+                        "userId": bot_info.get("userId", "Unknown"),
+                        "basicId": bot_info.get("basicId", "Unknown")
+                    }
+                else:
+                    results["critical_issues"].append(f"LINE API connection failed: HTTP {api_response.status_code}")
+            except Exception as api_error:
+                results["critical_issues"].append(f"LINE API connection error: {str(api_error)}")
+        
+        # 推奨事項
+        if not results["critical_issues"]:
+            results["recommendations"].append("All LINE credentials are properly configured")
+            results["recommendations"].append("Test webhook by sending a message to your LINE Bot")
+        else:
+            results["recommendations"].append("Fix critical issues before testing")
+            results["recommendations"].append("Check Secret Manager configuration")
+            results["recommendations"].append("Verify LINE Developers Console settings")
+        
+        return results
+    
+    except Exception as e:
+        return {"error": str(e), "timestamp": datetime.now().isoformat()}
 
 # ★★★ LIFF アプリ対応 ★★★
 @app.get("/liff")
@@ -639,11 +826,7 @@ def comprehensive_line_bot_diagnostics():
                 logger.error(f"Webhook endpoint test failed: {e}")
                 return False
         def test_line_sdk():
-            try:
-                from linebot.v3 import WebhookHandler, MessagingApi
-                return True
-            except ImportError:
-                return False
+            return LINE_SDK_AVAILABLE
         diagnostics = {
             "environment_variables": env_vars,
             "secret_manager_access": test_secret_access(),
@@ -775,7 +958,13 @@ def comprehensive_root():
             "diagnostics": "/line-bot-diagnostics",
             "quick_diagnosis": "/quick-diagnosis",
             "healthz": "/healthz",
-            "ops_healthz": "/ops/healthz"
+            "ops_healthz": "/ops/healthz",
+            "debug_endpoints": {
+                "line_debug": "/line-debug",
+                "signature_test": "/test-line-signature",
+                "webhook_test": "/line-webhook-test",
+                "credentials_validation": "/line-credentials-validation"
+            }
         },
         "monitoring": {
             "requests_processed": system_monitor.request_count,
