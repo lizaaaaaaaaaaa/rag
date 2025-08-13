@@ -51,7 +51,9 @@ spec:
         - name: MAX_NEW_TOKENS
           value: '256'
         - name: DB_HOST
-          value: /DB_PORT=5432
+          value: 127.0.0.1 
+        - name: DB_PORT
+          value: '5432' 
         - name: GCS_BUCKET_NAME
           value: run-sources-rag-cloud-project-asia-northeast1
         - name: ENV
