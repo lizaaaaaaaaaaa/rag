@@ -1,5 +1,5 @@
 # api/routers/line_bot.py - 完全修正版
-# 署名検証エラー対応、監視機能強化、エラーハンドリング改善
+# 署名検証エラー対応、トークン型変換、エラーハンドリング改善
 
 import logging
 from pathlib import Path
@@ -59,6 +59,33 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
+# ★★★ 重要：トークン正規化関数 ★★★
+def normalize_line_token(token: Any) -> str:
+    """LINE トークンを安全にstring型に変換"""
+    if token is None:
+        return ""
+    
+    # bytes型の場合はデコード
+    if isinstance(token, bytes):
+        try:
+            token = token.decode('utf-8')
+        except UnicodeDecodeError:
+            logger.error("Failed to decode token from bytes")
+            return ""
+    
+    # 文字列に変換
+    token_str = str(token).strip()
+    
+    # 'Bearer ' プレフィックスが含まれている場合は削除
+    if token_str.startswith('Bearer '):
+        token_str = token_str[7:].strip()
+    
+    # 'b'' で囲まれている場合は削除
+    if token_str.startswith("b'") and token_str.endswith("'"):
+        token_str = token_str[2:-1]
+    
+    return token_str
+
 # ★★★ JSONシリアライズ対応のユーティリティ関数 ★★★
 def make_json_serializable(obj: Any) -> Any:
     """オブジェクトをJSONシリアライズ可能に変換"""
@@ -71,11 +98,11 @@ def make_json_serializable(obj: Any) -> Any:
             return [make_json_serializable(item) for item in obj]
         elif isinstance(obj, dict):
             return {str(k): make_json_serializable(v) for k, v in obj.items()}
-        elif isinstance(obj, set):  # setオブジェクトの対応
+        elif isinstance(obj, set):
             return list(obj)
         elif hasattr(obj, '__dict__'):
             return make_json_serializable(obj.__dict__)
-        elif hasattr(obj, 'isoformat'):  # datetime objects
+        elif hasattr(obj, 'isoformat'):
             return obj.isoformat()
         else:
             return str(obj)
@@ -102,6 +129,8 @@ class ComprehensiveMonitor:
             'follow_events': 0,
             'unfollow_events': 0,
             'errors': 0,
+            'send_success': 0,
+            'send_failures': 0,
             'richmenu_interactions': {},
             'user_activity': {},
             'response_times': [],
@@ -154,21 +183,6 @@ class ComprehensiveMonitor:
                 logger.warning(f"Failed to serialize event_data: {e}")
                 log_data['event_data'] = {"error": "serialization_failed", "type": str(type(event_data))}
         
-        # statsのスナップショットも安全に追加
-        try:
-            stats_copy = self.stats.copy()
-            if stats_copy.get('last_activity'):
-                stats_copy['last_activity'] = stats_copy['last_activity'].isoformat()
-            if 'richmenu_interactions' in stats_copy:
-                for action, data in stats_copy['richmenu_interactions'].items():
-                    if isinstance(data, dict) and 'users' in data:
-                        if isinstance(data['users'], set):
-                            data['users'] = list(data['users'])
-            log_data['stats_snapshot'] = make_json_serializable(stats_copy)
-        except Exception as e:
-            logger.warning(f"Failed to include stats snapshot: {e}")
-            log_data['stats_snapshot'] = {"error": "serialization_failed"}
-        
         try:
             log_message = safe_json_dumps(log_data)
             if not success:
@@ -178,225 +192,61 @@ class ComprehensiveMonitor:
         except Exception as e:
             logger.error(f"LINE Event Log Error - Type: {event_type}, Success: {success}, Error: {e}")
     
-    def track_richmenu_interaction(self, action: str, user_id: str, response_time: float = None):
-        """リッチメニューインタラクション詳細追跡（修正版）"""
-        if action not in self.stats['richmenu_interactions']:
-            self.stats['richmenu_interactions'][action] = {
-                'count': 0,
-                'users': set(),  # 必ずsetで初期化
-                'avg_response_time': 0,
-                'response_times': []
-            }
-        
-        interaction = self.stats['richmenu_interactions'][action]
-        
-        # usersがlistになっていた場合はsetに変換
-        if isinstance(interaction['users'], list):
-            interaction['users'] = set(interaction['users'])
-        
-        interaction['count'] += 1
-        interaction['users'].add(user_id)
-        
-        if response_time:
-            interaction['response_times'].append(response_time)
-            interaction['avg_response_time'] = sum(interaction['response_times']) / len(interaction['response_times'])
-        
-        if user_id not in self.stats['user_activity']:
-            self.stats['user_activity'][user_id] = {
-                'first_interaction': datetime.now(),
-                'last_interaction': datetime.now(),
-                'total_interactions': 0,
-                'actions': {}
-            }
-        
-        user_activity = self.stats['user_activity'][user_id]
-        user_activity['last_interaction'] = datetime.now()
-        user_activity['total_interactions'] += 1
-        
-        if action not in user_activity['actions']:
-            user_activity['actions'][action] = 0
-        user_activity['actions'][action] += 1
-        
-        logger.info(f"RichMenu Interaction: {action} by {user_id} (response_time: {response_time}s)")
+    def track_send_result(self, success: bool, error_msg: str = None):
+        """送信結果の追跡"""
+        if success:
+            self.stats['send_success'] += 1
+        else:
+            self.stats['send_failures'] += 1
+            if error_msg:
+                logger.error(f"Send failure: {error_msg}")
     
     def get_error_rate(self) -> float:
         total_events = max(self.stats['webhook_received'], 1)
         return self.stats['errors'] / total_events
     
-    def get_health_status(self) -> dict:
-        error_rate = self.get_error_rate()
-        
-        activity_level = "low"
-        if self.stats['webhook_received'] > 100:
-            activity_level = "high"
-        elif self.stats['webhook_received'] > 20:
-            activity_level = "medium"
-        
-        popular_actions = []
-        for action, data in self.stats['richmenu_interactions'].items():
-            if isinstance(data, dict) and 'count' in data:
-                popular_actions.append({'action': action, 'count': data['count']})
-            else:
-                popular_actions.append({'action': action, 'count': data if isinstance(data, int) else 0})
-        popular_actions.sort(key=lambda x: x['count'], reverse=True)
-        popular_actions = popular_actions[:3]
-        
-        return {
-            'overall_status': 'healthy' if error_rate < 0.1 else 'degraded',
-            'error_rate': error_rate,
-            'activity_level': activity_level,
-            'last_activity': self.stats['last_activity'].isoformat() if self.stats['last_activity'] else None,
-            'total_events': self.stats['webhook_received'],
-            'event_breakdown': {
-                'messages': self.stats['message_events'],
-                'postbacks': self.stats['postback_events'],
-                'follows': self.stats['follow_events'],
-                'unfollows': self.stats['unfollow_events']
-            },
-            'richmenu_analytics': {
-                'total_interactions': sum(
-                    data['count'] if isinstance(data, dict) and 'count' in data else (data if isinstance(data, int) else 0)
-                    for data in self.stats['richmenu_interactions'].values()
-                ),
-                'popular_actions': popular_actions,
-                'unique_users': len(self.stats['user_activity'])
-            },
-            'performance': {
-                'avg_response_time': sum(self.stats['response_times']) / len(self.stats['response_times']) 
-                                    if self.stats['response_times'] else 0
-            }
-        }
-
-# ★★★ 高度な自動復旧システム ★★★
-class AdvancedAutoRecovery:
-    def __init__(self):
-        self.recovery_strategies = {
-            'connection_error': self._recover_connection,
-            'rate_limit': self._handle_rate_limit,
-            'authentication_error': self._refresh_authentication,
-            'server_error': self._restart_services
-        }
-        
-        self.fallback_responses = {
-            'ai_consultation': """🤖 AI住まい相談サービス
-
-現在、AIシステムのメンテナンス中です。
-しばらくお待ちいただくか、以下の方法でサポートを受けてください：
-
-📞 お電話でのご相談: 0120-XXX-XXX
-📧 メールでのお問い合わせ: info@kinoe-design.com
-⏰ 営業時間: 9:00-18:00（水曜定休）
-
-お急ぎの場合は直接メッセージでご質問をお送りください。
-スタッフが確認次第、ご返答いたします。""",
-            
-            'document_request': """📋 資料請求サービス
-
-カタログのご請求を承ります。
-以下の情報をこのチャットでお送りください：
-
-1️⃣ お名前（フルネーム）
-2️⃣ ご住所（〒郵便番号から）
-3️⃣ お電話番号
-4️⃣ ご希望資料の種類
-   ・総合カタログ
-   ・施工事例集
-   ・標準仕様書
-   ・価格表
-
-ご入力いただいた情報を確認次第、
-3営業日以内に資料をお送りいたします📮""",
-            
-            'finance_planning': """💰 資金計画・住宅ローン相談
-
-住まいづくりの資金計画をお手伝いします。
-
-📞 専門スタッフ直通ダイヤル: 0120-XXX-XXX
-⏰ 相談受付時間: 9:00-18:00（水曜定休）
-
-💡 ご相談時にお聞かせください：
-・ご年収（世帯年収）
-・ご用意可能な自己資金
-・ご希望の借入額
-・返済期間のご希望
-
-または、上記の情報をこのチャットでお送りください。
-専門のファイナンシャルプランナーがお答えいたします。
-
-🔒 お客様の個人情報は厳重に管理いたします。""",
-            
-            'exhibition_reservation': """📍 展示場来場予約
-
-キノエデザイン展示場へのご来場予約を承ります。
-
-🏠 展示場情報
-住所：〒XXX-XXXX 住所をここに記載
-電話：0120-XXX-XXX
-営業時間：9:00-18:00（水曜定休）
-
-📅 ご予約方法
-以下の情報をメッセージでお送りください：
-・ご希望日時（第1希望・第2希望）
-・お名前
-・ご連絡先
-・参加人数
-
-例）「1月20日（土）14:00希望、田中太郎、090-XXXX-XXXX、2名」
-
-スタッフ一同、心よりお待ちしております！""",
-            
-            'general_error': """申し訳ございません。
-一時的にシステムの調子が悪いようです。
-
-しばらくしてから再度お試しいただくか、
-直接メッセージでお気軽にお声かけください。
-
-スタッフが確認次第、お返事いたします。"""
-        }
-    
-    def get_fallback_response(self, action: str, error_context: dict = None) -> str:
-        base_response = self.fallback_responses.get(action, self.fallback_responses['general_error'])
-        if error_context:
-            if error_context.get('error_type') == 'timeout':
-                base_response += "\n\n⏱️ 現在、システムの応答に時間がかかっています。"
-            elif error_context.get('error_type') == 'rate_limit':
-                base_response += "\n\n🚦 現在、アクセスが集中しています。少々お待ちください。"
-        return base_response
-    
-    async def _recover_connection(self, error: Exception) -> bool:
-        logger.info("Attempting connection recovery...")
-        await asyncio.sleep(1)
-        return True
-    
-    async def _handle_rate_limit(self, error: Exception) -> bool:
-        logger.info("Handling rate limit...")
-        await asyncio.sleep(5)
-        return True
-    
-    async def _refresh_authentication(self, error: Exception) -> bool:
-        logger.info("Refreshing authentication...")
-        return True
-    
-    async def _restart_services(self, error: Exception) -> bool:
-        logger.info("Restarting services...")
-        return True
+    def get_send_success_rate(self) -> float:
+        total_sends = self.stats['send_success'] + self.stats['send_failures']
+        if total_sends == 0:
+            return 1.0
+        return self.stats['send_success'] / total_sends
 
 # グローバルインスタンス
 monitor = ComprehensiveMonitor()
-recovery = AdvancedAutoRecovery()
 
-# LINE Bot設定
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
+# ★★★ LINE Bot設定（修正版：トークン正規化） ★★★
+def get_normalized_line_credentials():
+    """正規化されたLINE認証情報を取得"""
+    raw_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+    raw_secret = os.getenv("LINE_CHANNEL_SECRET")
+    
+    # トークンの正規化
+    access_token = normalize_line_token(raw_token)
+    channel_secret = normalize_line_token(raw_secret)
+    
+    logger.info(f"Token normalization - Raw type: {type(raw_token)}, Normalized length: {len(access_token)}")
+    logger.info(f"Secret normalization - Raw type: {type(raw_secret)}, Normalized length: {len(channel_secret)}")
+    
+    return access_token, channel_secret
 
-# LINE Bot APIの初期化
+# 正規化された認証情報を取得
+LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = get_normalized_line_credentials()
+
+# LINE Bot APIの初期化（修正版）
 if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
     try:
+        # 正規化されたトークンでConfiguration作成
         configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
         handler = WebhookHandler(LINE_CHANNEL_SECRET)
+        
+        # API クライアントの事前テスト
         with ApiClient(configuration) as api_client:
             line_bot_api = MessagingApi(api_client)
+            
         logger.info("✅ LINE Bot API v3 initialized successfully")
+        logger.info(f"✅ Token length: {len(LINE_CHANNEL_ACCESS_TOKEN)}")
+        logger.info(f"✅ Secret length: {len(LINE_CHANNEL_SECRET)}")
+        
     except Exception as e:
         logger.error(f"❌ LINE Bot API initialization failed: {e}")
         line_bot_api = None
@@ -405,7 +255,7 @@ else:
     line_bot_api = None
     handler = None
     if LINE_SDK_AVAILABLE:
-        logger.warning("⚠️ LINE Bot credentials not found")
+        logger.warning(f"⚠️ LINE Bot credentials not found - Token: {bool(LINE_CHANNEL_ACCESS_TOKEN)}, Secret: {bool(LINE_CHANNEL_SECRET)}")
     else:
         logger.warning("⚠️ LINE Bot SDK not available")
 
@@ -659,12 +509,10 @@ async def process_message(message_text: str, user_id: str) -> str:
     try:
         action = detect_richmenu_action(message_text)
         logger.info(f"📱 Detected action: {action}")
-        monitor.track_richmenu_interaction(action, user_id)
         
         richmenu_response = get_richmenu_response(action, user_id)
         if richmenu_response and action != "general":
             response_time = (datetime.now() - start_time).total_seconds()
-            monitor.track_richmenu_interaction(action, user_id, response_time)
             logger.info(f"✅ Returned richmenu response for action: {action}")
             return richmenu_response
         
@@ -678,13 +526,7 @@ async def process_message(message_text: str, user_id: str) -> str:
     except Exception as e:
         logger.error(f"❌ Error processing message: {e}")
         logger.error(traceback.format_exc())
-        try:
-            fallback_response = recovery.get_fallback_response('general_error', {'error_type': type(e).__name__})
-            logger.info(f"🆘 Using fallback response due to error")
-            return fallback_response
-        except Exception as recovery_error:
-            logger.error(f"💥 Recovery also failed: {recovery_error}")
-            return get_emergency_response(message_text)
+        return get_emergency_response(message_text)
 
 async def process_rag_query(message_text: str, user_id: str) -> str:
     """RAGを使用した高度なメッセージ処理（デバッグログ強化版）"""
@@ -791,6 +633,45 @@ def get_general_response_from_llm(query: str, llm_instance):
         logger.error(f"❌ Error generating general response: {e}")
         return "申し訳ございません。回答の生成中にエラーが発生しました。スタッフまでお問い合わせください。"
 
+# ★★★ 修正版：安全な返信送信関数 ★★★
+def send_line_reply_safe(reply_token: str, message_text: str) -> bool:
+    """安全なLINE返信送信（エラーハンドリング強化）"""
+    try:
+        # トークンの再正規化（安全のため）
+        safe_token = normalize_line_token(LINE_CHANNEL_ACCESS_TOKEN)
+        
+        if not safe_token:
+            logger.error("❌ No valid LINE access token available")
+            monitor.track_send_result(False, "No valid access token")
+            return False
+        
+        logger.info(f"📤 Sending reply with token length: {len(safe_token)}")
+        
+        # Configuration を毎回新しく作成（安全のため）
+        configuration = Configuration(access_token=safe_token)
+        
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            
+            # 返信メッセージ送信
+            messaging_api.reply_message_with_http_info(
+                ReplyMessageRequest(
+                    reply_token=reply_token,
+                    messages=[TextMessage(text=message_text)]
+                )
+            )
+        
+        logger.info(f"✅ Successfully sent reply (length: {len(message_text)})")
+        monitor.track_send_result(True)
+        return True
+        
+    except Exception as e:
+        error_msg = f"Failed to send reply: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        logger.error(traceback.format_exc())
+        monitor.track_send_result(False, error_msg)
+        return False
+
 # ★★★ Webhook エンドポイント修正版（署名検証強化）★★★
 @router.post("/webhook")
 async def line_webhook(request: Request, background_tasks: BackgroundTasks):
@@ -871,11 +752,11 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         monitor.log_webhook_event("unexpected_error", False, error_data)
         return {"status": "error_handled", "error": str(e), "timestamp": datetime.now().isoformat()}
 
-# ★★★ イベントハンドラー（修正版：非同期→スレッド実行＋タイムアウト）★★★
+# ★★★ イベントハンドラー（修正版：安全な送信処理）★★★
 if LINE_SDK_AVAILABLE and handler:
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """修正版テキストメッセージ処理（非同期問題解決）"""
+        """修正版テキストメッセージ処理（安全な送信処理）"""
         start_time = datetime.now()
         try:
             user_id = event.source.user_id
@@ -905,21 +786,13 @@ if LINE_SDK_AVAILABLE and handler:
            
             logger.info(f"🤖 Generated answer length: {len(answer)} characters")
            
-            # 応答送信（v3対応）
-            try:
-                with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-                    messaging_api = MessagingApi(api_client)
-                    messaging_api.reply_message_with_http_info(
-                        ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[TextMessage(text=answer)]
-                        )
-                    )
-                
-                processing_time = (datetime.now() - start_time).total_seconds()
-                monitor.stats['response_times'].append(processing_time)
+            # 安全な応答送信
+            send_success = send_line_reply_safe(event.reply_token, answer)
+            
+            processing_time = (datetime.now() - start_time).total_seconds()
+            
+            if send_success:
                 logger.info(f"✅ Sent reply to {user_id} (processing_time: {processing_time:.2f}s)")
-                
                 success_data = {
                     "user_id": user_id,
                     "processing_time": processing_time,
@@ -928,14 +801,13 @@ if LINE_SDK_AVAILABLE and handler:
                     "message_preview": message_text[:50] + "..." if len(message_text) > 50 else message_text
                 }
                 monitor.log_webhook_event("message", True, success_data)
-            
-            except Exception as send_error:
-                logger.error(f"❌ Failed to send reply: {send_error}")
+            else:
+                logger.error(f"❌ Failed to send reply to {user_id}")
                 error_data = {
-                    "error": str(send_error),
-                    "error_type": type(send_error).__name__,
                     "user_id": user_id,
-                    "message_text": message_text[:50] + "..." if len(message_text) > 50 else message_text
+                    "processing_time": processing_time,
+                    "message_text": message_text[:50] + "..." if len(message_text) > 50 else message_text,
+                    "error": "send_failed"
                 }
                 monitor.log_webhook_event("message", False, error_data)
            
@@ -953,29 +825,24 @@ if LINE_SDK_AVAILABLE and handler:
             }
             monitor.log_webhook_event("message", False, error_data)
            
+            # 緊急時の応答送信
             try:
                 error_message = get_emergency_response(message_text if 'message_text' in locals() else "")
-                with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-                    messaging_api = MessagingApi(api_client)
-                    messaging_api.reply_message_with_http_info(
-                        ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[TextMessage(text=error_message)]
-                        )
-                    )
+                send_line_reply_safe(event.reply_token, error_message)
                 logger.info("🆘 Sent emergency fallback message")
             except Exception as final_error:
                 logger.error(f"💥 Final error response failed: {final_error}")
 
     @handler.add(PostbackEvent)
     def handle_postback(event):
-        """包括的Postbackイベント処理（デバッグログ強化版）"""
+        """包括的Postbackイベント処理（安全な送信処理）"""
         start_time = datetime.now()
         try:
             user_id = event.source.user_id
             postback_data = event.postback.data
             display_text = getattr(event.postback, 'display_text', '')
             logger.info(f"🔙 Postback received from {user_id}: {postback_data}")
+            
             params = {}
             try:
                 params = dict(param.split('=') for param in postback_data.split('&'))
@@ -986,44 +853,35 @@ if LINE_SDK_AVAILABLE and handler:
             
             action = params.get('action', 'unknown')
             source = params.get('source', 'richmenu')
-            monitor.track_richmenu_interaction(action, user_id)
             
             try:
                 response_text = get_richmenu_response(action, user_id) or f"アクション '{action}' を受信しました。処理中です..."
-                with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-                    messaging_api = MessagingApi(api_client)
-                    messaging_api.reply_message_with_http_info(
-                        ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[TextMessage(text=response_text)]
-                        )
-                    )
+                
+                # 安全な送信処理
+                send_success = send_line_reply_safe(event.reply_token, response_text)
+                
                 processing_time = (datetime.now() - start_time).total_seconds()
-                success_data = {
-                    "action": action,
-                    "source": source,
-                    "user_id": user_id,
-                    "processing_time": processing_time,
-                    "display_text": display_text,
-                    "postback_data": postback_data
-                }
-                monitor.log_webhook_event("postback", True, success_data)
-                logger.info(f"✅ Postback processed successfully: {action} (time: {processing_time:.2f}s)")
+                
+                if send_success:
+                    success_data = {
+                        "action": action,
+                        "source": source,
+                        "user_id": user_id,
+                        "processing_time": processing_time,
+                        "display_text": display_text,
+                        "postback_data": postback_data
+                    }
+                    monitor.log_webhook_event("postback", True, success_data)
+                    logger.info(f"✅ Postback processed successfully: {action} (time: {processing_time:.2f}s)")
+                else:
+                    logger.error(f"❌ Failed to send postback response for action: {action}")
+                    
             except Exception as process_error:
                 logger.error(f"❌ Postback processing error: {process_error}")
-                fallback_text = recovery.get_fallback_response(action)
-                try:
-                    with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-                        messaging_api = MessagingApi(api_client)
-                        messaging_api.reply_message_with_http_info(
-                            ReplyMessageRequest(
-                                reply_token=event.reply_token,
-                                messages=[TextMessage(text=fallback_text)]
-                            )
-                        )
-                    logger.info("🆘 Sent fallback response for postback error")
-                except Exception as fallback_error:
-                    logger.error(f"💥 Fallback response failed: {fallback_error}")
+                # 緊急時の応答
+                fallback_text = "申し訳ございません。処理中にエラーが発生しました。再度お試しください。"
+                send_line_reply_safe(event.reply_token, fallback_text)
+                
                 processing_time = (datetime.now() - start_time).total_seconds()
                 error_data = {
                     "action": action,
@@ -1035,6 +893,7 @@ if LINE_SDK_AVAILABLE and handler:
                     "postback_data": postback_data
                 }
                 monitor.log_webhook_event("postback", False, error_data)
+                
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
             logger.error(f"💥 Postback handler error: {e}")
@@ -1049,10 +908,11 @@ if LINE_SDK_AVAILABLE and handler:
 
     @handler.add(FollowEvent)
     def handle_follow(event):
-        """友達追加時の包括的処理（デバッグログ強化版）"""
+        """友達追加時の包括的処理（安全な送信処理）"""
         try:
             user_id = event.source.user_id
             logger.info(f"👤 New follower: {user_id}")
+            
             welcome_message = """🎉 友達追加ありがとうございます！
 
 キノエデザインの住まいAIコンシェルジュです。
@@ -1077,21 +937,20 @@ if LINE_SDK_AVAILABLE and handler:
 
 どうぞお気軽にご利用ください！
 素敵な住まいづくりを一緒に始めましょう✨"""
-            with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-                messaging_api = MessagingApi(api_client)
-                messaging_api.reply_message_with_http_info(
-                    ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text=welcome_message)]
-                    )
-                )
-            success_data = {
-                "user_id": user_id,
-                "welcome_message_sent": True,
-                "timestamp": datetime.now().isoformat()
-            }
-            monitor.log_webhook_event("follow", True, success_data)
-            logger.info(f"✅ Welcome message sent to new follower: {user_id}")
+
+            send_success = send_line_reply_safe(event.reply_token, welcome_message)
+            
+            if send_success:
+                success_data = {
+                    "user_id": user_id,
+                    "welcome_message_sent": True,
+                    "timestamp": datetime.now().isoformat()
+                }
+                monitor.log_webhook_event("follow", True, success_data)
+                logger.info(f"✅ Welcome message sent to new follower: {user_id}")
+            else:
+                logger.error(f"❌ Failed to send welcome message to: {user_id}")
+                
         except Exception as e:
             logger.error(f"❌ Error handling follow event: {e}")
             error_data = {
@@ -1124,7 +983,8 @@ if LINE_SDK_AVAILABLE and handler:
 @router.get("/health")
 def get_comprehensive_health():
     """包括的ヘルス状態取得"""
-    health_data = monitor.get_health_status()
+    send_success_rate = monitor.get_send_success_rate()
+    
     return {
         "line_bot_status": {
             "configured": bool(line_bot_api and handler),
@@ -1132,14 +992,28 @@ def get_comprehensive_health():
             "sdk_version": "3.5.0",
             "credentials_set": bool(LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET),
             "api_client_ready": line_bot_api is not None,
-            "handler_ready": handler is not None
+            "handler_ready": handler is not None,
+            "token_length": len(LINE_CHANNEL_ACCESS_TOKEN) if LINE_CHANNEL_ACCESS_TOKEN else 0,
+            "secret_length": len(LINE_CHANNEL_SECRET) if LINE_CHANNEL_SECRET else 0
         },
-        "comprehensive_health": health_data,
+        "send_statistics": {
+            "success_count": monitor.stats['send_success'],
+            "failure_count": monitor.stats['send_failures'],
+            "success_rate": send_success_rate,
+            "total_attempts": monitor.stats['send_success'] + monitor.stats['send_failures']
+        },
+        "webhook_statistics": {
+            "total_received": monitor.stats['webhook_received'],
+            "message_events": monitor.stats['message_events'],
+            "postback_events": monitor.stats['postback_events'],
+            "follow_events": monitor.stats['follow_events'],
+            "error_count": monitor.stats['errors'],
+            "error_rate": monitor.get_error_rate()
+        },
         "system_info": {
             "timestamp": datetime.now().isoformat(),
-            "uptime_seconds": (datetime.now() - datetime.now()).total_seconds(),
             "monitoring_enabled": True,
-            "auto_recovery_enabled": True
+            "token_normalization_enabled": True
         }
     }
 
@@ -1155,51 +1029,13 @@ def get_detailed_line_status():
         "api_client_ready": line_bot_api is not None,
         "handler_ready": handler is not None,
         "webhook_events_processed": monitor.stats['webhook_received'],
+        "send_success_rate": monitor.get_send_success_rate(),
         "timestamp": datetime.now().isoformat()
     }
 
-@router.get("/analytics")
-def get_analytics():
-    """分析データ取得（JSONシリアライズ対応）"""
-    try:
-        richmenu_analytics = {}
-        for action, data in monitor.stats['richmenu_interactions'].items():
-            if isinstance(data, dict):
-                safe_data = data.copy()
-                if 'users' in safe_data and isinstance(safe_data['users'], set):
-                    safe_data['users'] = list(safe_data['users'])
-                richmenu_analytics[action] = safe_data
-            else:
-                richmenu_analytics[action] = data
-        
-        user_analytics = {
-            "total_users": len(monitor.stats['user_activity']),
-            "active_users_today": len([
-                uid for uid, data in monitor.stats['user_activity'].items() 
-                if isinstance(data, dict) and 
-                data.get('last_interaction') and
-                (datetime.now() - data['last_interaction']).days == 0
-            ])
-        }
-        
-        return {
-            "richmenu_analytics": richmenu_analytics,
-            "user_analytics": user_analytics,
-            "performance_metrics": {
-                "avg_response_time": sum(monitor.stats['response_times']) / len(monitor.stats['response_times']) 
-                                    if monitor.stats['response_times'] else 0,
-                "total_events": monitor.stats['webhook_received'],
-                "error_rate": monitor.get_error_rate()
-            },
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        logger.error(f"Analytics error: {e}")
-        return {"error": "Failed to get analytics", "timestamp": datetime.now().isoformat()}
-
 @router.post("/test")
 async def test_line_bot():
-    """LINE Bot機能のテスト（デバッグログ強化版）"""
+    """LINE Bot機能のテスト（修正版）"""
     if not line_bot_api:
         logger.error("❌ LINE Bot not configured for testing")
         return {"status": "error", "message": "LINE Bot not configured"}
@@ -1209,11 +1045,27 @@ async def test_line_bot():
         logger.info(f"🧪 Testing LINE Bot with message: '{test_message}'")
         response = await process_message(test_message, test_user_id)
         logger.info(f"✅ Test completed successfully - Response length: {len(response)}")
+        
+        # トークン正規化テスト
+        normalized_token = normalize_line_token(LINE_CHANNEL_ACCESS_TOKEN)
+        token_test_result = {
+            "original_type": str(type(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))),
+            "normalized_length": len(normalized_token),
+            "starts_with_bearer": normalized_token.startswith("Bearer "),
+            "is_valid_format": len(normalized_token) > 100 and not normalized_token.startswith("Bearer ")
+        }
+        
         return {
             "status": "success",
             "test_message": test_message,
             "test_response": response[:100] + "..." if len(response) > 100 else response,
             "response_length": len(response),
+            "token_test": token_test_result,
+            "send_statistics": {
+                "success_count": monitor.stats['send_success'],
+                "failure_count": monitor.stats['send_failures'],
+                "success_rate": monitor.get_send_success_rate()
+            },
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
@@ -1223,18 +1075,3 @@ async def test_line_bot():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
-
-@router.post("/broadcast")
-async def broadcast_message(message: dict):
-    """ブロードキャストメッセージ送信（管理者用）"""
-    if not line_bot_api:
-        raise HTTPException(status_code=500, detail="LINE Bot not configured")
-    try:
-        broadcast_message = TextMessage(text=message.get("text", ""))
-        with ApiClient(Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)) as api_client:
-            messaging_api = MessagingApi(api_client)
-            # 実装は必要に応じて
-        return {"status": "success", "message": "Broadcast sent"}
-    except Exception as e:
-        logger.error(f"Broadcast error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))

@@ -1,4 +1,4 @@
-# main.py - 完全版（ヘルスチェック・監視・LINE Bot統合 + デバッグエンドポイント追加）
+# main.py - 完全修正版（トークン正規化・エラーハンドリング強化）
 
 import os
 import sys
@@ -37,6 +37,32 @@ if os.getenv("ENV") != "production":
 else:
     logger.info(">>> Running in production mode")
 
+# ★★★ 重要：トークン正規化関数（main.pyでも使用） ★★★
+def normalize_credential(value: Any) -> str:
+    """認証情報を安全にstring型に変換"""
+    if value is None:
+        return ""
+    
+    # bytes型の場合はデコード
+    if isinstance(value, bytes):
+        try:
+            value = value.decode('utf-8')
+        except UnicodeDecodeError:
+            logger.error("Failed to decode credential from bytes")
+            return ""
+    
+    # 文字列に変換
+    credential_str = str(value).strip()
+    
+    # 不要なプレフィックス・サフィックスを削除
+    if credential_str.startswith('Bearer '):
+        credential_str = credential_str[7:].strip()
+    
+    if credential_str.startswith("b'") and credential_str.endswith("'"):
+        credential_str = credential_str[2:-1]
+    
+    return credential_str
+
 # セキュリティ強化：重要な環境変数のマスキング
 def mask_sensitive_data(value: str, show_chars: int = 10) -> str:
     """機密データをマスキング"""
@@ -47,9 +73,32 @@ def mask_sensitive_data(value: str, show_chars: int = 10) -> str:
 # 環境変数デバッグログ（セキュリティ配慮）
 logger.info("==== Environment Variables Status ====")
 logger.info("ENV: %s", os.environ.get("ENV"))
-logger.info("OPENAI_API_KEY: %s", mask_sensitive_data(os.environ.get("OPENAI_API_KEY", "")))
-logger.info("LINE_CHANNEL_ACCESS_TOKEN: %s", mask_sensitive_data(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")))
-logger.info("LINE_CHANNEL_SECRET: %s", mask_sensitive_data(os.environ.get("LINE_CHANNEL_SECRET", "")))
+
+# 正規化処理を適用
+raw_openai_key = os.environ.get("OPENAI_API_KEY", "")
+raw_line_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
+raw_line_secret = os.environ.get("LINE_CHANNEL_SECRET", "")
+
+normalized_openai_key = normalize_credential(raw_openai_key)
+normalized_line_token = normalize_credential(raw_line_token)
+normalized_line_secret = normalize_credential(raw_line_secret)
+
+# 正規化後の情報をログ出力
+logger.info("OPENAI_API_KEY: %s (normalized: %d chars)", 
+           mask_sensitive_data(raw_openai_key), len(normalized_openai_key))
+logger.info("LINE_CHANNEL_ACCESS_TOKEN: %s (normalized: %d chars)", 
+           mask_sensitive_data(raw_line_token), len(normalized_line_token))
+logger.info("LINE_CHANNEL_SECRET: %s (normalized: %d chars)", 
+           mask_sensitive_data(raw_line_secret), len(normalized_line_secret))
+
+# 正規化された認証情報を環境変数に再設定（他のモジュールで使用するため）
+if normalized_openai_key:
+    os.environ["OPENAI_API_KEY"] = normalized_openai_key
+if normalized_line_token:
+    os.environ["LINE_CHANNEL_ACCESS_TOKEN"] = normalized_line_token
+if normalized_line_secret:
+    os.environ["LINE_CHANNEL_SECRET"] = normalized_line_secret
+
 logger.info("LINE_LOGIN_CHANNEL_ID: %s", mask_sensitive_data(os.environ.get("LINE_LOGIN_CHANNEL_ID", "")))
 logger.info("LINE_LOGIN_CHANNEL_SECRET: %s", mask_sensitive_data(os.environ.get("LINE_LOGIN_CHANNEL_SECRET", "")))
 logger.info("LINE_LOGIN_REDIRECT_URI: %s", os.environ.get("LINE_LOGIN_REDIRECT_URI"))
@@ -70,7 +119,7 @@ except ImportError:
 app = FastAPI(
     title="RAG FastAPI Backend with Comprehensive Monitoring",
     description="RAG + LLM連携API (Cloud Run対応) + LINE Bot + 包括的監視システム",
-    version="2.0.0",
+    version="2.1.0",
     docs_url="/docs" if os.getenv("ENV") != "production" else None,
     redoc_url="/redoc" if os.getenv("ENV") != "production" else None
 )
@@ -157,12 +206,16 @@ class SystemMonitor:
         self.error_count = 0
         self.health_checks = []
         self.last_health_check = None
+        self.credential_normalizations = 0
     
     def record_request(self):
         self.request_count += 1
     
     def record_error(self):
         self.error_count += 1
+    
+    def record_credential_normalization(self):
+        self.credential_normalizations += 1
     
     def get_system_metrics(self) -> Dict[str, Any]:
         try:
@@ -192,7 +245,8 @@ class SystemMonitor:
                     "uptime_seconds": (datetime.now() - self.startup_time).total_seconds(),
                     "request_count": self.request_count,
                     "error_count": self.error_count,
-                    "error_rate": self.error_count / max(self.request_count, 1)
+                    "error_rate": self.error_count / max(self.request_count, 1),
+                    "credential_normalizations": self.credential_normalizations
                 }
             }
         except Exception as e:
@@ -201,6 +255,10 @@ class SystemMonitor:
 
 # グローバル監視インスタンス
 system_monitor = SystemMonitor()
+
+# 正規化実行の記録
+if normalized_openai_key or normalized_line_token or normalized_line_secret:
+    system_monitor.record_credential_normalization()
 
 # グローバル変数（メイン処理用）
 vectorstore = None
@@ -248,7 +306,7 @@ async def enhanced_startup():
     except Exception as e:
         logger.error(f"❌ Cloud Run info collection failed: {e}")
 
-    # 3. LLM初期化
+    # 3. LLM初期化（正規化された認証情報使用）
     try:
         logger.info("🧠 Loading LLM...")
         from llm.llm_runner import load_llm
@@ -329,18 +387,27 @@ async def enhanced_startup():
         logger.error(traceback.format_exc())
         rag_chain_template = None
 
-    # 6. LINE Bot設定確認
+    # 6. LINE Bot設定確認（正規化後）
     try:
         logger.info("📱 LINE Bot Configuration Check:")
         line_checks = {
-            "LINE_CHANNEL_ACCESS_TOKEN": bool(os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')),
-            "LINE_CHANNEL_SECRET": bool(os.environ.get('LINE_CHANNEL_SECRET')),
+            "LINE_CHANNEL_ACCESS_TOKEN": bool(normalized_line_token),
+            "LINE_CHANNEL_SECRET": bool(normalized_line_secret),
             "LINE_LOGIN_CHANNEL_ID": bool(os.environ.get('LINE_LOGIN_CHANNEL_ID')),
             "LINE_LOGIN_CHANNEL_SECRET": bool(os.environ.get('LINE_LOGIN_CHANNEL_SECRET')),
             "LIFF_ID": bool(os.environ.get('LIFF_ID'))
         }
         for key, status in line_checks.items():
             logger.info(f"  {key}: {'✅ Set' if status else '❌ Not set'}")
+        
+        # 正規化結果の詳細
+        if normalized_line_token:
+            logger.info(f"  Token normalized length: {len(normalized_line_token)}")
+            logger.info(f"  Token format valid: {len(normalized_line_token) > 100}")
+        if normalized_line_secret:
+            logger.info(f"  Secret normalized length: {len(normalized_line_secret)}")
+            logger.info(f"  Secret format valid: {len(normalized_line_secret) > 20}")
+            
         if LINE_SDK_AVAILABLE:
             logger.info("  LINE SDK: ✅ Available (v3.5.0)")
         else:
@@ -358,7 +425,7 @@ async def enhanced_startup():
         "LLM": "✅ Loaded" if llm_instance else "❌ Not loaded",
         "VectorStore": "✅ Loaded" if vectorstore else "❌ Not loaded",
         "RAG Chain": "✅ Created" if rag_chain_template else "❌ Not created",
-        "LINE Bot": "✅ Configured" if os.environ.get('LINE_CHANNEL_ACCESS_TOKEN') and os.environ.get('LINE_CHANNEL_SECRET') else "❌ Not configured",
+        "LINE Bot": "✅ Configured" if normalized_line_token and normalized_line_secret else "❌ Not configured",
         "LINE Login": "✅ Configured" if os.environ.get('LINE_LOGIN_CHANNEL_ID') and os.environ.get('LINE_LOGIN_CHANNEL_SECRET') else "❌ Not configured",
         "LIFF": "✅ Configured" if os.environ.get('LIFF_ID') else "❌ Not configured"
     }
@@ -394,16 +461,21 @@ if os.path.isdir(pdf_dir):
 # ★★★ 新しく追加するデバッグエンドポイント ★★★
 @app.get("/line-debug")
 def line_debug_endpoint():
-    """LINE Bot設定のデバッグ情報"""
+    """LINE Bot設定のデバッグ情報（正規化対応）"""
     try:
         return {
             "line_credentials": {
-                "access_token_set": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")),
-                "channel_secret_set": bool(os.environ.get("LINE_CHANNEL_SECRET")),
-                "access_token_length": len(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")) if os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") else 0,
-                "secret_length": len(os.environ.get("LINE_CHANNEL_SECRET", "")) if os.environ.get("LINE_CHANNEL_SECRET") else 0,
-                "access_token_preview": (os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")[:20] + "...") if os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") else "未設定",
-                "secret_preview": (os.environ.get("LINE_CHANNEL_SECRET", "")[:10] + "...") if os.environ.get("LINE_CHANNEL_SECRET") else "未設定"
+                "access_token_set": bool(normalized_line_token),
+                "channel_secret_set": bool(normalized_line_secret),
+                "access_token_length": len(normalized_line_token) if normalized_line_token else 0,
+                "secret_length": len(normalized_line_secret) if normalized_line_secret else 0,
+                "access_token_preview": (normalized_line_token[:20] + "...") if normalized_line_token else "未設定",
+                "secret_preview": (normalized_line_secret[:10] + "...") if normalized_line_secret else "未設定",
+                "normalization_applied": {
+                    "openai_key": bool(normalized_openai_key),
+                    "line_token": bool(normalized_line_token),
+                    "line_secret": bool(normalized_line_secret)
+                }
             },
             "line_login_credentials": {
                 "login_channel_id_set": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID")),
@@ -423,6 +495,7 @@ def line_debug_endpoint():
                 "revision": os.environ.get("K_REVISION", "local"),
                 "region": os.environ.get("GOOGLE_CLOUD_REGION", "unknown")
             },
+            "credential_normalization_count": system_monitor.credential_normalizations,
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
@@ -430,17 +503,16 @@ def line_debug_endpoint():
 
 @app.get("/test-line-signature")
 def test_line_signature():
-    """署名検証のテスト"""
+    """署名検証のテスト（正規化対応）"""
     try:
-        channel_secret = os.environ.get("LINE_CHANNEL_SECRET")
-        if not channel_secret:
-            return {"error": "LINE_CHANNEL_SECRET not found"}
+        if not normalized_line_secret:
+            return {"error": "LINE_CHANNEL_SECRET not found or normalized"}
         
         # テスト用のボディとシグネチャ
         test_body = '{"events":[],"destination":"test"}'
         
         hash = hmac.new(
-            channel_secret.encode('utf-8'),
+            normalized_line_secret.encode('utf-8'),
             test_body.encode('utf-8'),
             hashlib.sha256
         ).digest()
@@ -449,11 +521,16 @@ def test_line_signature():
         return {
             "test_body": test_body,
             "generated_signature": signature,
-            "channel_secret_length": len(channel_secret),
+            "channel_secret_length": len(normalized_line_secret),
             "signature_format": f"X-Line-Signature: {signature}",
+            "normalization_info": {
+                "original_type": str(type(os.environ.get("LINE_CHANNEL_SECRET"))),
+                "normalized_length": len(normalized_line_secret),
+                "normalization_applied": normalized_line_secret != os.environ.get("LINE_CHANNEL_SECRET", "")
+            },
             "verification_steps": [
                 "1. Get body as bytes",
-                "2. Get channel secret",
+                "2. Get channel secret (normalized)",
                 "3. HMAC-SHA256(secret, body)",
                 "4. Base64 encode result",
                 "5. Compare with X-Line-Signature header"
@@ -500,48 +577,53 @@ def line_webhook_test():
 
 @app.get("/line-credentials-validation")
 def line_credentials_validation():
-    """LINE認証情報の詳細検証"""
+    """LINE認証情報の詳細検証（正規化対応）"""
     try:
         results = {
             "validation_results": {},
             "recommendations": [],
             "critical_issues": [],
+            "normalization_info": {},
             "timestamp": datetime.now().isoformat()
         }
         
-        # Access Token検証
-        access_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
-        if access_token:
-            if access_token.startswith("Bearer "):
-                results["critical_issues"].append("Access token should not include 'Bearer ' prefix")
-            elif len(access_token) < 100:
-                results["critical_issues"].append("Access token seems too short")
-            else:
-                results["validation_results"]["access_token"] = "Format OK"
-        else:
-            results["critical_issues"].append("LINE_CHANNEL_ACCESS_TOKEN not set")
+        # 正規化情報
+        results["normalization_info"] = {
+            "openai_key_normalized": bool(normalized_openai_key),
+            "line_token_normalized": bool(normalized_line_token),
+            "line_secret_normalized": bool(normalized_line_secret),
+            "normalization_count": system_monitor.credential_normalizations
+        }
         
-        # Channel Secret検証
-        channel_secret = os.environ.get("LINE_CHANNEL_SECRET")
-        if channel_secret:
-            if len(channel_secret) < 20:
-                results["critical_issues"].append("Channel secret seems too short")
+        # Access Token検証（正規化済み）
+        if normalized_line_token:
+            if len(normalized_line_token) < 100:
+                results["critical_issues"].append("Access token seems too short after normalization")
             else:
-                results["validation_results"]["channel_secret"] = "Format OK"
+                results["validation_results"]["access_token"] = "Format OK (normalized)"
         else:
-            results["critical_issues"].append("LINE_CHANNEL_SECRET not set")
+            results["critical_issues"].append("LINE_CHANNEL_ACCESS_TOKEN not set or normalization failed")
         
-        # LINE Bot API接続テスト
-        if access_token:
+        # Channel Secret検証（正規化済み）
+        if normalized_line_secret:
+            if len(normalized_line_secret) < 20:
+                results["critical_issues"].append("Channel secret seems too short after normalization")
+            else:
+                results["validation_results"]["channel_secret"] = "Format OK (normalized)"
+        else:
+            results["critical_issues"].append("LINE_CHANNEL_SECRET not set or normalization failed")
+        
+        # LINE Bot API接続テスト（正規化済みトークン使用）
+        if normalized_line_token:
             try:
                 import requests
                 api_response = requests.get(
                     "https://api.line.me/v2/bot/info",
-                    headers={"Authorization": f"Bearer {access_token}"},
+                    headers={"Authorization": f"Bearer {normalized_line_token}"},
                     timeout=10
                 )
                 if api_response.status_code == 200:
-                    results["validation_results"]["api_connection"] = "Success"
+                    results["validation_results"]["api_connection"] = "Success (with normalized token)"
                     bot_info = api_response.json()
                     results["validation_results"]["bot_info"] = {
                         "displayName": bot_info.get("displayName", "Unknown"),
@@ -555,12 +637,13 @@ def line_credentials_validation():
         
         # 推奨事項
         if not results["critical_issues"]:
-            results["recommendations"].append("All LINE credentials are properly configured")
+            results["recommendations"].append("All LINE credentials are properly configured and normalized")
             results["recommendations"].append("Test webhook by sending a message to your LINE Bot")
         else:
             results["recommendations"].append("Fix critical issues before testing")
             results["recommendations"].append("Check Secret Manager configuration")
-            results["recommendations"].append("Verify LINE Developers Console settings")
+            results["recommendations"].append("Verify credential normalization process")
+            results["recommendations"].append("Check LINE Developers Console settings")
         
         return results
     
@@ -681,9 +764,10 @@ def comprehensive_system_health():
             "llm": llm_instance is not None,
             "vectorstore": vectorstore is not None,
             "rag_chain": rag_chain_template is not None,
-            "line_bot": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") and os.environ.get("LINE_CHANNEL_SECRET")),
+            "line_bot": bool(normalized_line_token and normalized_line_secret),
             "line_login": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID") and os.environ.get("LINE_LOGIN_CHANNEL_SECRET")),
-            "liff": bool(os.environ.get("LIFF_ID"))
+            "liff": bool(os.environ.get("LIFF_ID")),
+            "credential_normalization": system_monitor.credential_normalizations > 0
         }
         cloud_run_info = {
             "service_name": os.environ.get("K_SERVICE", "local"),
@@ -711,7 +795,8 @@ def comprehensive_system_health():
                 "memory_healthy": metrics.get("system", {}).get("memory_percent", 100) < 80,
                 "disk_healthy": metrics.get("system", {}).get("disk_percent", 100) < 80,
                 "error_rate_healthy": metrics.get("application", {}).get("error_rate", 1) < 0.1,
-                "components_healthy": sum(components_status.values()) >= 2
+                "components_healthy": sum(components_status.values()) >= 3,
+                "credentials_normalized": components_status["credential_normalization"]
             },
             "recommendations": generate_health_recommendations(metrics, components_status)
         }
@@ -737,6 +822,8 @@ def generate_health_recommendations(metrics: Dict, components: Dict) -> List[str
         recommendations.append("ベクトルストアが読み込まれていません。")
     if not components.get("line_bot"):
         recommendations.append("LINE Botが設定されていません。認証情報を確認してください。")
+    if not components.get("credential_normalization"):
+        recommendations.append("認証情報の正規化が実行されていません。")
     if not recommendations:
         recommendations.append("システムは正常に動作しています。")
     return recommendations
@@ -744,13 +831,13 @@ def generate_health_recommendations(metrics: Dict, components: Dict) -> List[str
 # ★★★ ここから：要求通りの /healthz（基本版）★★★
 @app.get("/healthz")
 def health_check():
-    """基本的なヘルスチェックエンドポイント"""
+    """基本的なヘルスチェックエンドポイント（正規化対応）"""
     try:
         health_status = {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
             "service": "rag-api",
-            "version": "2.0.0"
+            "version": "2.1.0"
         }
         components_ok = True
 
@@ -759,13 +846,22 @@ def health_check():
             health_status.setdefault("warnings", []).append("LLM instance not loaded")
             components_ok = False
 
-        # LINE Bot設定チェック（警告のみ）
-        if not os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"):
+        # LINE Bot設定チェック（正規化済み認証情報）
+        if not normalized_line_token:
             health_status.setdefault("warnings", []).append("LINE credentials not configured")
+
+        # 認証情報正規化チェック
+        if system_monitor.credential_normalizations == 0:
+            health_status.setdefault("warnings", []).append("Credential normalization not executed")
 
         # 全体ステータス判定
         if not components_ok:
             health_status["status"] = "degraded"
+
+        health_status["credential_normalization"] = {
+            "executed": system_monitor.credential_normalizations > 0,
+            "count": system_monitor.credential_normalizations
+        }
 
         return health_status
     except Exception as e:
@@ -782,12 +878,13 @@ def comprehensive_line_bot_diagnostics():
     try:
         diagnostics = {}
         env_vars = {
-            "LINE_CHANNEL_ACCESS_TOKEN": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")),
-            "LINE_CHANNEL_SECRET": bool(os.environ.get("LINE_CHANNEL_SECRET")),
+            "LINE_CHANNEL_ACCESS_TOKEN": bool(normalized_line_token),
+            "LINE_CHANNEL_SECRET": bool(normalized_line_secret),
             "LINE_LOGIN_CHANNEL_ID": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID")),
             "LINE_LOGIN_CHANNEL_SECRET": bool(os.environ.get("LINE_LOGIN_CHANNEL_SECRET")),
             "LIFF_ID": bool(os.environ.get("LIFF_ID"))
         }
+        
         def test_secret_access():
             try:
                 from google.cloud import secretmanager
@@ -799,21 +896,22 @@ def comprehensive_line_bot_diagnostics():
             except Exception as e:
                 logger.error(f"Secret Manager test failed: {e}")
                 return False
+        
         def test_line_api():
             try:
                 import requests
-                token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
-                if not token:
+                if not normalized_line_token:
                     return False
                 response = requests.get(
                     "https://api.line.me/v2/bot/info",
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers={"Authorization": f"Bearer {normalized_line_token}"},
                     timeout=10
                 )
                 return response.status_code == 200
             except Exception as e:
                 logger.error(f"LINE API test failed: {e}")
                 return False
+        
         def test_webhook_endpoint():
             try:
                 import requests
@@ -825,30 +923,44 @@ def comprehensive_line_bot_diagnostics():
             except Exception as e:
                 logger.error(f"Webhook endpoint test failed: {e}")
                 return False
+        
         def test_line_sdk():
             return LINE_SDK_AVAILABLE
+        
         diagnostics = {
             "environment_variables": env_vars,
             "secret_manager_access": test_secret_access(),
             "line_api_connection": test_line_api(),
             "webhook_endpoint": test_webhook_endpoint(),
-            "line_sdk_available": test_line_sdk()
+            "line_sdk_available": test_line_sdk(),
+            "credential_normalization": {
+                "executed": system_monitor.credential_normalizations > 0,
+                "count": system_monitor.credential_normalizations,
+                "normalized_token_length": len(normalized_line_token) if normalized_line_token else 0,
+                "normalized_secret_length": len(normalized_line_secret) if normalized_line_secret else 0
+            }
         }
+        
         critical_tests = [
             diagnostics["line_api_connection"],
             diagnostics["webhook_endpoint"], 
-            diagnostics["line_sdk_available"]
+            diagnostics["line_sdk_available"],
+            diagnostics["credential_normalization"]["executed"]
         ]
         all_tests_passed = all(critical_tests)
+        
         recommendations = []
         if not diagnostics["secret_manager_access"]:
             recommendations.append("Secret Manager permissions確認")
         if not diagnostics["line_api_connection"]:
-            recommendations.append("LINE Channel Access Token確認")
+            recommendations.append("LINE Channel Access Token確認（正規化後）")
         if not diagnostics["webhook_endpoint"]:
             recommendations.append("Cloud Run deployment確認")
         if not diagnostics["line_sdk_available"]:
             recommendations.append("LINE Bot SDK installation確認")
+        if not diagnostics["credential_normalization"]["executed"]:
+            recommendations.append("認証情報正規化プロセス確認")
+        
         return {
             "overall_status": "healthy" if all_tests_passed else "needs_attention",
             "diagnostics": diagnostics,
@@ -858,7 +970,8 @@ def comprehensive_line_bot_diagnostics():
             "liff_url": f"https://liff.line.me/{os.environ.get('LIFF_ID', 'not-set')}",
             "debug_info": {
                 "service_url": f"https://rag-api-190389115361.asia-northeast1.run.app",
-                "environment": os.environ.get("ENV", "unknown")
+                "environment": os.environ.get("ENV", "unknown"),
+                "version": "2.1.0 (with credential normalization)"
             }
         }
     except Exception as e:
@@ -871,12 +984,13 @@ def quick_system_diagnosis():
     issues = []
     suggestions = []
     critical_issues = []
-    if not os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"):
-        critical_issues.append("LINE_CHANNEL_ACCESS_TOKEN not found")
-        suggestions.append("Set LINE_CHANNEL_ACCESS_TOKEN in Secret Manager")
-    if not os.environ.get("LINE_CHANNEL_SECRET"):
-        critical_issues.append("LINE_CHANNEL_SECRET not found") 
-        suggestions.append("Set LINE_CHANNEL_SECRET in Secret Manager")
+    
+    if not normalized_line_token:
+        critical_issues.append("LINE_CHANNEL_ACCESS_TOKEN not found or normalization failed")
+        suggestions.append("Check LINE_CHANNEL_ACCESS_TOKEN in Secret Manager")
+    if not normalized_line_secret:
+        critical_issues.append("LINE_CHANNEL_SECRET not found or normalization failed") 
+        suggestions.append("Check LINE_CHANNEL_SECRET in Secret Manager")
     if not llm_instance:
         issues.append("LLM not loaded")
         suggestions.append("Check OPENAI_API_KEY and model loading")
@@ -886,6 +1000,10 @@ def quick_system_diagnosis():
     if not rag_chain_template:
         issues.append("RAG chain not created")
         suggestions.append("Check RAG chain initialization")
+    if system_monitor.credential_normalizations == 0:
+        issues.append("Credential normalization not executed")
+        suggestions.append("Check credential normalization process")
+    
     try:
         cpu_percent = psutil.cpu_percent(interval=0.1)
         memory = psutil.virtual_memory()
@@ -897,6 +1015,7 @@ def quick_system_diagnosis():
             suggestions.append("Restart service or scale up memory")
     except:
         pass
+    
     if critical_issues:
         status = "🚨 Critical Issues Detected"
         priority_actions = critical_issues[:3]
@@ -906,6 +1025,7 @@ def quick_system_diagnosis():
     else:
         status = "✅ All Systems Operational"
         priority_actions = []
+    
     return {
         "status": status,
         "critical_issues": critical_issues,
@@ -915,17 +1035,25 @@ def quick_system_diagnosis():
         "next_steps": [
             "Test rich menu buttons manually",
             "Check Cloud Run logs",
-            "Verify LINE Developers settings"
+            "Verify LINE Developers settings",
+            "Confirm credential normalization"
         ] if issues or critical_issues else [
             "System is healthy",
             "Monitor performance metrics",
-            "Regular health checks recommended"
+            "Regular health checks recommended",
+            "Credential normalization working properly"
         ],
         "emergency_commands": {
             "restart_richmenu": "python scripts/setup_fixed_richmenu.py",
             "redeploy_service": "gcloud builds submit --config cloudbuild.yaml",
-            "check_logs": "gcloud logging read 'severity>=ERROR' --limit=20"
+            "check_logs": "gcloud logging read 'severity>=ERROR' --limit=20",
+            "verify_credentials": "curl -H 'Authorization: Bearer TOKEN' https://api.line.me/v2/bot/info"
         } if issues else {},
+        "credential_info": {
+            "normalization_count": system_monitor.credential_normalizations,
+            "token_length": len(normalized_line_token) if normalized_line_token else 0,
+            "secret_length": len(normalized_line_secret) if normalized_line_secret else 0
+        },
         "timestamp": datetime.now().isoformat()
     }
 
@@ -936,7 +1064,7 @@ def comprehensive_root():
     return {
         "service": {
             "name": "RAG FastAPI Backend with Comprehensive Monitoring",
-            "version": "2.0.0",
+            "version": "2.1.0",
             "status": "operational",
             "uptime_seconds": uptime,
             "uptime_formatted": str(timedelta(seconds=int(uptime)))
@@ -945,9 +1073,10 @@ def comprehensive_root():
             "llm": llm_instance is not None,
             "vectorstore": vectorstore is not None,
             "rag_chain": rag_chain_template is not None,
-            "line_bot": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")),
+            "line_bot": bool(normalized_line_token and normalized_line_secret),
             "line_login": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID")),
-            "liff": bool(os.environ.get("LIFF_ID"))
+            "liff": bool(os.environ.get("LIFF_ID")),
+            "credential_normalization": system_monitor.credential_normalizations > 0
         },
         "endpoints": {
             "chat": "/chat",
@@ -969,7 +1098,8 @@ def comprehensive_root():
         "monitoring": {
             "requests_processed": system_monitor.request_count,
             "errors_count": system_monitor.error_count,
-            "error_rate": system_monitor.error_count / max(system_monitor.request_count, 1)
+            "error_rate": system_monitor.error_count / max(system_monitor.request_count, 1),
+            "credential_normalizations": system_monitor.credential_normalizations
         },
         "environment": {
             "mode": os.environ.get("ENV", "development"),
@@ -985,18 +1115,19 @@ def get_comprehensive_status():
         "llm_loaded": llm_instance is not None,
         "vectorstore_loaded": vectorstore is not None,
         "rag_chain_loaded": rag_chain_template is not None,
-        "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY")),
+        "openai_api_key_set": bool(normalized_openai_key),
         "gcs_bucket": os.environ.get("GCS_BUCKET_NAME", "Not set"),
-        "line_bot_configured": bool(
-            os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") and 
-            os.environ.get("LINE_CHANNEL_SECRET")
-        ),
+        "line_bot_configured": bool(normalized_line_token and normalized_line_secret),
         "line_login_configured": bool(
             os.environ.get("LINE_LOGIN_CHANNEL_ID") and 
             os.environ.get("LINE_LOGIN_CHANNEL_SECRET")
         ),
         "liff_configured": bool(os.environ.get("LIFF_ID")),
-        "langsmith_enabled": os.environ.get("LANGCHAIN_TRACING_V2") == "true"
+        "langsmith_enabled": os.environ.get("LANGCHAIN_TRACING_V2") == "true",
+        "credential_normalization": {
+            "executed": system_monitor.credential_normalizations > 0,
+            "count": system_monitor.credential_normalizations
+        }
     }
 
 # CORS preflight handling
