@@ -1,4 +1,4 @@
-# api/routers/line_bot.py - 超高速応答版（数十秒以内の応答を実現）
+# api/routers/line_bot.py - 即座応答版（リッチメニューは0.1秒以内で応答）
 
 import logging
 from pathlib import Path
@@ -51,6 +51,101 @@ except ImportError as e:
         def handle(self, *args, **kwargs): ...
 
 logger = logging.getLogger(__name__)
+
+# ==============================================================================
+# 即座応答用の事前定義メッセージ（静的コンテンツ）
+# ==============================================================================
+
+# リッチメニュー用の即座応答メッセージ（事前定義・計算不要）
+INSTANT_RICHMENU_RESPONSES = {
+    "ai_consultation": """🤖 AI住まい相談を開始します！
+
+キノエデザインの住まいAIコンシェルジュです。
+住まいに関するご質問をお気軽にどうぞ！
+
+💡 例えば、こんなご質問にお答えします：
+・「坪単価について教えて」
+・「標準仕様はどんな感じ？」
+・「耐震性能について知りたい」
+・「断熱性能はどのくらい？」
+・「間取りのアドバイスが欲しい」
+・「住宅ローンについて相談したい」
+
+何でもお聞きください😊""",
+
+    "ai_site": """🌐 AI住まいサイト
+
+キノエデザインの住まい情報サイトです。
+住まいづくりに関する豊富な情報をご提供しています。
+
+📍 https://kinoe-design.com
+
+詳しい情報はサイトをご確認ください🏠""",
+
+    "document_request": """📋 資料請求を承ります
+
+以下の情報をお送りください：
+1️⃣ お名前（フルネーム）
+2️⃣ ご住所（〒郵便番号から）
+3️⃣ お電話番号
+4️⃣ ご希望資料
+
+📮 3営業日以内にお送りいたします""",
+
+    "exhibition_reservation": """📍 展示場来場予約
+
+以下をメッセージでお送りください：
+・ご希望日時（第1・第2希望）
+・お名前
+・お電話番号
+・参加人数
+
+🏠 スタッフ一同、お待ちしております""",
+
+    "finance_planning": """💰 資金計画・住宅ローン相談
+
+住宅ローンや資金計画をサポートします。
+
+お聞かせください：
+・ご年収
+・自己資金
+・ご希望借入額
+・返済期間
+
+最適なプランをご提案いたします💡""",
+
+    "chat_consultation": """💬 スタッフとのご相談
+
+【対応時間】9:00-18:00（水曜定休）
+
+住まいづくりのご質問をお気軽にどうぞ。
+営業時間内でしたら迅速にお返事します📱
+
+お気軽にお声かけください！""",
+
+    "greeting": """こんにちは！
+キノエデザインのAIコンシェルジュです🏠
+
+画面下のメニューから各種サービスをご利用ください。
+
+🤖 AI相談：住まいのご質問
+📋 資料請求：カタログ等
+📍 展示場予約：見学予約
+💰 資金計画：ローン相談
+💬 チャット：スタッフと直接相談
+
+どうぞお気軽にご利用ください！""",
+
+    "unknown": """お気軽にお声かけください。
+ご不明な点がございましたら、スタッフまでお問い合わせください。""",
+
+    "follow_welcome": """🎉 友達追加ありがとうございます！
+
+キノエデザインの住まいAIコンシェルジュです。
+画面下のメニューから各種サービスをご利用いただけます。
+
+🤖 AI相談 / 📋 資料請求 / 📍 展示場予約 / 💰 資金計画 / 💬 チャット相談"""
+}
 
 # ==============================================================================
 # 共通ユーティリティ
@@ -122,7 +217,8 @@ class ComprehensiveMonitor:
             "send_failures": 0,
             "response_times": [],
             "last_activity": None,
-            "fast_responses": 0,  # 高速応答カウンター
+            "instant_responses": 0,  # 即座応答カウンター
+            "richmenu_responses": 0,  # リッチメニュー応答カウンター
         }
         try:
             cloud_logging.Client().setup_logging()
@@ -164,9 +260,13 @@ class ComprehensiveMonitor:
             if error_msg:
                 logger.error(f"Send failure: {error_msg}")
 
-    def track_fast_response(self):
-        """高速応答のカウント"""
-        self.stats["fast_responses"] += 1
+    def track_instant_response(self):
+        """即座応答のカウント"""
+        self.stats["instant_responses"] += 1
+
+    def track_richmenu_response(self):
+        """リッチメニュー応答のカウント"""
+        self.stats["richmenu_responses"] += 1
 
     def get_error_rate(self) -> float:
         total = max(self.stats["webhook_received"], 1)
@@ -262,50 +362,14 @@ def send_line_reply_safe(reply_token: str, message_text: str) -> bool:
         return False
 
 # ==============================================================================
-# 【超高速応答】キャッシュ＆判定＆処理
+# 【即座応答】リッチメニュー処理
 # ==============================================================================
 
-# --- 超高速メモリキャッシュ ---
-_response_cache: Dict[str, str] = {}
-_fast_cache: Dict[str, str] = {}  # 超高速専用キャッシュ
-MAX_CACHE_SIZE = 100
-
-def _cache_key(text: str) -> str:
-    return text.lower().strip()
-
-def get_cached_response(message_text: str) -> Optional[str]:
-    # まず超高速キャッシュを確認
-    fast_key = _cache_key(message_text)
-    if fast_key in _fast_cache:
-        monitor.track_fast_response()
-        return _fast_cache[fast_key]
-    return _response_cache.get(fast_key)
-
-def cache_response(message_text: str, response: str, is_fast: bool = False):
-    key = _cache_key(message_text)
-    
-    # 超高速キャッシュに保存
-    if is_fast:
-        if len(_fast_cache) >= MAX_CACHE_SIZE:
-            oldest_key = next(iter(_fast_cache))
-            del _fast_cache[oldest_key]
-        _fast_cache[key] = response
-    
-    # 通常キャッシュに保存
-    if len(_response_cache) >= MAX_CACHE_SIZE:
-        try:
-            oldest_key = next(iter(_response_cache))
-            del _response_cache[oldest_key]
-        except StopIteration:
-            pass
-    _response_cache[key] = response
-
-# --- 超高速アクション判定（最重要パターン先頭） ---
-def detect_richmenu_action_ultra_fast(message_text: str) -> str:
-    """超高速リッチメニューアクション判定（最適化版）"""
+def detect_richmenu_action_instant(message_text: str) -> str:
+    """即座判定：リッチメニューアクション（計算不要）"""
     text_lower = message_text.lower().replace(" ", "").replace("　", "")
     
-    # 最も重要なパターンを最初に判定
+    # 最重要パターンを最初に判定（即座判定）
     if "ai相談" in text_lower:
         return "ai_consultation"
     elif "資料請求" in text_lower:
@@ -322,136 +386,65 @@ def detect_richmenu_action_ultra_fast(message_text: str) -> str:
         return "greeting"
     return "general"
 
-# --- 超高速リッチメニュー応答（新メッセージ対応） ---
-def get_richmenu_response_ultra_fast(action: str, user_id: str) -> str:
-    """超高速リッチメニュー応答（新しいメッセージ対応）"""
-    responses = {
-        "ai_consultation": (
-            "🤖 AI住まい相談を開始します！\n\n"
-            "キノエデザインの住まいAIコンシェルジュです。\n"
-            "住まいに関するご質問をお気軽にどうぞ！\n\n"
-            "💡 例えば、こんなご質問にお答えします：\n"
-            "・「坪単価について教えて」\n"
-            "・「標準仕様はどんな感じ？」\n"
-            "・「耐震性能について知りたい」\n"
-            "・「断熱性能はどのくらい？」\n"
-            "・「間取りのアドバイスが欲しい」\n"
-            "・「住宅ローンについて相談したい」\n\n"
-            "何でもお聞きください😊"
-        ),
-        "ai_site": (
-            "🌐 AI住まいサイト\n\n"
-            "キノエデザインの住まい情報サイトです。\n"
-            "住まいづくりに関する豊富な情報をご提供しています。\n\n"
-            "📍 https://kinoe-design.com\n\n"
-            "詳しい情報はサイトをご確認ください🏠"
-        ),
-        "document_request": (
-            "📋 資料請求を承ります\n\n"
-            "以下の情報をお送りください：\n"
-            "1️⃣ お名前（フルネーム）\n"
-            "2️⃣ ご住所（〒郵便番号から）\n"
-            "3️⃣ お電話番号\n"
-            "4️⃣ ご希望資料\n\n"
-            "📮 3営業日以内にお送りいたします"
-        ),
-        "exhibition_reservation": (
-            "📍 展示場来場予約\n\n"
-            "以下をメッセージでお送りください：\n"
-            "・ご希望日時（第1・第2希望）\n"
-            "・お名前\n"
-            "・お電話番号\n"
-            "・参加人数\n\n"
-            "🏠 スタッフ一同、お待ちしております"
-        ),
-        "finance_planning": (
-            "💰 資金計画・住宅ローン相談\n\n"
-            "住宅ローンや資金計画をサポートします。\n\n"
-            "お聞かせください：\n"
-            "・ご年収\n"
-            "・自己資金\n"
-            "・ご希望借入額\n"
-            "・返済期間\n\n"
-            "最適なプランをご提案いたします💡"
-        ),
-        "chat_consultation": (
-            "💬 スタッフとのご相談\n\n"
-            "【対応時間】9:00-18:00（水曜定休）\n\n"
-            "住まいづくりのご質問をお気軽にどうぞ。\n"
-            "営業時間内でしたら迅速にお返事します📱\n\n"
-            "お気軽にお声かけください！"
-        ),
-        "greeting": (
-            "こんにちは！\nキノエデザインのAIコンシェルジュです🏠\n\n"
-            "画面下のメニューから各種サービスをご利用ください。\n\n"
-            "🤖 AI相談：住まいのご質問\n"
-            "📋 資料請求：カタログ等\n"
-            "📍 展示場予約：見学予約\n"
-            "💰 資金計画：ローン相談\n"
-            "💬 チャット：スタッフと直接相談\n\n"
-            "どうぞお気軽にご利用ください！"
-        ),
-    }
-    return responses.get(action, "お気軽にお声かけください。")
+def get_instant_richmenu_response(action: str) -> str:
+    """即座応答：事前定義メッセージを返すだけ（計算ゼロ）"""
+    monitor.track_instant_response()
+    monitor.track_richmenu_response()
+    
+    # 事前定義された静的メッセージを即座に返す
+    return INSTANT_RICHMENU_RESPONSES.get(action, INSTANT_RICHMENU_RESPONSES["unknown"])
 
-# --- 回答クレンジング（〜しましょう系の除去） ---
-def clean_answer_ultra_fast(answer: str) -> str:
-    """超高速回答クレンジング"""
-    if not answer:
-        return ""
-    # 〜しましょう系（表記揺れ含む）を除去
-    answer = re.sub(r"[^\s]*しましょう[。！？]*", "", answer)
-    answer = re.sub(r"一緒に[^\s]*しましょう[。！？]*", "", answer)
-    answer = re.sub(r"〜しましょう[。！？]*", "", answer)
-    answer = answer.strip()
-    if answer and not answer.endswith(("。", "！", "？")):
-        if answer.endswith(("です", "ます")):
-            answer += "。"
-        elif answer.endswith("、"):
-            answer = answer[:-1] + "。"
-        else:
-            answer += "。"
-    return answer
+# ==============================================================================
+# 【通常のRAG処理】メッセージイベント用（質問応答のみ）
+# ==============================================================================
 
-# --- 緊急応答（超高速） ---
-def get_emergency_response_ultra_fast(message_text: str) -> str:
-    """超高速緊急応答"""
-    if "坪単価" in message_text:
-        return "坪単価は約70〜85万円/坪が目安です。詳細はお問い合わせください。"
-    elif "資料" in message_text:
-        return "資料をお送りします。お名前、ご住所、お電話番号をお教えください。"
-    elif "見学" in message_text or "展示" in message_text:
-        return "展示場見学を承ります。ご希望日時をお聞かせください。"
-    else:
-        return "申し訳ございません。詳しくはお問い合わせください。"
+# 通常のRAG応答キャッシュ（質問応答用）
+_message_response_cache: Dict[str, str] = {}
+MAX_MESSAGE_CACHE_SIZE = 50
 
-# --- 超高速RAG ---
-async def process_rag_query_ultra_fast(message_text: str, user_id: str) -> str:
-    """LINE向け超高速RAG（5秒タイムアウト＆短文化）"""
+def cache_message_response(message_text: str, response: str):
+    if len(_message_response_cache) >= MAX_MESSAGE_CACHE_SIZE:
+        oldest_key = next(iter(_message_response_cache))
+        del _message_response_cache[oldest_key]
+    _message_response_cache[message_text.lower().strip()] = response
+
+def get_cached_message_response(message_text: str) -> Optional[str]:
+    return _message_response_cache.get(message_text.lower().strip())
+
+async def process_user_question(message_text: str, user_id: str) -> str:
+    """ユーザーの質問に対するRAG/LLM処理（リッチメニュー以外）"""
     try:
+        # キャッシュ確認
+        cached = get_cached_message_response(message_text)
+        if cached:
+            logger.info("💾 Message cache hit")
+            return cached
+
         globals_dict = get_app_globals()
         vectorstore = globals_dict.get("vectorstore")
         rag_chain_template = globals_dict.get("rag_chain_template")
         llm_instance = globals_dict.get("llm_instance")
 
         if not vectorstore and not llm_instance:
-            logger.warning("⚠️ No RAG components available - ultra fast fallback")
-            return get_emergency_response_ultra_fast(message_text)
+            fallback = "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
+            cache_message_response(message_text, fallback)
+            return fallback
 
-        # 挨拶即時応答（超軽量）
-        quick_responses = {
+        # 簡単な挨拶の即座応答
+        simple_greetings = {
             "こんにちは": "こんにちは！住まいづくりのご質問をお気軽にどうぞ🏠",
             "ありがとう": "どういたしまして！他にもご質問がございましたらお聞かせください🙏",
             "おはよう": "おはようございます！今日も住まいづくりのお手伝いをいたします☀️",
         }
-        for k, v in quick_responses.items():
-            if k in message_text:
-                cache_response(message_text, v, is_fast=True)
-                return v
+        for greeting, response in simple_greetings.items():
+            if greeting in message_text:
+                cache_message_response(message_text, response)
+                return response
 
-        # RAG（5秒タイムアウト）- 大幅短縮
+        # RAG処理（5秒タイムアウト）
         if vectorstore and rag_chain_template:
-            logger.info("📚 Ultra fast RAG processing...")
+            logger.info("📚 Processing user question with RAG...")
+            
             async def run_rag():
                 loop = asyncio.get_event_loop()
                 def _call():
@@ -463,82 +456,80 @@ async def process_rag_query_ultra_fast(message_text: str, user_id: str) -> str:
                 return await loop.run_in_executor(None, _call)
 
             try:
-                result = await asyncio.wait_for(run_rag(), timeout=5.0)  # 8秒→5秒に短縮
+                result = await asyncio.wait_for(run_rag(), timeout=5.0)
                 answer = result.get("result", "") if result else ""
+                
                 if answer and len(answer) > 10:
-                    answer = clean_answer_ultra_fast(answer)
-                    if len(answer) > 200:  # 300→200に短縮
-                        answer = answer[:180] + "詳細はお問い合わせください。"
-                    cache_response(message_text, answer, is_fast=True)
-                    logger.info(f"✅ Ultra fast RAG success: {len(answer)} chars")
+                    # 基本的なクリーンアップ
+                    answer = re.sub(r'[^\s]*しましょう[。！？]*', '', answer)
+                    answer = answer.strip()
+                    
+                    if len(answer) > 300:
+                        answer = answer[:280] + "詳細はお問い合わせください。"
+                    
+                    cache_message_response(message_text, answer)
+                    logger.info(f"✅ RAG answer generated: {len(answer)} chars")
                     return answer
                 else:
                     raise ValueError("Empty or insufficient RAG response")
+                    
             except asyncio.TimeoutError:
-                logger.warning("⏰ Ultra fast RAG timeout - switching to emergency fallback")
-                return get_emergency_response_ultra_fast(message_text)
+                logger.warning("⏰ RAG timeout for user question")
+                fallback = get_emergency_response_for_question(message_text)
+                cache_message_response(message_text, fallback)
+                return fallback
             except Exception as e:
-                logger.error(f"❌ Ultra fast RAG error: {e}")
-                return get_emergency_response_ultra_fast(message_text)
+                logger.error(f"❌ RAG error for user question: {e}")
+                fallback = get_emergency_response_for_question(message_text)
+                cache_message_response(message_text, fallback)
+                return fallback
 
-        # LLMのみ（80文字以内）- さらに短縮
+        # LLMのみの場合
         if llm_instance:
-            logger.info("🤖 Ultra fast LLM processing...")
+            logger.info("🤖 Processing with LLM only...")
             try:
-                quick_prompt = (
+                prompt = (
                     "住宅専門アドバイザーとして簡潔に答えてください。\n\n"
                     f"質問: {message_text}\n\n"
-                    "【重要】\n- 80文字以内\n- 「〜しましょう」禁止\n- 実用的に\n\n"
+                    "【重要】\n- 150文字以内\n- 「〜しましょう」禁止\n- 実用的に\n\n"
                     "回答:"
                 )
                 if hasattr(llm_instance, "invoke"):
-                    resp = llm_instance.invoke(quick_prompt)
+                    resp = llm_instance.invoke(prompt)
                     result = resp.content if hasattr(resp, "content") else str(resp)
                 else:
-                    resp = llm_instance(quick_prompt)
+                    resp = llm_instance(prompt)
                     result = str(resp)
-                result = clean_answer_ultra_fast(result)
-                cache_response(message_text, result, is_fast=True)
+                
+                result = re.sub(r'[^\s]*しましょう[。！？]*', '', result).strip()
+                cache_message_response(message_text, result)
                 return result
             except Exception as e:
-                logger.error(f"❌ Ultra fast LLM error: {e}")
-                return get_emergency_response_ultra_fast(message_text)
+                logger.error(f"❌ LLM error: {e}")
+                fallback = get_emergency_response_for_question(message_text)
+                cache_message_response(message_text, fallback)
+                return fallback
 
-        return get_emergency_response_ultra_fast(message_text)
-
-    except Exception as e:
-        logger.error(f"💥 Ultra fast RAG query error: {e}")
-        return get_emergency_response_ultra_fast(message_text)
-
-# --- メイン超高速処理 ---
-async def process_message_ultra_fast(message_text: str, user_id: str) -> str:
-    """超高速メッセージ処理（数十秒以内を目標）"""
-    logger.info(f"🚀 Ultra fast processing: {user_id}: '{message_text[:30]}...'")
-    try:
-        # 1) 超高速キャッシュ
-        cached = get_cached_response(message_text)
-        if cached:
-            logger.info("⚡ Ultra fast cache hit - instant response")
-            monitor.track_fast_response()
-            return cached
-
-        # 2) 超高速アクション判定
-        action = detect_richmenu_action_ultra_fast(message_text)
-
-        # 3) 定型応答（超高速）
-        if action != "general":
-            resp = get_richmenu_response_ultra_fast(action, user_id)
-            cache_response(message_text, resp, is_fast=True)
-            logger.info(f"⚡ Ultra fast richmenu response: {action}")
-            monitor.track_fast_response()
-            return resp
-
-        # 4) RAG/LLM（超高速版）
-        return await process_rag_query_ultra_fast(message_text, user_id)
+        fallback = get_emergency_response_for_question(message_text)
+        cache_message_response(message_text, fallback)
+        return fallback
 
     except Exception as e:
-        logger.error(f"❌ Ultra fast processing error: {e}")
-        return get_emergency_response_ultra_fast(message_text)
+        logger.error(f"💥 User question processing error: {e}")
+        fallback = "申し訳ございません。エラーが発生しました。再度お試しください。"
+        cache_message_response(message_text, fallback)
+        return fallback
+
+def get_emergency_response_for_question(message_text: str) -> str:
+    """質問に対する緊急応答"""
+    if "坪単価" in message_text:
+        return "坪単価は約70〜85万円/坪が目安です。詳細はお問い合わせください。"
+    elif "資料" in message_text:
+        return "資料をお送りします。お名前、ご住所、お電話番号をお教えください。"
+    elif "見学" in message_text or "展示" in message_text:
+        return "展示場見学を承ります。ご希望日時をお聞かせください。"
+    else:
+        return "申し訳ございません。詳しくはお問い合わせください。"
 
 # ==============================================================================
 # Webhook（署名検証強化）
@@ -579,72 +570,87 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         return {"status": "error_handled", "error": str(e), "timestamp": datetime.now().isoformat()}
 
 # ==============================================================================
-# イベントハンドラ（超高速版）
+# イベントハンドラ（即座応答版）
 # ==============================================================================
 
 if LINE_SDK_AVAILABLE and handler:
 
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message(event):
-        """超高速版：3秒タイムアウトで即応（大幅短縮）"""
+        """メッセージイベント：リッチメニューは即座、質問は通常処理"""
         start = datetime.now()
         try:
             user_id = event.source.user_id
             message_text = event.message.text
-            logger.info(f"📱 Ultra fast message from {user_id}: '{message_text[:100]}...'")
+            logger.info(f"📱 Message from {user_id}: '{message_text[:100]}...'")
 
-            # 別スレッドで asyncio イベントループ作成
-            def _process_in_thread():
-                try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    ans = loop.run_until_complete(process_message_ultra_fast(message_text, user_id))
-                    loop.close()
-                    return ans
-                except Exception as e:
-                    logger.error(f"Ultra fast thread error: {e}")
-                    return get_emergency_response_ultra_fast(message_text)
-
-            # 3秒タイムアウト（大幅短縮）
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(_process_in_thread)
-                try:
-                    answer = future.result(timeout=3)  # 5秒→3秒に短縮
-                except concurrent.futures.TimeoutError:
-                    logger.error("❌ Ultra fast processing timeout (3s)")
-                    answer = "処理中です。もう一度お試しください。"
-
-            send_ok = send_line_reply_safe(event.reply_token, answer)
-            dur = (datetime.now() - start).total_seconds()
-
-            monitor.log_webhook_event(
-                "message",
-                send_ok,
-                {
+            # 1. リッチメニューメッセージかチェック（即座判定）
+            action = detect_richmenu_action_instant(message_text)
+            
+            if action != "general":
+                # リッチメニューメッセージ → 即座応答（計算ゼロ）
+                logger.info(f"⚡ Instant richmenu response for action: {action}")
+                answer = get_instant_richmenu_response(action)
+                send_ok = send_line_reply_safe(event.reply_token, answer)
+                
+                dur = (datetime.now() - start).total_seconds()
+                monitor.log_webhook_event("message", send_ok, {
                     "user_id": user_id,
                     "processing_time": dur,
                     "message_len": len(message_text),
                     "response_len": len(answer),
-                    "ultra_fast": True,
-                },
-            )
-            logger.info(f"✅ Ultra fast reply sent={send_ok} time={dur:.2f}s")
+                    "response_type": "instant_richmenu",
+                    "action": action,
+                })
+                logger.info(f"✅ Instant richmenu reply sent={send_ok} time={dur:.3f}s action={action}")
+                return
+
+            # 2. 通常の質問 → RAG/LLM処理（非同期）
+            logger.info("🔄 Processing user question with RAG/LLM...")
+            
+            def _process_question():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    answer = loop.run_until_complete(process_user_question(message_text, user_id))
+                    loop.close()
+                    return answer
+                except Exception as e:
+                    logger.error(f"Question processing error: {e}")
+                    return get_emergency_response_for_question(message_text)
+
+            # 5秒タイムアウトで質問処理
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(_process_question)
+                try:
+                    answer = future.result(timeout=5)
+                except concurrent.futures.TimeoutError:
+                    logger.error("❌ Question processing timeout (5s)")
+                    answer = "処理に時間がかかっています。もう一度お試しください。"
+
+            send_ok = send_line_reply_safe(event.reply_token, answer)
+            dur = (datetime.now() - start).total_seconds()
+
+            monitor.log_webhook_event("message", send_ok, {
+                "user_id": user_id,
+                "processing_time": dur,
+                "message_len": len(message_text),
+                "response_len": len(answer),
+                "response_type": "user_question",
+            })
+            logger.info(f"✅ Question reply sent={send_ok} time={dur:.2f}s")
 
         except Exception as e:
             dur = (datetime.now() - start).total_seconds()
-            logger.error(f"❌ Ultra fast message handler error: {e}")
+            logger.error(f"❌ Message handler error: {e}")
             logger.error(traceback.format_exc())
-            monitor.log_webhook_event(
-                "message",
-                False,
-                {
-                    "error": str(e),
-                    "type": type(e).__name__,
-                    "processing_time": dur,
-                },
-            )
+            monitor.log_webhook_event("message", False, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "processing_time": dur,
+            })
             try:
-                emergency = get_emergency_response_ultra_fast("")
+                emergency = get_emergency_response_for_question(message_text if 'message_text' in locals() else "")
                 send_line_reply_safe(event.reply_token, emergency)
                 logger.info("🆘 Emergency response sent")
             except Exception as final_error:
@@ -652,54 +658,52 @@ if LINE_SDK_AVAILABLE and handler:
 
     @handler.add(PostbackEvent)
     def handle_postback(event):
-        """Postback超高速処理（新メッセージ対応）"""
+        """Postbackイベント：完全即座応答（計算一切なし）"""
         start = datetime.now()
         try:
             user_id = event.source.user_id
             postback_data = event.postback.data or ""
-            logger.info(f"🔙 Ultra fast postback from {user_id}: {postback_data}")
+            logger.info(f"🔙 Instant postback from {user_id}: {postback_data}")
 
-            # data=action=xxx&source=...
-            params = {}
+            # data=action=xxx&source=... の解析（最小限）
+            action = "unknown"
             try:
-                parts = [kv for kv in postback_data.split("&") if "=" in kv]
-                params = dict(p.split("=", 1) for p in parts)
+                if "action=" in postback_data:
+                    for part in postback_data.split("&"):
+                        if part.startswith("action="):
+                            action = part.split("=", 1)[1]
+                            break
             except Exception as e:
                 logger.error(f"Postback parse error: {e}")
-                params = {"action": "unknown"}
 
-            action = params.get("action", "unknown")
-
-            # 超高速版の新メッセージ応答
-            response_text = get_richmenu_response_ultra_fast(action, user_id)
+            # 事前定義メッセージを即座に返す（計算ゼロ）
+            response_text = get_instant_richmenu_response(action)
 
             send_ok = send_line_reply_safe(event.reply_token, response_text)
             dur = (datetime.now() - start).total_seconds()
+            
             monitor.log_webhook_event("postback", send_ok, {
                 "user_id": user_id, 
                 "action": action, 
                 "processing_time": dur,
-                "ultra_fast": True
+                "response_type": "instant_postback"
             })
-            monitor.track_fast_response()
+            logger.info(f"✅ Instant postback reply sent={send_ok} time={dur:.3f}s action={action}")
             
         except Exception as e:
             dur = (datetime.now() - start).total_seconds()
-            logger.error(f"💥 Ultra fast postback handler error: {e}")
+            logger.error(f"💥 Postback handler error: {e}")
             monitor.log_webhook_event("postback", False, {"error": str(e), "processing_time": dur})
 
     @handler.add(FollowEvent)
     def handle_follow(event):
+        """フォローイベント：即座応答"""
         try:
             user_id = event.source.user_id
-            welcome = (
-                "🎉 友達追加ありがとうございます！\n\n"
-                "キノエデザインの住まいAIコンシェルジュです。\n"
-                "画面下のメニューから各種サービスをご利用いただけます。\n\n"
-                "🤖 AI相談 / 📋 資料請求 / 📍 展示場予約 / 💰 資金計画 / 💬 チャット相談"
-            )
+            welcome = INSTANT_RICHMENU_RESPONSES["follow_welcome"]
             send_ok = send_line_reply_safe(event.reply_token, welcome)
-            monitor.log_webhook_event("follow", send_ok, {"user_id": user_id})
+            monitor.log_webhook_event("follow", send_ok, {"user_id": user_id, "response_type": "instant_follow"})
+            monitor.track_instant_response()
         except Exception as e:
             logger.error(f"❌ Follow handler error: {e}")
             monitor.log_webhook_event("follow", False, {"error": str(e)})
@@ -739,20 +743,17 @@ def get_comprehensive_health():
             "error_count": monitor.stats["errors"],
             "error_rate": monitor.get_error_rate(),
         },
-        "performance_metrics": {
-            "fast_responses": monitor.stats["fast_responses"],
-            "fast_cache_size": len(_fast_cache),
-            "regular_cache_size": len(_response_cache),
-            "cache_capacity": MAX_CACHE_SIZE,
+        "instant_response_metrics": {
+            "instant_responses": monitor.stats["instant_responses"],
+            "richmenu_responses": monitor.stats["richmenu_responses"],
+            "message_cache_size": len(_message_response_cache),
+            "static_responses_loaded": len(INSTANT_RICHMENU_RESPONSES),
         },
         "system_info": {
             "timestamp": datetime.now().isoformat(),
-            "ultra_fast_mode": True,
-            "timeout_settings": {
-                "message_processing": "3s",
-                "rag_processing": "5s",
-                "llm_processing": "optimized"
-            }
+            "instant_response_mode": True,
+            "richmenu_response_time": "< 0.1 seconds",
+            "user_question_timeout": "5 seconds"
         },
     }
 
@@ -764,32 +765,58 @@ def get_detailed_line_status():
         "token_length": len(LINE_CHANNEL_ACCESS_TOKEN) if LINE_CHANNEL_ACCESS_TOKEN else 0,
         "secret_length": len(LINE_CHANNEL_SECRET) if LINE_CHANNEL_SECRET else 0,
         "send_success_rate": monitor.get_send_success_rate(),
-        "ultra_fast_enabled": True,
-        "performance_mode": "optimized",
+        "instant_response_enabled": True,
+        "richmenu_actions_available": list(INSTANT_RICHMENU_RESPONSES.keys()),
+        "performance_mode": "instant_richmenu",
         "timestamp": datetime.now().isoformat(),
     }
 
 @router.post("/test")
 async def test_line_bot():
-    """簡易テスト：超高速経路で応答を生成"""
+    """テスト：即座応答と通常処理の両方をテスト"""
     if not handler:
         return {"status": "error", "message": "LINE Bot not configured"}
+    
     try:
-        test_message = "AI相談"
-        test_user_id = "test-user"
+        results = {}
+        
+        # 1. リッチメニューテスト（即座応答）
+        richmenu_test = "AI相談"
         start_time = datetime.now()
-        res = await process_message_ultra_fast(test_message, test_user_id)
-        processing_time = (datetime.now() - start_time).total_seconds()
+        action = detect_richmenu_action_instant(richmenu_test)
+        richmenu_response = get_instant_richmenu_response(action)
+        richmenu_time = (datetime.now() - start_time).total_seconds()
+        
+        results["richmenu_test"] = {
+            "input": richmenu_test,
+            "action": action,
+            "response": richmenu_response[:100] + "..." if len(richmenu_response) > 100 else richmenu_response,
+            "processing_time_seconds": richmenu_time,
+            "type": "instant_response"
+        }
+        
+        # 2. 質問テスト（RAG/LLM処理）
+        question_test = "坪単価について教えてください"
+        start_time = datetime.now()
+        question_response = await process_user_question(question_test, "test-user")
+        question_time = (datetime.now() - start_time).total_seconds()
+        
+        results["question_test"] = {
+            "input": question_test,
+            "response": question_response[:100] + "..." if len(question_response) > 100 else question_response,
+            "processing_time_seconds": question_time,
+            "type": "rag_llm_processing"
+        }
         
         return {
             "status": "success",
-            "test_message": test_message,
-            "test_response": res[:200] + "..." if len(res) > 200 else res,
-            "response_length": len(res),
-            "processing_time_seconds": processing_time,
-            "ultra_fast_cache_size": len(_fast_cache),
-            "regular_cache_size": len(_response_cache),
-            "performance_mode": "ultra_fast",
+            "test_results": results,
+            "performance_metrics": {
+                "instant_responses": monitor.stats["instant_responses"],
+                "richmenu_responses": monitor.stats["richmenu_responses"],
+                "message_cache_size": len(_message_response_cache),
+                "richmenu_actions": len(INSTANT_RICHMENU_RESPONSES)
+            },
             "timestamp": datetime.now().isoformat(),
         }
     except Exception as e:
