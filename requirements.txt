@@ -40,6 +40,8 @@ attrs==25.3.0
     #   referencing
 bcrypt==4.3.0
     # via -r requirements.in
+beautifulsoup4==4.13.4
+    # via -r requirements.in
 blinker==1.9.0
     # via streamlit
 cachetools==5.5.2
@@ -89,6 +91,8 @@ faiss-cpu==1.7.4
     # via -r requirements.in
 fastapi==0.104.1
     # via -r requirements.in
+feedparser==6.0.11
+    # via -r requirements.in
 filelock==3.18.0
     # via
     #   datasets
@@ -118,6 +122,7 @@ google-api-core[grpc]==2.25.1
     #   google-cloud-core
     #   google-cloud-firestore
     #   google-cloud-logging
+    #   google-cloud-scheduler
     #   google-cloud-secret-manager
     #   google-cloud-storage
 google-auth==2.40.3
@@ -127,6 +132,7 @@ google-auth==2.40.3
     #   google-cloud-appengine-logging
     #   google-cloud-core
     #   google-cloud-firestore
+    #   google-cloud-scheduler
     #   google-cloud-secret-manager
     #   google-cloud-storage
 google-cloud-appengine-logging==1.6.2
@@ -141,6 +147,8 @@ google-cloud-core==2.4.3
 google-cloud-firestore==2.21.0
     # via -r requirements.in
 google-cloud-logging==3.8.0
+    # via -r requirements.in
+google-cloud-scheduler==2.16.1
     # via -r requirements.in
 google-cloud-secret-manager==2.20.0
     # via -r requirements.in
@@ -329,6 +337,7 @@ proto-plus==1.26.1
     #   google-cloud-appengine-logging
     #   google-cloud-firestore
     #   google-cloud-logging
+    #   google-cloud-scheduler
     #   google-cloud-secret-manager
 protobuf==4.25.8
     # via
@@ -338,6 +347,7 @@ protobuf==4.25.8
     #   google-cloud-audit-log
     #   google-cloud-firestore
     #   google-cloud-logging
+    #   google-cloud-scheduler
     #   google-cloud-secret-manager
     #   googleapis-common-protos
     #   grpc-google-iam-v1
@@ -461,6 +471,8 @@ sentence-transformers==5.1.0
     # via -r requirements.in
 sentencepiece==0.2.1
     # via -r requirements.in
+sgmllib3k==1.0.0
+    # via feedparser
 six==1.17.0
     # via python-dateutil
 smmap==5.0.2
@@ -470,6 +482,8 @@ sniffio==1.3.1
     #   anyio
     #   httpx
     #   openai
+soupsieve==2.7
+    # via beautifulsoup4
 sqlalchemy==2.0.43
     # via
     #   langchain
@@ -521,6 +535,7 @@ transformers==4.55.2
 typing-extensions==4.8.0
     # via
     #   aiosignal
+    #   beautifulsoup4
     #   fastapi
     #   huggingface-hub
     #   openai
