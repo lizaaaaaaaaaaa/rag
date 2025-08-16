@@ -29,6 +29,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+FAST_MODE = os.getenv("FAST_MODE", "false").lower() == "true"
+RAG_TIMEOUT = int(os.getenv("RAG_TIMEOUT", "10"))
+LINE_RESPONSE_TIMEOUT = int(os.getenv("LINE_RESPONSE_TIMEOUT", "10"))
+ENABLE_RESPONSE_CACHE = os.getenv("ENABLE_RESPONSE_CACHE", "false").lower() == "true"
+
+if FAST_MODE:
+    logger.info("🚀 Fast Mode Enabled")
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    os.environ["DISABLE_LANGSMITH"] = "true"
+
 # 環境変数読み込み
 if os.getenv("ENV") != "production":
     from dotenv import load_dotenv

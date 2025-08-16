@@ -18,7 +18,7 @@ steps:
     ]
     timeout: '600s'
 
-  # 3. APIサーバーをCloud Runにデプロイ（軽量化）
+  # 3. APIサーバーをCloud Runにデプロイ（レスポンス速度最適化版）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -29,14 +29,14 @@ steps:
       - --region=asia-northeast1
       - --platform=managed
       - --allow-unauthenticated
-      - --memory=16Gi
-      - --cpu=4
+      - --memory=8Gi
+      - --cpu=2
       - --timeout=600s
-      - --min-instances=1
-      - --max-instances=10
-      - --concurrency=80
+      - --min-instances=2
+      - --max-instances=15
+      - --concurrency=200
       - --port=8080
-      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=512,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,REDIS_URL=redis://your-redis-instance,LANGCHAIN_TRACING_V2=false,LANGCHAIN_PROJECT=default,DISABLE_LANGSMITH=true,OPENAI_TEMPERATURE=0.3,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app
+      - --set-env-vars=MODEL_PRESET=auto,MAX_NEW_TOKENS=200,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,REDIS_URL=redis://your-redis-instance,LANGCHAIN_TRACING_V2=false,LANGCHAIN_PROJECT=default,DISABLE_LANGSMITH=true,OPENAI_TEMPERATURE=0.1,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app,RAG_SEARCH_K=2,RAG_CHUNK_SIZE=300,RAG_TIMEOUT=8,LINE_RESPONSE_TIMEOUT=5,ENABLE_RESPONSE_CACHE=true,CACHE_SIZE=50,FAST_MODE=true,PERFORMANCE_MONITORING=true
       - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest,GOOGLE_SEARCH_API_KEY=GOOGLE_SEARCH_API_KEY:latest,GOOGLE_SEARCH_ENGINE_ID=GOOGLE_SEARCH_ENGINE_ID:latest,LINE_CHANNEL_ID=LINE_CHANNEL_ID:latest,LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,LINE_LOGIN_CHANNEL_ID=LINE_LOGIN_CHANNEL_ID:latest,LINE_LOGIN_CHANNEL_SECRET=LINE_LOGIN_CHANNEL_SECRET:latest,LINE_LOGIN_REDIRECT_URI=LINE_LOGIN_REDIRECT_URI:latest,LIFF_ID=LIFF_ID:latest,JWT_SECRET=JWT_SECRET:latest,LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest
       - --service-account=190389115361-compute@developer.gserviceaccount.com
       - --vpc-egress=all-traffic
