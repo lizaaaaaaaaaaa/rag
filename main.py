@@ -1,4 +1,6 @@
-# main.py - 完全修正版（トークン正規化・エラーハンドリング強化）
+# main.py - 完全修正版（ULTRA FAST対応 / 既存機能維持）
+# - 既存: トークン正規化・包括監視・LINE/LLM/RAG 初期化・診断エンドポイント
+# - 追加: ULTRA_FAST_MODE / RAG超高速チェーン / 新規エンドポイント / ログ拡張
 
 import os
 import sys
@@ -29,17 +31,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# =========================
+# 速度関連 環境変数（重要）
+# =========================
 FAST_MODE = os.getenv("FAST_MODE", "false").lower() == "true"
+
+# ★ 追加：ULTRA FAST モードと短縮タイムアウト（既定値を高速向けに調整）
+ULTRA_FAST_MODE = os.getenv("ULTRA_FAST_MODE", "true").lower() == "true"
 RAG_TIMEOUT = int(os.getenv("RAG_TIMEOUT", "10"))
-LINE_RESPONSE_TIMEOUT = int(os.getenv("LINE_RESPONSE_TIMEOUT", "10"))
+LINE_RESPONSE_TIMEOUT = int(os.getenv("LINE_RESPONSE_TIMEOUT", "3"))  # 3秒に短縮（既定10→3）
+RAG_ULTRA_TIMEOUT = int(os.getenv("RAG_ULTRA_TIMEOUT", "4"))          # 4秒に短縮（ULTRA用）
 ENABLE_RESPONSE_CACHE = os.getenv("ENABLE_RESPONSE_CACHE", "false").lower() == "true"
 
+# 互換：FAST_MODE／ULTRA_FAST_MODE のON時は観測や外部送信を最小化
 if FAST_MODE:
     logger.info("🚀 Fast Mode Enabled")
     os.environ["LANGCHAIN_TRACING_V2"] = "false"
     os.environ["DISABLE_LANGSMITH"] = "true"
 
-# 環境変数読み込み
+if ULTRA_FAST_MODE:
+    logger.info("🚀 Ultra Fast Mode Enabled - Sub-30-second response target")
+    # 追い高速化設定
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"         # 念のため再指定
+    os.environ["DISABLE_LANGSMITH"] = "true"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"       # トークナイザ並列でのオーバーヘッド抑制
+    os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"    # I/O高速な一時ディレクトリをキャッシュに
+
+# 環境変数読み込み（ローカル時のみ）
 if os.getenv("ENV") != "production":
     from dotenv import load_dotenv
     load_dotenv(".env")
@@ -52,30 +70,21 @@ def normalize_credential(value: Any) -> str:
     """認証情報を安全にstring型に変換"""
     if value is None:
         return ""
-    
-    # bytes型の場合はデコード
     if isinstance(value, bytes):
         try:
             value = value.decode('utf-8')
         except UnicodeDecodeError:
             logger.error("Failed to decode credential from bytes")
             return ""
-    
-    # 文字列に変換
     credential_str = str(value).strip()
-    
-    # 不要なプレフィックス・サフィックスを削除
     if credential_str.startswith('Bearer '):
         credential_str = credential_str[7:].strip()
-    
     if credential_str.startswith("b'") and credential_str.endswith("'"):
         credential_str = credential_str[2:-1]
-    
     return credential_str
 
 # セキュリティ強化：重要な環境変数のマスキング
 def mask_sensitive_data(value: str, show_chars: int = 10) -> str:
-    """機密データをマスキング"""
     if not value:
         return "未設定"
     return f"{value[:show_chars]}..." if len(value) > show_chars else "設定済み"
@@ -94,12 +103,19 @@ normalized_line_token = normalize_credential(raw_line_token)
 normalized_line_secret = normalize_credential(raw_line_secret)
 
 # 正規化後の情報をログ出力
-logger.info("OPENAI_API_KEY: %s (normalized: %d chars)", 
+logger.info("OPENAI_API_KEY: %s (normalized: %d chars)",
            mask_sensitive_data(raw_openai_key), len(normalized_openai_key))
-logger.info("LINE_CHANNEL_ACCESS_TOKEN: %s (normalized: %d chars)", 
+logger.info("LINE_CHANNEL_ACCESS_TOKEN: %s (normalized: %d chars)",
            mask_sensitive_data(raw_line_token), len(normalized_line_token))
-logger.info("LINE_CHANNEL_SECRET: %s (normalized: %d chars)", 
+logger.info("LINE_CHANNEL_SECRET: %s (normalized: %d chars)",
            mask_sensitive_data(raw_line_secret), len(normalized_line_secret))
+
+# ★ 追加：ULTRA FAST 関連ログ
+logger.info("ULTRA_FAST_MODE: %s", ULTRA_FAST_MODE)
+logger.info("LINE_RESPONSE_TIMEOUT: %s seconds", LINE_RESPONSE_TIMEOUT)
+logger.info("RAG_ULTRA_TIMEOUT: %s seconds", RAG_ULTRA_TIMEOUT)
+if ULTRA_FAST_MODE:
+    logger.info("🎯 Target: Sub-30-second response for rich menu interactions")
 
 # 正規化された認証情報を環境変数に再設定（他のモジュールで使用するため）
 if normalized_openai_key:
@@ -129,7 +145,7 @@ except ImportError:
 app = FastAPI(
     title="RAG FastAPI Backend with Comprehensive Monitoring",
     description="RAG + LLM連携API (Cloud Run対応) + LINE Bot + 包括的監視システム",
-    version="2.1.0",
+    version="2.2.0",
     docs_url="/docs" if os.getenv("ENV") != "production" else None,
     redoc_url="/redoc" if os.getenv("ENV") != "production" else None
 )
@@ -159,7 +175,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:8501",
         "http://127.0.0.1:8501",
-        "*"  # 開発時のみ - 本番では削除を推奨
+        "*"  # 開発時のみ - 本番では削除推奨
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
@@ -171,7 +187,6 @@ app.add_middleware(
 # 高度なセキュリティヘッダー
 @app.middleware("http")
 async def add_comprehensive_security_headers(request, call_next):
-    """包括的セキュリティヘッダーの追加"""
     response = await call_next(request)
     response.headers["Content-Security-Policy"] = (
         "default-src 'self' https:; "
@@ -196,7 +211,6 @@ async def add_comprehensive_security_headers(request, call_next):
 # パフォーマンス監視ミドルウェア
 @app.middleware("http")
 async def monitor_performance(request: Request, call_next):
-    """リクエストパフォーマンスの監視"""
     start_time = datetime.now()
     client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
     user_agent = request.headers.get("User-Agent", "unknown")
@@ -351,22 +365,39 @@ async def enhanced_startup():
         logger.warning(f"⚠️ Vectorstore load failed: {e}")
         vectorstore = None
 
-    # 5. RAGチェーン構築
+    # 5. RAGチェーン構築（超高速版対応）
     try:
         if vectorstore and llm_instance:
-            logger.info("⛓️ Building RAG chain...")
-            from rag.ingested_text import get_rag_chain
-            rag_chain_template = get_rag_chain(vectorstore=vectorstore, return_source=True)
-            logger.info("✅ RAG chain created with LLM and Vectorstore")
+            logger.info("⛓️ Building ultra fast RAG chain...")
+            if ULTRA_FAST_MODE:
+                try:
+                    # Ultra Fast 実装が存在する場合のみ使用（なければ従来へフォールバック）
+                    from rag.fast_rag_chain import get_ultra_fast_rag_chain  # type: ignore
+                    rag_chain_template = get_ultra_fast_rag_chain(vectorstore=vectorstore, return_source=True)
+                    logger.info("✅ Ultra fast RAG chain created")
+                except Exception as import_err:
+                    logger.warning(f"⚠️ Ultra fast chain not available, fallback to standard: {import_err}")
+                    from rag.ingested_text import get_rag_chain
+                    rag_chain_template = get_rag_chain(vectorstore=vectorstore, return_source=True)
+                    logger.info("✅ Standard RAG chain created (fallback)")
+            else:
+                from rag.ingested_text import get_rag_chain
+                rag_chain_template = get_rag_chain(vectorstore=vectorstore, return_source=True)
+                logger.info("✅ Standard RAG chain created")
+
+            # テスト実行（応答時間の計測をログ）
             try:
                 test_query = "テスト"
+                start_time = datetime.now()
                 test_result = rag_chain_template.invoke({"query": test_query})
+                response_time = (datetime.now() - start_time).total_seconds()
                 if test_result:
-                    logger.info("✅ RAG chain test successful")
+                    logger.info(f"✅ RAG chain test successful ({response_time:.2f}s)")
                 else:
                     logger.warning("⚠️ RAG chain returned empty result")
             except Exception as e:
                 logger.warning(f"⚠️ RAG chain test warning: {e}")
+
         elif vectorstore:
             logger.info("⛓️ Building search-only chain...")
             class SimpleSearchChain:
@@ -410,7 +441,6 @@ async def enhanced_startup():
         for key, status in line_checks.items():
             logger.info(f"  {key}: {'✅ Set' if status else '❌ Not set'}")
         
-        # 正規化結果の詳細
         if normalized_line_token:
             logger.info(f"  Token normalized length: {len(normalized_line_token)}")
             logger.info(f"  Token format valid: {len(normalized_line_token) > 100}")
@@ -454,9 +484,7 @@ app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(google_oauth.router, tags=["auth"])
 
-# NOTE:
-# /healthz は本ファイル(main.py)で提供するため、既存 healthz ルーターは競合回避のため /ops 配下にマウント。
-# （/ops/healthz でより詳細なチェックを実行可能）
+# /healthz は本ファイルで提供するため、詳細版は /ops 配下へ
 app.include_router(healthz.router, prefix="/ops", tags=["healthz-ops"])
 
 # LINE関連ルーター
@@ -517,17 +545,13 @@ def test_line_signature():
     try:
         if not normalized_line_secret:
             return {"error": "LINE_CHANNEL_SECRET not found or normalized"}
-        
-        # テスト用のボディとシグネチャ
         test_body = '{"events":[],"destination":"test"}'
-        
         hash = hmac.new(
             normalized_line_secret.encode('utf-8'),
             test_body.encode('utf-8'),
             hashlib.sha256
         ).digest()
         signature = base64.b64encode(hash).decode('utf-8')
-        
         return {
             "test_body": test_body,
             "generated_signature": signature,
@@ -556,7 +580,6 @@ def line_webhook_test():
     try:
         import requests
         webhook_url = "https://rag-api-190389115361.asia-northeast1.run.app/line/status"
-        
         try:
             response = requests.get(webhook_url, timeout=10)
             webhook_accessible = response.status_code == 200
@@ -564,7 +587,6 @@ def line_webhook_test():
         except requests.exceptions.RequestException as e:
             webhook_accessible = False
             webhook_response = str(e)
-        
         return {
             "webhook_url": webhook_url,
             "webhook_accessible": webhook_accessible,
@@ -596,16 +618,12 @@ def line_credentials_validation():
             "normalization_info": {},
             "timestamp": datetime.now().isoformat()
         }
-        
-        # 正規化情報
         results["normalization_info"] = {
             "openai_key_normalized": bool(normalized_openai_key),
             "line_token_normalized": bool(normalized_line_token),
             "line_secret_normalized": bool(normalized_line_secret),
             "normalization_count": system_monitor.credential_normalizations
         }
-        
-        # Access Token検証（正規化済み）
         if normalized_line_token:
             if len(normalized_line_token) < 100:
                 results["critical_issues"].append("Access token seems too short after normalization")
@@ -613,8 +631,6 @@ def line_credentials_validation():
                 results["validation_results"]["access_token"] = "Format OK (normalized)"
         else:
             results["critical_issues"].append("LINE_CHANNEL_ACCESS_TOKEN not set or normalization failed")
-        
-        # Channel Secret検証（正規化済み）
         if normalized_line_secret:
             if len(normalized_line_secret) < 20:
                 results["critical_issues"].append("Channel secret seems too short after normalization")
@@ -622,8 +638,6 @@ def line_credentials_validation():
                 results["validation_results"]["channel_secret"] = "Format OK (normalized)"
         else:
             results["critical_issues"].append("LINE_CHANNEL_SECRET not set or normalization failed")
-        
-        # LINE Bot API接続テスト（正規化済みトークン使用）
         if normalized_line_token:
             try:
                 import requests
@@ -644,8 +658,6 @@ def line_credentials_validation():
                     results["critical_issues"].append(f"LINE API connection failed: HTTP {api_response.status_code}")
             except Exception as api_error:
                 results["critical_issues"].append(f"LINE API connection error: {str(api_error)}")
-        
-        # 推奨事項
         if not results["critical_issues"]:
             results["recommendations"].append("All LINE credentials are properly configured and normalized")
             results["recommendations"].append("Test webhook by sending a message to your LINE Bot")
@@ -654,9 +666,7 @@ def line_credentials_validation():
             results["recommendations"].append("Check Secret Manager configuration")
             results["recommendations"].append("Verify credential normalization process")
             results["recommendations"].append("Check LINE Developers Console settings")
-        
         return results
-    
     except Exception as e:
         return {"error": str(e), "timestamp": datetime.now().isoformat()}
 
@@ -800,6 +810,13 @@ def comprehensive_system_health():
             "cloud_run": cloud_run_info,
             "system_metrics": metrics,
             "components": components_status,
+            # ★ 追加: ULTRA FAST の稼働状況
+            "ultra_fast_mode": {
+                "enabled": ULTRA_FAST_MODE,
+                "line_timeout": LINE_RESPONSE_TIMEOUT,
+                "rag_timeout": RAG_ULTRA_TIMEOUT,
+                "target_response_time": "sub_30_seconds"
+            },
             "health_indicators": {
                 "cpu_healthy": metrics.get("system", {}).get("cpu_percent", 100) < 80,
                 "memory_healthy": metrics.get("system", {}).get("memory_percent", 100) < 80,
@@ -847,32 +864,22 @@ def health_check():
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
             "service": "rag-api",
-            "version": "2.1.0"
+            "version": "2.2.0"
         }
         components_ok = True
-
-        # LLMインスタンスチェック
         if llm_instance is None:
             health_status.setdefault("warnings", []).append("LLM instance not loaded")
             components_ok = False
-
-        # LINE Bot設定チェック（正規化済み認証情報）
         if not normalized_line_token:
             health_status.setdefault("warnings", []).append("LINE credentials not configured")
-
-        # 認証情報正規化チェック
         if system_monitor.credential_normalizations == 0:
             health_status.setdefault("warnings", []).append("Credential normalization not executed")
-
-        # 全体ステータス判定
         if not components_ok:
             health_status["status"] = "degraded"
-
         health_status["credential_normalization"] = {
             "executed": system_monitor.credential_normalizations > 0,
             "count": system_monitor.credential_normalizations
         }
-
         return health_status
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -894,7 +901,6 @@ def comprehensive_line_bot_diagnostics():
             "LINE_LOGIN_CHANNEL_SECRET": bool(os.environ.get("LINE_LOGIN_CHANNEL_SECRET")),
             "LIFF_ID": bool(os.environ.get("LIFF_ID"))
         }
-        
         def test_secret_access():
             try:
                 from google.cloud import secretmanager
@@ -906,7 +912,6 @@ def comprehensive_line_bot_diagnostics():
             except Exception as e:
                 logger.error(f"Secret Manager test failed: {e}")
                 return False
-        
         def test_line_api():
             try:
                 import requests
@@ -921,7 +926,6 @@ def comprehensive_line_bot_diagnostics():
             except Exception as e:
                 logger.error(f"LINE API test failed: {e}")
                 return False
-        
         def test_webhook_endpoint():
             try:
                 import requests
@@ -933,10 +937,8 @@ def comprehensive_line_bot_diagnostics():
             except Exception as e:
                 logger.error(f"Webhook endpoint test failed: {e}")
                 return False
-        
         def test_line_sdk():
             return LINE_SDK_AVAILABLE
-        
         diagnostics = {
             "environment_variables": env_vars,
             "secret_manager_access": test_secret_access(),
@@ -950,7 +952,6 @@ def comprehensive_line_bot_diagnostics():
                 "normalized_secret_length": len(normalized_line_secret) if normalized_line_secret else 0
             }
         }
-        
         critical_tests = [
             diagnostics["line_api_connection"],
             diagnostics["webhook_endpoint"], 
@@ -958,7 +959,6 @@ def comprehensive_line_bot_diagnostics():
             diagnostics["credential_normalization"]["executed"]
         ]
         all_tests_passed = all(critical_tests)
-        
         recommendations = []
         if not diagnostics["secret_manager_access"]:
             recommendations.append("Secret Manager permissions確認")
@@ -970,7 +970,6 @@ def comprehensive_line_bot_diagnostics():
             recommendations.append("LINE Bot SDK installation確認")
         if not diagnostics["credential_normalization"]["executed"]:
             recommendations.append("認証情報正規化プロセス確認")
-        
         return {
             "overall_status": "healthy" if all_tests_passed else "needs_attention",
             "diagnostics": diagnostics,
@@ -981,7 +980,7 @@ def comprehensive_line_bot_diagnostics():
             "debug_info": {
                 "service_url": f"https://rag-api-190389115361.asia-northeast1.run.app",
                 "environment": os.environ.get("ENV", "unknown"),
-                "version": "2.1.0 (with credential normalization)"
+                "version": "2.2.0 (ultra fast compatible)"
             }
         }
     except Exception as e:
@@ -1025,6 +1024,13 @@ def quick_system_diagnosis():
             suggestions.append("Restart service or scale up memory")
     except:
         pass
+
+    # ★ 追加：ULTRA FASTモードの閾値チェック（推奨チューニング）
+    if ULTRA_FAST_MODE:
+        if LINE_RESPONSE_TIMEOUT > 5:
+            suggestions.append("LINE_RESPONSE_TIMEOUT を3秒以下に設定")
+        if RAG_ULTRA_TIMEOUT > 6:
+            suggestions.append("RAG_ULTRA_TIMEOUT を4秒以下に設定")
     
     if critical_issues:
         status = "🚨 Critical Issues Detected"
@@ -1067,6 +1073,68 @@ def quick_system_diagnosis():
         "timestamp": datetime.now().isoformat()
     }
 
+# ★★★ ULTRA FAST ステータス ★★★
+@app.get("/ultra-fast-status")
+def get_ultra_fast_status():
+    """超高速モードの状態確認"""
+    try:
+        try:
+            from rag.fast_rag_chain import get_ultra_fast_cache_stats  # type: ignore
+            cache_stats = get_ultra_fast_cache_stats()
+        except Exception:
+            cache_stats = {"note": "Ultra fast RAG not available (using standard chain)"}
+        return {
+            "ultra_fast_mode": ULTRA_FAST_MODE,
+            "timeout_settings": {
+                "line_response": LINE_RESPONSE_TIMEOUT,
+                "rag_processing": RAG_ULTRA_TIMEOUT,
+                "target": "sub_30_seconds"
+            },
+            "cache_statistics": cache_stats,
+            "performance_metrics": {
+                "components_loaded": {
+                    "llm": llm_instance is not None,
+                    "vectorstore": vectorstore is not None,
+                    "rag_chain": rag_chain_template is not None,
+                },
+                "optimization_enabled": [
+                    "tokenizer_parallelism_disabled",
+                    "langsmith_disabled",
+                    "minimal_logging",
+                    "fast_embeddings"
+                ] if ULTRA_FAST_MODE else []
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e), "timestamp": datetime.now().isoformat()}
+
+# ★★★ ULTRA FAST キャッシュクリア ★★★
+@app.post("/clear-ultra-fast-cache")
+def clear_ultra_fast_cache_endpoint():
+    """超高速キャッシュをクリア"""
+    try:
+        try:
+            from rag.fast_rag_chain import clear_ultra_fast_cache, get_ultra_fast_cache_stats  # type: ignore
+        except Exception:
+            return {
+                "status": "error",
+                "message": "Ultra fast RAG not available",
+                "timestamp": datetime.now().isoformat()
+            }
+        before_stats = get_ultra_fast_cache_stats()
+        clear_ultra_fast_cache()
+        after_stats = get_ultra_fast_cache_stats()
+        return {
+            "status": "success",
+            "before": before_stats,
+            "after": after_stats,
+            "message": "Ultra fast cache cleared successfully",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e), "timestamp": datetime.now().isoformat()}
+
 # ★★★ メインエンドポイント ★★★
 @app.get("/")
 def comprehensive_root():
@@ -1074,7 +1142,7 @@ def comprehensive_root():
     return {
         "service": {
             "name": "RAG FastAPI Backend with Comprehensive Monitoring",
-            "version": "2.1.0",
+            "version": "2.2.0",
             "status": "operational",
             "uptime_seconds": uptime,
             "uptime_formatted": str(timedelta(seconds=int(uptime)))
@@ -1096,6 +1164,8 @@ def comprehensive_root():
             "health_check": "/system-health",
             "diagnostics": "/line-bot-diagnostics",
             "quick_diagnosis": "/quick-diagnosis",
+            "ultra_fast_status": "/ultra-fast-status",
+            "clear_ultra_fast_cache": "/clear-ultra-fast-cache",
             "healthz": "/healthz",
             "ops_healthz": "/ops/healthz",
             "debug_endpoints": {
