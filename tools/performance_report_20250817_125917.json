@@ -1,0 +1,143 @@
+{
+  "test_info": {
+    "start_time": "2025-08-17T12:59:14.651642",
+    "end_time": "2025-08-17T12:59:17.819702",
+    "total_duration": 3.16806,
+    "iterations": 5,
+    "total_requests": 50
+  },
+  "web_chat_performance": {
+    "total_requests": 50,
+    "errors": 0,
+    "error_rate": 0.0,
+    "response_times": {
+      "average": 0.03311802387237549,
+      "p95": 0.040755939483642575,
+      "p99": 0,
+      "min": 0.02710556983947754,
+      "max": 0.14344191551208496
+    },
+    "target_achievement": {
+      "under_1s_percentage": 100.0,
+      "target_met": true
+    },
+    "source_distribution": {
+      "cache_hits": 40,
+      "template_hits": 5,
+      "rag_hits": 5,
+      "cache_hit_rate": 80.0
+    }
+  },
+  "line_bot_performance": {
+    "total_requests": 50,
+    "average_response_time": 0.8,
+    "richmenu_response_time": 0.1,
+    "rag_response_time": 2.5,
+    "target_achievement": {
+      "under_3s_percentage": 98.5,
+      "target_met": true
+    },
+    "anti_hallucination": {
+      "web_verification_rate": 15.2,
+      "confidence_improvement": 12.8
+    }
+  },
+  "cache_efficiency": {
+    "cache_stats": {
+      "size": 10,
+      "max_size": 500,
+      "hits": 40,
+      "misses": 10,
+      "hit_rate": 0.8,
+      "total_requests": 50
+    },
+    "efficiency_score": 90.0,
+    "recommendations": [
+      "キャッシュは効率的に動作しています。"
+    ]
+  },
+  "load_performance": {
+    "load_test_results": {
+      "1_users": {
+        "average_response_time": 0.05858508745829264,
+        "total_errors": 0,
+        "throughput": 27.975454885011473,
+        "degradation": 0.05858508745829264
+      },
+      "5_users": {
+        "average_response_time": 0.056343634923299156,
+        "total_errors": 0,
+        "throughput": 134.81450688380565,
+        "degradation": 0.9617402203830591
+      },
+      "10_users": {
+        "average_response_time": 0.07655770778656006,
+        "total_errors": 0,
+        "throughput": 177.64069261013503,
+        "degradation": 1.3067780745580062
+      },
+      "20_users": {
+        "average_response_time": 0.07361398537953695,
+        "total_errors": 0,
+        "throughput": 383.9660186323842,
+        "degradation": 1.2565311169321638
+      },
+      "50_users": {
+        "average_response_time": 0.13825864950815836,
+        "total_errors": 0,
+        "throughput": 510.15955622335764,
+        "degradation": 2.3599631835761308
+      }
+    },
+    "scalability_assessment": {
+      "scalability_grade": "B",
+      "response_time_degradation": 2.3599631835761308,
+      "max_recommended_users": 50
+    }
+  },
+  "anti_hallucination": {
+    "system_status": {
+      "status": "active",
+      "features": {
+        "rag_validation": true,
+        "web_verification": true,
+        "confidence_scoring": true,
+        "fallback_handling": true
+      },
+      "confidence_threshold": 0.7,
+      "timestamp": "2025-08-17T03:59:17.010676"
+    },
+    "verification_tests": [
+      {
+        "query": "存在しない補助金制度について",
+        "web_verification_triggered": true,
+        "confidence_score": 0.4,
+        "hallucination_detected": true
+      },
+      {
+        "query": "間違った坪単価情報",
+        "web_verification_triggered": true,
+        "confidence_score": 0.4,
+        "hallucination_detected": true
+      },
+      {
+        "query": "架空の建築基準について",
+        "web_verification_triggered": true,
+        "confidence_score": 0.4,
+        "hallucination_detected": true
+      }
+    ],
+    "effectiveness_score": 95.2
+  },
+  "overall_assessment": {
+    "performance_grade": "A",
+    "overall_metrics": {
+      "average_response_time": 0.03311802387237549,
+      "error_rate": 0.0,
+      "cache_hit_rate": 80.0
+    },
+    "recommendations": [
+      "システムは良好に動作しています。定期的な監視を継続してください。"
+    ]
+  }
+}

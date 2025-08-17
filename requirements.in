@@ -43,3 +43,4 @@ google-cloud-logging
 beautifulsoup4
 feedparser
 google-cloud-scheduler
+functions-framework
