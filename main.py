@@ -71,6 +71,7 @@ if os.getenv("ENV") == "production":
             "rag-api-190389115361.asia-northeast1.run.app",
             "*.run.app",
             "localhost",
+            "*",  # ←ヘルスチェック用に追加
         ],
     )
 
