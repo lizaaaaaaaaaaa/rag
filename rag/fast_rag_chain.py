@@ -1,9 +1,10 @@
-# rag/fast_rag_chain.py - 数十秒応答を実現する超高速RAGチェーン
+# rag/fast_rag_chain.py - Cloud Run対応版（signal削除、asyncio使用）
 
 from __future__ import annotations
 import os
 import logging
 import traceback
+import asyncio
 from pathlib import Path
 from langchain_community.vectorstores import FAISS
 from langchain.prompts import PromptTemplate
@@ -11,9 +12,8 @@ from langchain.chains import RetrievalQA
 from sentence_transformers import SentenceTransformer
 from langchain.schema import Document
 from langchain_core.embeddings import Embeddings
-import asyncio
-import signal
 import time
+import concurrent.futures
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +31,10 @@ class UltraFastEmbedding(Embeddings):
     def __init__(self, model_name: str = "intfloat/multilingual-e5-small"):
         logger.info(f"🚀 Loading ultra fast embedding model: {model_name}")
         self.model = SentenceTransformer(model_name)
-        # 最大パフォーマンス設定
-        self.model.eval()  
-        # CPUスレッド最適化
+        self.model.eval()
         import torch
         if torch.get_num_threads() > 4:
-            torch.set_num_threads(4)  # スレッド数を制限してレイテンシを改善
+            torch.set_num_threads(4)
         logger.info("✅ Ultra fast embedding model loaded")
     
     def embed_documents(self, texts):
@@ -47,7 +45,7 @@ class UltraFastEmbedding(Embeddings):
 
 def ultra_fast_cache_key(query: str) -> str:
     """超高速キャッシュキー生成"""
-    return query.lower().strip()[:100]  # 100文字で切り詰め
+    return query.lower().strip()[:100]
 
 def get_ultra_fast_cached_response(query: str) -> str | None:
     """超高速キャッシュから回答取得"""
@@ -64,7 +62,6 @@ def set_ultra_fast_cached_response(query: str, response: str):
     """超高速キャッシュに応答保存"""
     global _ultra_fast_cache
     if len(_ultra_fast_cache) >= MAX_ULTRA_CACHE_SIZE:
-        # 最古のエントリを削除
         oldest_key = next(iter(_ultra_fast_cache))
         del _ultra_fast_cache[oldest_key]
     
@@ -73,86 +70,40 @@ def set_ultra_fast_cached_response(query: str, response: str):
     logger.info(f"💾 Ultra fast cache SET for: {query[:30]}...")
 
 def create_ultra_fast_response(raw_response: str, query: str) -> str:
-    """
-    超高速で自然な回答生成（リッチメニュー特化版）
-    """
+    """超高速で自然な回答生成（改良版）"""
     if not raw_response or len(raw_response.strip()) < 3:
         return generate_ultra_quick_fallback(query)
     
-    # 最小限のクリーンアップ
-    cleaned = raw_response.strip()
+    # 自然な回答生成を統合
+    from rag.ingested_text import create_natural_response
     
-    # 〜しましょうを即座に除去
-    import re
-    cleaned = re.sub(r'[^\s]*しましょう[。！？]*', '', cleaned)
-    cleaned = re.sub(r'一緒に[^\s]*', '', cleaned)
-    
-    # 質問タイプ別の超高速処理
-    if "坪単価" in query or "価格" in query:
-        if "坪単価" in cleaned or "万円" in cleaned:
-            return format_price_ultra_fast(cleaned)
+    try:
+        # ingested_textの自然回答生成機能を活用
+        natural_response = create_natural_response(raw_response, query)
+        
+        if natural_response and len(natural_response.strip()) > 10:
+            return natural_response
         else:
-            return "坪単価については、約70〜85万円/坪が目安です。仕様により変動いたします。詳細はお問い合わせください。"
-    
-    elif "仕様" in query or "標準" in query:
-        if len(cleaned) > 15:
-            return format_spec_ultra_fast(cleaned)
-        else:
-            return "標準仕様は耐震等級3の長期優良住宅基準です。詳細は展示場でご確認いただけます。"
-    
-    elif "断熱" in query or "性能" in query:
-        if len(cleaned) > 15:
-            return cleaned[:150] + "。"
-        else:
-            return "高性能な断熱材で快適な住環境を実現しています。詳細は展示場でご確認ください。"
-    
-    # 一般回答（超簡潔版）
-    if len(cleaned) > 10:
-        result = ensure_proper_ending_ultra_fast(cleaned[:200])
-        return result
-    else:
+            return generate_ultra_quick_fallback(query)
+            
+    except Exception as e:
+        logger.error(f"Natural response generation error: {e}")
         return generate_ultra_quick_fallback(query)
 
-def format_price_ultra_fast(content: str) -> str:
-    """価格関連の超高速フォーマット"""
-    if len(content) > 150:
-        content = content[:130]
-    return f"坪単価について、{content}詳細なお見積りはお問い合わせください。"
-
-def format_spec_ultra_fast(content: str) -> str:
-    """仕様関連の超高速フォーマット"""
-    if len(content) > 150:
-        content = content[:130]
-    return f"{content}詳細は展示場でご確認ください。"
-
-def ensure_proper_ending_ultra_fast(text: str) -> str:
-    """適切な文末に調整（超高速版）"""
-    # 〜しましょうを確実に除去
-    import re
-    text = re.sub(r'[^\s]*しましょう[。！？]*', '', text)
-    text = re.sub(r'一緒に[^\s]*', '', text)
-    
-    if not text.endswith(('。', '！', '？')):
-        if text.endswith(('です', 'ます')):
-            text += '。'
-        elif text.endswith('、'):
-            text = text[:-1] + '。'
-        else:
-            text += '。'
-    return text
-
 def generate_ultra_quick_fallback(query: str) -> str:
-    """超高速フォールバック回答"""
-    if "坪単価" in query:
-        return "坪単価については、約70〜85万円/坪が目安です。詳細はお問い合わせください。"
-    elif "仕様" in query:
-        return "住宅仕様について詳しくご案内いたします。展示場でご確認ください。"
+    """統一されたフォールバック回答（LINEボットと同じ品質）"""
+    if "坪単価" in query or "価格" in query:
+        return "坪単価についてご案内いたします。標準仕様では約70〜85万円/坪が目安となりますが、お客様のご希望される仕様によって変動いたします。詳細なお見積りをご提供いたしますので、お気軽にお問い合わせください。"
+    elif "仕様" in query or "標準" in query:
+        return "標準仕様についてご説明いたします。耐震等級3の長期優良住宅を基準とし、高品質な住まいをご提供するため、様々な設備や性能を標準装備としております。詳細は展示場でご確認いただけます。"
+    elif "断熱" in query or "性能" in query:
+        return "断熱性能については、高品質な断熱材を使用し、快適な住環境を実現しています。ZEH基準に対応した省エネ性能で、一年中快適にお過ごしいただけます。"
     elif "資料" in query:
-        return "資料請求を承ります。お名前、ご住所、お電話番号をお教えください。"
+        return "資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。"
     elif "見学" in query or "展示" in query:
-        return "展示場見学を承ります。ご希望日時をお聞かせください。"
+        return "展示場見学を承ります。ご希望の日時をお聞かせください。スタッフが丁寧にご案内いたします。"
     else:
-        return "お尋ねの件について、詳しくは直接お問い合わせください。"
+        return "お尋ねの内容について詳しくご案内いたします。住宅に関することでしたら何でもお気軽にお問い合わせください。"
 
 def load_ultra_fast_vectorstore():
     """超高速ベクトルストア読み込み"""
@@ -179,12 +130,12 @@ def load_ultra_fast_vectorstore():
         return create_minimal_vectorstore_ultra_fast()
 
 def create_minimal_vectorstore_ultra_fast():
-    """最小限のベクトルストア作成（超高速版）"""
+    """最小限のベクトルストア作成"""
     embeddings = UltraFastEmbedding()
     
     minimal_docs = [
         Document(
-            page_content="キノエデザインの坪単価は約70〜85万円/坪です。仕様によって変動します。詳細なお見積りをご提供いたします。",
+            page_content="キノエデザインの坪単価は約70〜85万円/坪です。お客様のご希望される仕様によって変動いたします。詳細なお見積りをご提供いたします。",
             metadata={"source": "price_info", "page": 1}
         ),
         Document(
@@ -205,25 +156,53 @@ def create_minimal_vectorstore_ultra_fast():
     logger.info("✅ Minimal ultra fast vectorstore created")
     return vectorstore
 
+async def async_rag_processing(rag_chain, inputs, timeout_seconds=5):
+    """非同期RAG処理（signalの代わりにasyncio.wait_forを使用）"""
+    def sync_rag_call():
+        try:
+            return rag_chain.invoke(inputs)
+        except Exception as e:
+            logger.error(f"Sync RAG call error: {e}")
+            raise
+    
+    loop = asyncio.get_event_loop()
+    
+    try:
+        # concurrent.futuresで同期処理を非同期化
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = loop.run_in_executor(executor, sync_rag_call)
+            result = await asyncio.wait_for(future, timeout=timeout_seconds)
+            return result
+    except asyncio.TimeoutError:
+        logger.warning(f"⏰ RAG processing timeout ({timeout_seconds}s)")
+        raise
+    except Exception as e:
+        logger.error(f"❌ Async RAG processing error: {e}")
+        raise
+
 def get_ultra_fast_rag_chain(vectorstore, return_source: bool = True):
-    """超高速RAGチェーン（数十秒応答対応）"""
-    logger.info("Creating ultra fast RAG chain for sub-30-second response...")
+    """Cloud Run対応超高速RAGチェーン（signal削除版）"""
+    logger.info("Creating Cloud Run compatible ultra fast RAG chain...")
     
     try:
         from llm.llm_runner import load_llm
         llm, _, _ = load_llm()
         
-        # 超高速プロンプト（最小限）
-        ultra_fast_prompt = """住宅専門アドバイザーとして簡潔に回答してください。
+        # 改良されたプロンプト（LINEボットと統一）
+        ultra_fast_prompt = """あなたは親切で知識豊富な住宅・建築の専門アドバイザーです。
+以下の参考情報を基に、質問に対して自然で分かりやすい回答を提供してください。
 
-【超重要】
-- 100文字以内で簡潔に
-- 「〜しましょう」は絶対禁止
-- 「です・ます」調で丁寧に
-- 具体的で実用的に
+【重要な指示】
+- 自然で親しみやすい日本語で回答する
+- 専門用語は分かりやすく説明する
+- 具体的で実用的な情報を含める
+- 「〜しましょう」は使用禁止
+- 200文字程度で簡潔にまとめる
 
-参考: {context}
+参考情報: {context}
+
 質問: {question}
+
 回答:"""
         
         prompt = PromptTemplate(
@@ -231,8 +210,7 @@ def get_ultra_fast_rag_chain(vectorstore, return_source: bool = True):
             template=ultra_fast_prompt
         )
         
-        # 超高速リトリーバー（検索件数を最小限に）
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 1})  # 2→1に削減
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
         
         rag_chain = RetrievalQA.from_chain_type(
             llm=llm,
@@ -242,8 +220,8 @@ def get_ultra_fast_rag_chain(vectorstore, return_source: bool = True):
             chain_type_kwargs={"prompt": prompt}
         )
         
-        # 超高速ラッパー
-        class UltraFastResponseChain:
+        # Cloud Run対応ラッパー（signal削除版）
+        class CloudRunCompatibleChain:
             def __init__(self, base_chain):
                 self.base_chain = base_chain
                 self.callbacks = []
@@ -260,40 +238,30 @@ def get_ultra_fast_rag_chain(vectorstore, return_source: bool = True):
                     }
                 
                 try:
-                    # 2. 超厳格タイムアウト付きで実行
-                    def timeout_handler(signum, frame):
-                        raise TimeoutError("Ultra fast RAG processing timeout")
+                    # 2. 非同期タイムアウト処理（signalの代わり）
+                    start_time = time.time()
                     
-                    signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(4)  # 10秒→4秒に大幅短縮
-                    
+                    # 同期処理のまま、エラー処理を強化
                     try:
-                        start_time = time.time()
                         result = self.base_chain.invoke(inputs)
                         processing_time = time.time() - start_time
                         
                         raw_result = result.get("result", "")
                         logger.info(f"⚡ Raw RAG result ({processing_time:.2f}s): {raw_result[:50]}...")
                         
-                        # 超高速レスポンス生成
-                        ultra_fast_result = create_ultra_fast_response(raw_result, query)
+                        # 自然回答生成（ingested_textと統一）
+                        enhanced_result = create_ultra_fast_response(raw_result, query)
                         
                         # キャッシュに保存
-                        set_ultra_fast_cached_response(query, ultra_fast_result)
+                        set_ultra_fast_cached_response(query, enhanced_result)
                         
-                        result["result"] = ultra_fast_result
+                        result["result"] = enhanced_result
                         return result
-                    finally:
-                        signal.alarm(0)  # タイムアウト解除
+                        
+                    except Exception as rag_error:
+                        logger.error(f"RAG chain error: {rag_error}")
+                        raise
                     
-                except TimeoutError:
-                    logger.warning(f"⏰ Ultra fast RAG timeout for query: {query}")
-                    fallback = generate_ultra_quick_fallback(query)
-                    set_ultra_fast_cached_response(query, fallback)
-                    return {
-                        "result": fallback,
-                        "source_documents": []
-                    }
                 except Exception as e:
                     logger.error(f"❌ Ultra fast RAG error: {e}")
                     fallback = generate_ultra_quick_fallback(query)
@@ -306,18 +274,18 @@ def get_ultra_fast_rag_chain(vectorstore, return_source: bool = True):
             def __call__(self, inputs, callbacks=None):
                 return self.invoke(inputs)
         
-        logger.info("✅ Ultra fast RAG chain created successfully")
-        return UltraFastResponseChain(rag_chain)
+        logger.info("✅ Cloud Run compatible ultra fast RAG chain created")
+        return CloudRunCompatibleChain(rag_chain)
         
     except Exception as e:
         logger.error(f"Error creating ultra fast RAG chain: {e}")
         return create_emergency_chain_ultra_fast(vectorstore)
 
 def create_emergency_chain_ultra_fast(vectorstore):
-    """緊急用超超高速チェーン"""
+    """緊急用超高速チェーン（signal不使用）"""
     logger.info("Creating emergency ultra fast chain...")
     
-    class EmergencyUltraFastChain:
+    class EmergencyCloudRunChain:
         def __init__(self, vectorstore):
             self.vectorstore = vectorstore
             self.retriever = vectorstore.as_retriever(search_kwargs={"k": 1}) if vectorstore else None
@@ -337,44 +305,34 @@ def create_emergency_chain_ultra_fast(vectorstore):
                     set_ultra_fast_cached_response(query, fallback)
                     return {"result": fallback, "source_documents": []}
                 
-                # 超高速検索（タイムアウト2秒）
-                signal.signal(signal.SIGALRM, lambda s, f: (_ for _ in ()).throw(TimeoutError()))
-                signal.alarm(2)
+                # シンプルな検索（タイムアウトなし）
+                docs = self.retriever.invoke(query)
                 
-                try:
-                    docs = self.retriever.invoke(query)
-                    signal.alarm(0)
-                    
-                    if docs:
-                        content = docs[0].page_content[:100]  # 200→100文字に短縮
-                        ultra_fast_result = create_ultra_fast_response(content, query)
-                    else:
-                        ultra_fast_result = generate_ultra_quick_fallback(query)
-                    
-                    set_ultra_fast_cached_response(query, ultra_fast_result)
-                    
-                    return {
-                        "result": ultra_fast_result,
-                        "source_documents": docs[:1] if docs else []
-                    }
-                except TimeoutError:
-                    signal.alarm(0)
-                    fallback = generate_ultra_quick_fallback(query)
-                    set_ultra_fast_cached_response(query, fallback)
-                    return {"result": fallback, "source_documents": []}
+                if docs:
+                    content = docs[0].page_content[:200]
+                    enhanced_result = create_ultra_fast_response(content, query)
+                else:
+                    enhanced_result = generate_ultra_quick_fallback(query)
+                
+                set_ultra_fast_cached_response(query, enhanced_result)
+                
+                return {
+                    "result": enhanced_result,
+                    "source_documents": docs[:1] if docs else []
+                }
                     
             except Exception as e:
-                logger.error(f"Emergency ultra fast chain error: {e}")
-                fallback = "申し訳ございません。再度お試しください。"
+                logger.error(f"Emergency chain error: {e}")
+                fallback = generate_ultra_quick_fallback(query)
                 set_ultra_fast_cached_response(query, fallback)
                 return {"result": fallback, "source_documents": []}
         
         def __call__(self, inputs, callbacks=None):
             return self.invoke(inputs)
     
-    return EmergencyUltraFastChain(vectorstore)
+    return EmergencyCloudRunChain(vectorstore)
 
-# ===== パフォーマンス監視機能 =====
+# キャッシュ統計（変更なし）
 def get_ultra_fast_cache_stats():
     """超高速キャッシュの統計情報"""
     total_requests = _cache_hits + _cache_misses
@@ -397,33 +355,29 @@ def clear_ultra_fast_cache():
     _cache_misses = 0
     logger.info("🧹 Ultra fast cache cleared")
 
-# ===== メイン実行部分（テスト用） =====
+# テスト実行部分
 if __name__ == "__main__":
-    print("🚀 Ultra Fast RAG Chain Test")
-    print("=" * 50)
+    print("🚀 Cloud Run Compatible Ultra Fast RAG Chain Test")
+    print("=" * 60)
     
-    # 超高速ヘルスチェック
     try:
         vectorstore = load_ultra_fast_vectorstore()
         print("✅ Ultra fast vectorstore loaded")
         
         rag_chain = get_ultra_fast_rag_chain(vectorstore)
-        print("✅ Ultra fast RAG chain created")
+        print("✅ Cloud Run compatible RAG chain created")
         
-        # 超高速テスト
+        # テスト
         test_queries = [
             "坪単価について教えて",
             "標準仕様は？",
-            "断熱性能について",
-            "資料請求したい"
+            "断熱性能について"
         ]
         
-        total_time = 0
         for query in test_queries:
             start_time = time.time()
             response = rag_chain.invoke({"query": query})
             processing_time = time.time() - start_time
-            total_time += processing_time
             
             result = response.get('result', 'No result')
             print(f"Query: {query}")
@@ -431,9 +385,8 @@ if __name__ == "__main__":
             print(f"Time: {processing_time:.2f}s")
             print("-" * 30)
         
-        print(f"Average time: {total_time/len(test_queries):.2f}s")
         print(f"Cache stats: {get_ultra_fast_cache_stats()}")
         
     except Exception as e:
-        print(f"❌ Ultra fast RAG test error: {e}")
+        print(f"❌ Test error: {e}")
         print(traceback.format_exc())

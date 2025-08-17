@@ -1,4 +1,4 @@
-# api/routers/chat_ultra_fast.py - 超高速Webチャット応答システム
+# api/routers/chat_ultra_fast.py - LINEボットと品質統一版
 
 import logging
 import os
@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 超高速キャッシュシステム
-class UltraFastCache:
+# 統一されたキャッシュシステム
+class UnifiedFastCache:
     def __init__(self, max_size: int = 1000):
         self.cache: Dict[str, Dict] = {}
         self.access_times: Dict[str, float] = {}
@@ -30,7 +30,7 @@ class UltraFastCache:
     
     def _generate_key(self, query: str) -> str:
         """クエリからキャッシュキーを生成"""
-        normalized = query.lower().strip()[:200]  # 200文字に制限
+        normalized = query.lower().strip()[:200]
         return hashlib.md5(normalized.encode()).hexdigest()
     
     def get(self, query: str) -> Optional[Dict]:
@@ -53,7 +53,7 @@ class UltraFastCache:
         self.cache[key] = {
             "answer": response.get("answer", ""),
             "timestamp": time.time(),
-            "query_original": query[:100]  # デバッグ用
+            "query_original": query[:100]
         }
         self.access_times[key] = time.time()
         logger.info(f"💾 Cache SET for: {query[:30]}...")
@@ -78,29 +78,31 @@ class UltraFastCache:
             "total_requests": total
         }
 
-# 超高速応答生成クラス
-class UltraFastResponseGenerator:
+# LINEボットと統一された応答生成クラス
+class UnifiedResponseGenerator:
     def __init__(self):
-        self.cache = UltraFastCache(max_size=500)
-        self.response_templates = self._load_response_templates()
+        self.cache = UnifiedFastCache(max_size=500)
+        self.response_templates = self._load_unified_templates()
         
-    def _load_response_templates(self) -> Dict[str, str]:
-        """頻出質問の回答テンプレート"""
+    def _load_unified_templates(self) -> Dict[str, str]:
+        """LINEボットと統一された回答テンプレート"""
         return {
-            "坪単価": "坪単価については、標準仕様で約70〜85万円/坪が目安となります。お客様のご希望される仕様や設備によって変動いたしますので、詳細なお見積りをご提供いたします。",
-            "標準仕様": "標準仕様については、耐震等級3の長期優良住宅を基準とし、高品質な住まいをご提供するため、様々な設備や性能を標準装備としております。",
-            "断熱性能": "断熱性能については、高品質な断熱材を使用し、快適な住環境を実現しています。ZEH基準に対応した省エネ性能で、一年中快適にお過ごしいただけます。",
+            "坪単価": "坪単価についてご案内いたします。標準仕様では約70〜85万円/坪が目安となりますが、お客様のご希望される仕様によって変動いたします。詳細なお見積りをご提供いたしますので、お気軽にお問い合わせください。",
+            "標準仕様": "標準仕様についてご説明いたします。耐震等級3の長期優良住宅を基準とし、高品質な住まいをご提供するため、様々な設備や性能を標準装備としております。詳細は展示場でご確認いただけます。",
+            "断熱性能": "断熱性能については、高品質な断熱材を使用し、快適な住環境を実現しています。ZEH基準に対応した省エネ性能で、一年中快適にお過ごしいただけます。詳細は展示場でご確認いただけます。",
             "耐震性能": "耐震性能については、耐震等級3を標準とし、地震に強い安心・安全な住まいをご提供しています。構造計算に基づいた確かな技術で建築いたします。",
-            "資料請求": "資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。",
-            "見学予約": "展示場見学のご予約を承ります。ご希望の日時をお聞かせください。スタッフが丁寧にご案内いたします。"
+            "資料請求": "資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。3営業日以内にお送いいたします。",
+            "見学予約": "展示場見学を承ります。ご希望の日時をお聞かせください。スタッフが丁寧にご案内いたします。最新の住宅仕様をご確認いただけます。",
+            "ZEH": "ZEH（ゼッチ）は、Net Zero Energy Houseの略で、年間の一次エネルギー消費量が正味ゼロとなる住宅です。太陽光発電システムと高断熱性能により、エネルギーを自給自足できる住宅として注目されています。",
+            "長期優良住宅": "長期優良住宅とは、長期にわたり良好な状態で使用するための措置が講じられた優良な住宅です。耐震性、省エネ性、耐久性などの基準をクリアした住宅で、税制優遇なども受けられます。"
         }
     
-    async def generate_fast_response(self, query: str, user: str) -> Dict[str, Any]:
-        """超高速レスポンス生成"""
+    async def generate_unified_response(self, query: str, user: str) -> Dict[str, Any]:
+        """LINEボットと統一された高品質レスポンス生成"""
         start_time = time.time()
         
         try:
-            # 1. キャッシュチェック（0.001秒以内）
+            # 1. キャッシュチェック
             cached_response = self.cache.get(query)
             if cached_response:
                 return {
@@ -110,8 +112,8 @@ class UltraFastResponseGenerator:
                     "status": "ok"
                 }
             
-            # 2. テンプレート即座マッチング（0.01秒以内）
-            template_response = self._match_template(query)
+            # 2. テンプレート即座マッチング（LINEボットと同じロジック）
+            template_response = self._match_unified_template(query)
             if template_response:
                 result = {
                     "answer": template_response,
@@ -122,8 +124,8 @@ class UltraFastResponseGenerator:
                 self.cache.set(query, result)
                 return result
             
-            # 3. 並列RAG処理（2秒タイムアウト）
-            rag_response = await self._parallel_rag_processing(query)
+            # 3. RAG処理（タイムアウト対応、LINEボットと同じ品質）
+            rag_response = await self._unified_rag_processing(query)
             if rag_response:
                 result = {
                     "answer": rag_response,
@@ -134,8 +136,8 @@ class UltraFastResponseGenerator:
                 self.cache.set(query, result)
                 return result
             
-            # 4. 高速フォールバック
-            fallback_response = self._generate_fallback(query)
+            # 4. 統一フォールバック（LINEボットと同じ品質）
+            fallback_response = self._generate_unified_fallback(query)
             result = {
                 "answer": fallback_response,
                 "processing_time": time.time() - start_time,
@@ -145,36 +147,49 @@ class UltraFastResponseGenerator:
             return result
             
         except Exception as e:
-            logger.error(f"Fast response generation error: {e}")
+            logger.error(f"Unified response generation error: {e}")
             return {
-                "answer": "申し訳ございません。一時的にエラーが発生しました。再度お試しください。",
+                "answer": self._generate_unified_fallback(query),
                 "processing_time": time.time() - start_time,
                 "source": "error",
                 "status": "error"
             }
     
-    def _match_template(self, query: str) -> Optional[str]:
-        """テンプレートマッチング（超高速）"""
+    def _match_unified_template(self, query: str) -> Optional[str]:
+        """LINEボットと統一されたテンプレートマッチング"""
         query_lower = query.lower()
         
-        for keyword, template in self.response_templates.items():
-            if keyword in query_lower:
-                logger.info(f"🎯 Template match: {keyword}")
-                return template
+        # より詳細なキーワードマッチング
+        keyword_mapping = {
+            "坪単価": ["坪単価", "価格", "費用", "コスト", "いくら", "金額"],
+            "標準仕様": ["標準仕様", "仕様", "設備", "標準", "基本"],
+            "断熱性能": ["断熱", "断熱性能", "省エネ", "温度", "暖房", "冷房"],
+            "耐震性能": ["耐震", "地震", "耐震性能", "耐震等級", "安全"],
+            "資料請求": ["資料", "パンフレット", "カタログ", "資料請求"],
+            "見学予約": ["見学", "展示場", "予約", "見に行く", "見たい"],
+            "ZEH": ["ZEH", "ゼッチ", "ぜっち", "省エネ住宅", "エネルギー"],
+            "長期優良住宅": ["長期優良", "優良住宅", "長期"]
+        }
+        
+        for template_key, keywords in keyword_mapping.items():
+            if any(keyword in query_lower for keyword in keywords):
+                logger.info(f"🎯 Unified template match: {template_key}")
+                return self.response_templates.get(template_key)
         
         return None
     
-    async def _parallel_rag_processing(self, query: str) -> Optional[str]:
-        """並列RAG処理（タイムアウト付き）"""
+    async def _unified_rag_processing(self, query: str) -> Optional[str]:
+        """統一されたRAG処理（LINEボットと同じ品質）"""
         try:
             # アプリのグローバル変数を取得
             globals_dict = self._get_app_globals()
             rag_chain = globals_dict.get('rag_chain_template')
             
             if not rag_chain:
+                logger.warning("RAG chain not available")
                 return None
             
-            # 非同期でRAG処理
+            # 非同期でRAG処理（タイムアウト付き）
             def run_rag():
                 try:
                     result = rag_chain.invoke({"query": query})
@@ -183,64 +198,54 @@ class UltraFastResponseGenerator:
                     logger.error(f"RAG processing error: {e}")
                     return None
             
-            # 2秒タイムアウトで実行
+            # 5秒タイムアウトで実行（LINEボットより少し余裕を持たせる）
             loop = asyncio.get_event_loop()
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = loop.run_in_executor(executor, run_rag)
                 try:
-                    rag_result = await asyncio.wait_for(future, timeout=2.0)
+                    rag_result = await asyncio.wait_for(future, timeout=5.0)
                     if rag_result and len(rag_result.strip()) > 10:
-                        # 回答をクリーンアップ
-                        cleaned = self._clean_rag_response(rag_result)
-                        logger.info(f"⚡ Fast RAG success: {len(cleaned)} chars")
-                        return cleaned
+                        # 自然な回答に変換（ingested_textの機能を活用）
+                        enhanced = self._enhance_rag_response(rag_result, query)
+                        logger.info(f"⚡ Unified RAG success: {len(enhanced)} chars")
+                        return enhanced
                 except asyncio.TimeoutError:
-                    logger.warning("⏰ RAG processing timeout (2s)")
+                    logger.warning("⏰ RAG processing timeout (5s)")
                     return None
                     
         except Exception as e:
-            logger.error(f"Parallel RAG error: {e}")
+            logger.error(f"Unified RAG error: {e}")
         
         return None
     
-    def _clean_rag_response(self, raw_response: str) -> str:
-        """RAG回答の高速クリーンアップ"""
-        import re
-        
-        # 最小限のクリーンアップ
-        cleaned = raw_response.strip()
-        
-        # 不要パターンを削除
-        unwanted_patterns = [
-            r"【[^】]*】",
-            r"出典[:：][^\n]*",
-            r"参考[:：][^\n]*",
-            r"関連文書が見つかりました[:：]?\s*",
-        ]
-        
-        for pattern in unwanted_patterns:
-            cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE)
-        
-        # 〜しましょうを除去
-        cleaned = re.sub(r'[^\s]*しましょう[。！？]*', '', cleaned)
-        
-        # 文末調整
-        if not cleaned.endswith(('。', '！', '？')):
-            if cleaned.endswith('です') or cleaned.endswith('ます'):
-                cleaned += '。'
-        
-        return cleaned.strip()
+    def _enhance_rag_response(self, raw_response: str, query: str) -> str:
+        """RAG回答を自然な形に変換（ingested_textと統一）"""
+        try:
+            # ingested_textの自然回答生成機能を使用
+            from rag.ingested_text import create_natural_response
+            enhanced = create_natural_response(raw_response, query)
+            
+            if enhanced and len(enhanced.strip()) > 10:
+                return enhanced
+            else:
+                return self._generate_unified_fallback(query)
+                
+        except Exception as e:
+            logger.error(f"Response enhancement error: {e}")
+            return self._generate_unified_fallback(query)
     
-    def _generate_fallback(self, query: str) -> str:
-        """高速フォールバック応答"""
+    def _generate_unified_fallback(self, query: str) -> str:
+        """LINEボットと統一されたフォールバック応答"""
         if "坪単価" in query or "価格" in query:
-            return "坪単価については、約70〜85万円/坪が目安です。詳細なお見積りをご提供いたします。"
+            return "坪単価についてご案内いたします。お客様のご希望される仕様によって異なりますので、詳細なお見積りをご提供いたします。お気軽にお問い合わせください。"
         elif "仕様" in query:
-            return "住宅仕様について詳しくご案内いたします。展示場でご確認いただけます。"
+            return "住宅の仕様について詳しくご案内いたします。展示場でご確認いただくか、お気軽にお問い合わせください。"
         elif "性能" in query:
-            return "住宅性能について詳しくご説明いたします。お気軽にお問い合わせください。"
+            return "住宅性能について詳しくご説明いたします。耐震性能、断熱性能など、お客様のご要望に合わせてご案内いたします。"
+        elif "資料" in query:
+            return "資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。"
         else:
-            return "お尋ねの件について、詳しくはお問い合わせください。スタッフが丁寧にご対応いたします。"
+            return "お尋ねの内容について詳しくご案内いたします。住宅に関することでしたら何でもお気軽にお問い合わせください。"
     
     def _get_app_globals(self):
         """アプリのグローバル変数を取得"""
@@ -256,23 +261,23 @@ class UltraFastResponseGenerator:
             return {'vectorstore': None, 'rag_chain_template': None, 'llm_instance': None}
 
 # リクエストモデル
-class UltraFastChatRequest(BaseModel):
+class UnifiedChatRequest(BaseModel):
     question: str
     username: str | None = None
 
 # グローバルインスタンス
-ultra_fast_generator = UltraFastResponseGenerator()
+unified_generator = UnifiedResponseGenerator()
 
-@router.post("/", summary="Ultra Fast AI チャット")
-async def ultra_fast_chat_endpoint(req: UltraFastChatRequest, request: Request):
-    """超高速チャットエンドポイント（目標：1秒以内応答）"""
+@router.post("/", summary="統一品質 AI チャット")
+async def unified_chat_endpoint(req: UnifiedChatRequest, request: Request):
+    """LINEボットと同じ品質のチャットエンドポイント"""
     
     overall_start = time.time()
-    logger.info(f"🚀 Ultra fast processing: {req.question[:50]}...")
+    logger.info(f"🚀 Unified processing: {req.question[:50]}...")
     
     try:
-        # 超高速応答生成
-        response = await ultra_fast_generator.generate_fast_response(
+        # 統一品質応答生成
+        response = await unified_generator.generate_unified_response(
             req.question, 
             req.username or "web-user"
         )
@@ -280,23 +285,19 @@ async def ultra_fast_chat_endpoint(req: UltraFastChatRequest, request: Request):
         total_time = time.time() - overall_start
         
         # パフォーマンスログ
-        logger.info(f"✅ Ultra fast response: {total_time:.3f}s, "
+        logger.info(f"✅ Unified response: {total_time:.3f}s, "
                    f"source={response.get('source')}, "
                    f"length={len(response.get('answer', ''))}")
         
-        # 1秒を超えた場合は警告
-        if total_time > 1.0:
-            logger.warning(f"⚠️ Slow response detected: {total_time:.3f}s")
-        
         return {
             "answer": response["answer"],
-            "sources": [],  # ソース情報は非表示
+            "sources": [],  # ソース情報は非表示（LINEボットと統一）
             "status": response["status"],
             "performance": {
                 "total_time": total_time,
                 "processing_time": response.get("processing_time", 0),
                 "source": response.get("source"),
-                "target_achieved": total_time <= 1.0
+                "quality_unified": True  # 品質統一フラグ
             }
         }
         
@@ -304,56 +305,62 @@ async def ultra_fast_chat_endpoint(req: UltraFastChatRequest, request: Request):
         total_time = time.time() - overall_start
         error_id = str(uuid4())[:8]
         
-        logger.error(f"❌ Ultra fast chat error [{error_id}]: {e}")
+        logger.error(f"❌ Unified chat error [{error_id}]: {e}")
         logger.error(traceback.format_exc())
         
+        # LINEボットと同じ品質のエラー応答
+        fallback_answer = unified_generator._generate_unified_fallback(req.question if hasattr(req, 'question') else "")
+        
         return JSONResponse(
-            status_code=500,
+            status_code=200,  # エラーでも200を返す（LINEボットと統一）
             content={
-                "answer": f"システムエラーが発生しました。（エラーID: {error_id}）",
+                "answer": fallback_answer,
                 "sources": [],
-                "status": "error",
+                "status": "fallback",
                 "error_id": error_id,
                 "performance": {
                     "total_time": total_time,
-                    "target_achieved": False
+                    "quality_unified": True
                 }
             }
         )
 
 @router.post("", include_in_schema=False)
-async def ultra_fast_chat_endpoint_slashless(req: UltraFastChatRequest, request: Request):
+async def unified_chat_endpoint_slashless(req: UnifiedChatRequest, request: Request):
     """スラッシュなしエンドポイント"""
-    return await ultra_fast_chat_endpoint(req, request)
+    return await unified_chat_endpoint(req, request)
 
 # パフォーマンス監視エンドポイント
 @router.get("/performance-stats")
-def get_performance_stats():
-    """パフォーマンス統計を取得"""
-    cache_stats = ultra_fast_generator.cache.get_stats()
+def get_unified_performance_stats():
+    """統一品質パフォーマンス統計を取得"""
+    cache_stats = unified_generator.cache.get_stats()
     
     return {
         "cache_performance": cache_stats,
-        "response_templates": len(ultra_fast_generator.response_templates),
-        "target_response_time": "1.0s",
-        "optimization_features": [
-            "Ultra Fast Cache",
-            "Template Matching",
-            "Parallel RAG Processing",
-            "2s Timeout Protection",
-            "Smart Fallback"
+        "response_templates": len(unified_generator.response_templates),
+        "quality_features": [
+            "LINEボットとの品質統一",
+            "自然な回答生成",
+            "コンテキスト理解向上",
+            "統一フォールバック"
         ],
+        "target_metrics": {
+            "response_time": "< 3.0s",
+            "cache_hit_rate": "> 50%",
+            "quality_consistency": "100%"
+        },
         "timestamp": datetime.now().isoformat()
     }
 
 @router.post("/clear-cache")
-def clear_ultra_fast_cache():
-    """キャッシュをクリア"""
-    old_stats = ultra_fast_generator.cache.get_stats()
-    ultra_fast_generator.cache = UltraFastCache(max_size=500)
+def clear_unified_cache():
+    """統一キャッシュをクリア"""
+    old_stats = unified_generator.cache.get_stats()
+    unified_generator.cache = UnifiedFastCache(max_size=500)
     
     return {
-        "status": "cache_cleared",
+        "status": "unified_cache_cleared",
         "previous_stats": old_stats,
         "new_cache_size": 0,
         "timestamp": datetime.now().isoformat()
@@ -361,23 +368,24 @@ def clear_ultra_fast_cache():
 
 # テンプレート管理エンドポイント
 @router.get("/response-templates")
-def get_response_templates():
-    """回答テンプレート一覧を取得"""
+def get_unified_response_templates():
+    """統一回答テンプレート一覧を取得"""
     return {
-        "templates": ultra_fast_generator.response_templates,
-        "count": len(ultra_fast_generator.response_templates),
+        "templates": unified_generator.response_templates,
+        "count": len(unified_generator.response_templates),
+        "unified_with_line_bot": True,
         "timestamp": datetime.now().isoformat()
     }
 
 @router.post("/add-template")
-def add_response_template(keyword: str, response: str):
-    """新しい回答テンプレートを追加"""
-    ultra_fast_generator.response_templates[keyword] = response
+def add_unified_response_template(keyword: str, response: str):
+    """新しい統一回答テンプレートを追加"""
+    unified_generator.response_templates[keyword] = response
     
     return {
-        "status": "template_added",
+        "status": "unified_template_added",
         "keyword": keyword,
         "response_preview": response[:100] + "..." if len(response) > 100 else response,
-        "total_templates": len(ultra_fast_generator.response_templates),
+        "total_templates": len(unified_generator.response_templates),
         "timestamp": datetime.now().isoformat()
     }
