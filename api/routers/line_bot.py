@@ -1,7 +1,4 @@
-# api/routers/line_bot.py - 即座応答最適化・完全修正版
-# - リッチメニューは 0.1秒以内に応答（計算ゼロ）
-# - RAG/LLM は質問時のみ（5秒タイムアウト）
-# - main.py からの診断用 API で使用する公開関数をエクスポート
+# line_bot.py - 修正されたLINE Bot実装
 
 import logging
 import os
@@ -11,263 +8,154 @@ import asyncio
 import traceback
 from datetime import datetime
 from typing import Dict, Optional, Any
-import concurrent.futures
 
 from fastapi import APIRouter, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 
-# ---- 監視（Cloud Logging） ---------------------------------------------------
-try:
-    from google.cloud import logging as cloud_logging
-except Exception:
-    cloud_logging = None
+logger = logging.getLogger(__name__)
 
-# ---- LINE Bot SDK v3 ---------------------------------------------------------
+# LINE Bot SDK v3
 try:
     from linebot.v3 import WebhookHandler
     from linebot.v3.exceptions import InvalidSignatureError
     from linebot.v3.messaging import (
-        Configuration,
-        ApiClient,
-        MessagingApi,
-        ReplyMessageRequest,
-        TextMessage,
+        Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage,
     )
-    from linebot.v3.webhooks import (
-        MessageEvent,
-        TextMessageContent,
-        PostbackEvent,
-        FollowEvent,
-        UnfollowEvent,
-    )
+    from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent
     LINE_SDK_AVAILABLE = True
-    logger = logging.getLogger(__name__)
-    logger.info("✅ LINE Bot SDK v3.x loaded successfully")
+    logger.info("✅ LINE Bot SDK v3 imported successfully")
 except ImportError as e:
-    logging.getLogger(__name__).error(f"LINE Bot SDK not available: {e}")
+    logger.error(f"❌ LINE Bot SDK not available: {e}")
     LINE_SDK_AVAILABLE = False
-
-    class WebhookHandler:  # ダミー（ローカル開発用）
-        def __init__(self, *args, **kwargs): ...
-        def add(self, *args, **kwargs):
+    
+    # ダミークラス
+    class WebhookHandler:
+        def __init__(self, *args, **kwargs): pass
+        def add(self, *args, **kwargs): 
             def decorator(func): return func
             return decorator
-        def handle(self, *args, **kwargs): ...
-
-logger = logging.getLogger(__name__)
-
-# ==============================================================================
-# 監視・メトリクス
-# ==============================================================================
-def make_json_serializable(obj: Any) -> Any:
-    try:
-        if obj is None:
-            return None
-        if isinstance(obj, (str, int, float, bool)):
-            return obj
-        if isinstance(obj, (list, tuple)):
-            return [make_json_serializable(x) for x in obj]
-        if isinstance(obj, dict):
-            return {str(k): make_json_serializable(v) for k, v in obj.items()}
-        if isinstance(obj, set):
-            return list(obj)
-        if hasattr(obj, "__dict__"):
-            return make_json_serializable(obj.__dict__)
-        if hasattr(obj, "isoformat"):
-            return obj.isoformat()
-        return str(obj)
-    except Exception as e:
-        logger.warning(f"Failed to serialize object {type(obj)}: {e}")
-        return str(obj)
-
-def safe_json_dumps(obj: Any, **kwargs) -> str:
-    try:
-        return json.dumps(make_json_serializable(obj), ensure_ascii=False, **kwargs)
-    except Exception as e:
-        logger.error(f"JSON serialization failed: {e}")
-        return '{"error":"serialization_failed"}'
-
-class ComprehensiveMonitor:
-    def __init__(self):
-        self.stats = {
-            "webhook_received": 0,
-            "postback_events": 0,
-            "message_events": 0,
-            "follow_events": 0,
-            "unfollow_events": 0,
-            "errors": 0,
-            "send_success": 0,
-            "send_failures": 0,
-            "response_times": [],
-            "last_activity": None,
-            "instant_responses": 0,
-            "richmenu_responses": 0,
-        }
-        try:
-            if cloud_logging:
-                cloud_logging.Client().setup_logging()
-                logger.info("✅ Cloud Logging setup completed")
-        except Exception as e:
-            logger.warning(f"Cloud Logging setup failed: {e}")
-
-    def log_webhook_event(self, event_type: str, success: bool = True, event_data: dict = None):
-        self.stats["webhook_received"] += 1
-        self.stats["last_activity"] = datetime.now()
-        if event_type == "postback":
-            self.stats["postback_events"] += 1
-        elif event_type == "message":
-            self.stats["message_events"] += 1
-        elif event_type == "follow":
-            self.stats["follow_events"] += 1
-        elif event_type == "unfollow":
-            self.stats["unfollow_events"] += 1
-        if not success:
-            self.stats["errors"] += 1
-
-        data = {
-            "event_type": event_type,
-            "success": success,
-            "timestamp": self.stats["last_activity"].isoformat(),
-            "error_rate": self.get_error_rate(),
-        }
-        if event_data:
-            data["event_data"] = make_json_serializable(event_data)
-
-        msg = safe_json_dumps(data)
-        (logger.info if success else logger.error)(f"LINE Event: {msg}")
-
-    def track_send_result(self, success: bool, error_msg: str = None):
-        if success:
-            self.stats["send_success"] += 1
-        else:
-            self.stats["send_failures"] += 1
-            if error_msg:
-                logger.error(f"Send failure: {error_msg}")
-
-    def track_instant_response(self):
-        self.stats["instant_responses"] += 1
-
-    def track_richmenu_response(self):
-        self.stats["richmenu_responses"] += 1
-
-    def get_error_rate(self) -> float:
-        total = max(self.stats["webhook_received"], 1)
-        return self.stats["errors"] / total
-
-    def get_send_success_rate(self) -> float:
-        total = self.stats["send_success"] + self.stats["send_failures"]
-        return 1.0 if total == 0 else self.stats["send_success"] / total
-
-monitor = ComprehensiveMonitor()
-
-# ==============================================================================
-# LINE Bot 初期化（トークン正規化＆検証）
-# ==============================================================================
-def normalize_line_token(token: Any) -> str:
-    if token is None:
-        return ""
-    if isinstance(token, bytes):
-        try:
-            token = token.decode("utf-8")
-        except UnicodeDecodeError:
-            logger.error("Failed to decode token from bytes")
-            return ""
-    s = str(token).strip()
-    if s.startswith("Bearer "):
-        s = s[7:].strip()
-    if s.startswith("b'") and s.endswith("'"):
-        s = s[2:-1]
-    return s
-
-def get_normalized_line_credentials():
-    raw_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-    raw_secret = os.getenv("LINE_CHANNEL_SECRET")
-    access_token = normalize_line_token(raw_token)
-    channel_secret = normalize_line_token(raw_secret)
-    logger.info(f"Token normalization - Raw type: {type(raw_token)}, Normalized length: {len(access_token)}")
-    logger.info(f"Secret normalization - Raw type: {type(raw_secret)}, Normalized length: {len(channel_secret)}")
-    return access_token, channel_secret
-
-LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = get_normalized_line_credentials()
-
-if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
-    try:
-        configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-        handler = WebhookHandler(LINE_CHANNEL_SECRET)
-        with ApiClient(configuration) as api_client:
-            line_bot_api = MessagingApi(api_client)
-        logger.info("✅ LINE Bot API v3 initialized successfully")
-    except Exception as e:
-        logger.error(f"❌ LINE Bot API initialization failed: {e}")
-        line_bot_api, handler = None, None
-else:
-    line_bot_api, handler = None, None
-    if LINE_SDK_AVAILABLE:
-        logger.warning("⚠️ LINE Bot credentials not found")
-    else:
-        logger.warning("⚠️ LINE Bot SDK not available")
+        def handle(self, *args, **kwargs): pass
 
 router = APIRouter(prefix="/line", tags=["line"])
 
-# ==============================================================================
-# アプリ共有オブジェクト
-# ==============================================================================
-def get_app_globals():
-    """main モジュールから共有オブジェクト取得"""
-    try:
-        import main  # 循環注意：関数内 import
-        return {
-            "vectorstore": getattr(main, "vectorstore", None),
-            "rag_chain_template": getattr(main, "rag_chain_template", None),
-            "llm_instance": getattr(main, "llm_instance", None),
-        }
-    except Exception as e:
-        logger.error(f"Failed to get app globals: {e}")
-        return {"vectorstore": None, "rag_chain_template": None, "llm_instance": None}
+def get_line_credentials():
+    """LINE認証情報を安全に取得"""
+    access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+    channel_secret = os.getenv("LINE_CHANNEL_SECRET")
+    
+    logger.info("Getting LINE credentials...")
+    logger.info(f"Access token type: {type(access_token)}")
+    logger.info(f"Channel secret type: {type(channel_secret)}")
+    
+    return access_token, channel_secret
 
-# ==============================================================================
-# 【即座応答】リッチメニュー処理
-# ==============================================================================
-def detect_richmenu_action_instant(message_text: str) -> str:
-    """即座判定：リッチメニューアクション（完全対応版）"""
-    text_lower = message_text.lower().replace(" ", "").replace("　", "")
+def normalize_line_token_fixed(token: Any) -> str:
+    """修正されたLINEトークン正規化関数"""
+    if token is None:
+        logger.error("Token is None")
+        return ""
+    
+    # bytes オブジェクトの処理
+    if isinstance(token, bytes):
+        try:
+            token = token.decode("utf-8")
+            logger.info("Successfully decoded token from bytes")
+        except UnicodeDecodeError as e:
+            logger.error(f"Failed to decode token from bytes: {e}")
+            return ""
+    
+    # 文字列に変換
+    token_str = str(token).strip()
+    
+    # デバッグ情報
+    logger.info(f"Original token length: {len(token_str)}")
+    logger.info(f"Token starts with: {token_str[:20]}...")
+    
+    # 不要なプレフィックスを削除
+    if token_str.startswith("Bearer "):
+        token_str = token_str[7:].strip()
+        logger.info("Removed 'Bearer ' prefix")
+    
+    # Python のbytes表現を削除
+    if token_str.startswith("b'") and token_str.endswith("'"):
+        token_str = token_str[2:-1]
+        logger.info("Removed Python bytes notation")
+    
+    # 追加のクリーンアップ
+    token_str = token_str.replace('"', '').replace("'", "")
+    
+    # 空白文字を削除
+    if any(char in token_str for char in ['\n', '\r', '\t', ' ']):
+        logger.warning("Token contains whitespace, cleaning...")
+        token_str = ''.join(token_str.split())
+    
+    # 最終検証
+    if not token_str:
+        logger.error("Token is empty after normalization")
+        return ""
+    
+    if len(token_str) < 50:
+        logger.warning(f"Token might be too short: {len(token_str)} characters")
+    
+    logger.info(f"Normalized token length: {len(token_str)}")
+    return token_str
 
-    # 画像のリッチメニューに完全対応（優先度順）
-    if "ai相談" in text_lower or text_lower == "ai相談":
-        return "ai_consultation"
-    elif "ai住まいサイト" in text_lower or text_lower == "ai住まいサイト" or "aiサイト" in text_lower:
-        return "ai_site"
-    elif "資料請求" in text_lower or text_lower == "資料請求":
-        return "document_request"
-    elif "展示場来場予約" in text_lower or text_lower == "展示場来場予約" or "展示場予約" in text_lower or "展示場" in text_lower:
-        return "exhibition_reservation"
-    elif "資金計画" in text_lower or text_lower == "資金計画" or "ローン" in text_lower:
-        return "finance_planning"
-    elif "チャット相談" in text_lower or text_lower == "チャット相談" or "チャット" in text_lower:
-        return "chat_consultation"
-    # 一般的な挨拶
-    elif any(g in text_lower for g in ["こんにちは", "はじめまして", "よろしく"]):
-        return "greeting"
+# LINE Bot初期化（修正版）
+LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = get_line_credentials()
 
-    return "general"
+line_bot_api = None
+handler = None
 
-INSTANT_RICHMENU_RESPONSES: Dict[str, str] = {
-    "ai_consultation": """🤖 AI住まい相談を開始します！
+if LINE_SDK_AVAILABLE:
+    if LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
+        try:
+            # トークンを正規化
+            normalized_token = normalize_line_token_fixed(LINE_CHANNEL_ACCESS_TOKEN)
+            normalized_secret = normalize_line_token_fixed(LINE_CHANNEL_SECRET)
+            
+            if not normalized_token:
+                raise ValueError("Normalized access token is empty")
+            if not normalized_secret:
+                raise ValueError("Normalized channel secret is empty")
+            
+            # Configuration作成
+            configuration = Configuration(access_token=normalized_token)
+            
+            # WebhookHandler作成
+            handler = WebhookHandler(normalized_secret)
+            
+            # MessagingApi作成
+            with ApiClient(configuration) as api_client:
+                line_bot_api = MessagingApi(api_client)
+            
+            logger.info("✅ LINE Bot API v3 initialized successfully with normalized tokens")
+            
+        except Exception as e:
+            logger.error(f"❌ LINE Bot API initialization failed: {e}")
+            logger.error(traceback.format_exc())
+            line_bot_api, handler = None, None
+    else:
+        logger.warning("⚠️ LINE Bot credentials not found")
+        line_bot_api, handler = None, None
+else:
+    logger.warning("⚠️ LINE Bot SDK not available")
+
+# リッチメニュー応答定義（画像に基づく）
+RICHMENU_RESPONSES = {
+    "AI相談": """🤖 AI住まい相談を開始します！
 
 キノエデザインの住まいAIコンシェルジュです。
 住まいに関するご質問をお気軽にどうぞ！
 
-💡 例えば、こんなご質問にお答えします：
-・「坪単価について教えて」
-・「標準仕様はどんな感じ？」
-・「耐震性能について知りたい」
-・「断熱性能はどのくらい？」
-・「間取りのアドバイスが欲しい」
-・「住宅ローンについて相談したい」
+💡 例えば：
+・坪単価について教えて
+・標準仕様はどんな感じ？
+・耐震性能について知りたい
+・断熱性能はどのくらい？
 
 何でもお聞きください😊""",
 
-    "ai_site": """🌐 AI住まいサイトのご案内
+    "AI住まいサイト": """🌐 AI住まいサイトのご案内
 
 キノエデザインの住まい情報サイトをご紹介します。
 
@@ -278,12 +166,11 @@ INSTANT_RICHMENU_RESPONSES: Dict[str, str] = {
 ・お客様の声
 
 📱 アクセス方法：
-こちらのリンクからご覧ください
 https://kinoe-design.com
 
 詳しい住まい情報をご確認いただけます！""",
 
-    "document_request": """📋 資料請求を承ります
+    "資料請求": """📋 資料請求を承ります
 
 以下の情報をお送りください：
 
@@ -301,7 +188,7 @@ https://kinoe-design.com
 
 3営業日以内にお送いたします！""",
 
-    "exhibition_reservation": """📍 展示場来場予約を承ります
+    "展示場来場予約": """📍 展示場来場予約を承ります
 
 以下をメッセージでお送りください：
 
@@ -317,7 +204,7 @@ https://kinoe-design.com
 スタッフ一同、心よりお待ちしております！
 ご質問もお気軽にどうぞ。""",
 
-    "finance_planning": """💰 資金計画・住宅ローン相談
+    "資金計画": """💰 資金計画・住宅ローン相談
 
 住宅購入の資金計画をサポートします。
 
@@ -332,10 +219,9 @@ https://kinoe-design.com
 ・ご希望借入額・返済期間
 ・家族構成・将来計画
 
-最適なプランをご提案いたします！
-お気軽にご相談ください。""",
+最適なプランをご提案いたします！""",
 
-    "chat_consultation": """💬 スタッフとのご相談
+    "チャット相談": """💬 スタッフとのご相談
 
 【対応時間】
 平日・土日：9:00-18:00
@@ -353,346 +239,231 @@ https://kinoe-design.com
 ・住宅性能について
 
 営業時間内でしたら迅速にお返事します。
-お気軽にお声かけください！""",
-
-    "greeting": """こんにちは！
-キノエデザインのAIコンシェルジュです🏠
-
-画面下のメニューから各種サービスをご利用ください。
-
-🤖 AI相談：住まいのご質問
-📋 資料請求：カタログ等
-📍 展示場予約：見学予約
-💰 資金計画：ローン相談
-💬 チャット：スタッフと直接相談
-
-どうぞお気軽にご利用ください！""",
-
-    "unknown": """お気軽にお声かけください。
-ご不明な点がございましたら、下記メニューをご利用ください。
-
-🤖 AI相談　📋 資料請求　📍 展示場予約
-💰 資金計画　💬 チャット相談
-
-スタッフまでお問い合わせください。""",
-
-    "follow_welcome": """🎉 友達追加ありがとうございます！
-
-キノエデザインの住まいAIコンシェルジュです。
-画面下のメニューから各種サービスをご利用いただけます。
-
-🤖 AI相談 / 📋 資料請求 / 📍 展示場予約
-💰 資金計画 / 💬 チャット相談
-
-住まいづくりのお手伝いをさせていただきます！"""
+お気軽にお声かけください！"""
 }
 
-def get_instant_richmenu_response(action: str) -> str:
-    monitor.track_instant_response()
-    monitor.track_richmenu_response()
-    return INSTANT_RICHMENU_RESPONSES.get(action, INSTANT_RICHMENU_RESPONSES["unknown"])
+def detect_richmenu_action(message_text: str) -> str:
+    """リッチメニューアクションを検出"""
+    text_clean = message_text.lower().replace(" ", "").replace("　", "")
+    
+    # 完全一致を優先
+    richmenu_keywords = {
+        "ai相談": "AI相談",
+        "ai住まいサイト": "AI住まいサイト", 
+        "aiサイト": "AI住まいサイト",
+        "資料請求": "資料請求",
+        "展示場来場予約": "展示場来場予約",
+        "展示場予約": "展示場来場予約",
+        "展示場": "展示場来場予約",
+        "資金計画": "資金計画",
+        "チャット相談": "チャット相談",
+        "チャット": "チャット相談"
+    }
+    
+    for keyword, action in richmenu_keywords.items():
+        if keyword in text_clean:
+            return action
+    
+    return "unknown"
 
-# ==============================================================================
-# 質問応答（RAG/LLM）
-# ==============================================================================
-_message_response_cache: Dict[str, str] = {}
-MAX_MESSAGE_CACHE_SIZE = 50
-
-def cache_message_response(message_text: str, response: str):
-    if len(_message_response_cache) >= MAX_MESSAGE_CACHE_SIZE:
-        oldest_key = next(iter(_message_response_cache))
-        del _message_response_cache[oldest_key]
-    _message_response_cache[message_text.lower().strip()] = response
-
-def get_cached_message_response(message_text: str) -> Optional[str]:
-    return _message_response_cache.get(message_text.lower().strip())
-
-async def process_user_question(message_text: str, user_id: str) -> str:
-    try:
-        cached = get_cached_message_response(message_text)
-        if cached:
-            logger.info("💾 Message cache hit")
-            return cached
-
-        globals_dict = get_app_globals()
-        vectorstore = globals_dict.get("vectorstore")
-        rag_chain_template = globals_dict.get("rag_chain_template")
-        llm_instance = globals_dict.get("llm_instance")
-
-        if not vectorstore and not llm_instance:
-            fallback = "申し訳ございません。システムが準備中です。しばらくしてから再度お試しください。"
-            cache_message_response(message_text, fallback)
-            return fallback
-
-        simple_greetings = {
-            "こんにちは": "こんにちは！住まいづくりのご質問をお気軽にどうぞ🏠",
-            "ありがとう": "どういたしまして！他にもご質問がございましたらお聞かせください🙏",
-            "おはよう": "おはようございます！今日も住まいづくりのお手伝いをいたします☀️",
-        }
-        for k, v in simple_greetings.items():
-            if k in message_text:
-                cache_message_response(message_text, v)
-                return v
-
-        if vectorstore and rag_chain_template:
-            logger.info("📚 Processing with RAG...")
-            async def run_rag():
-                loop = asyncio.get_event_loop()
-                def _call():
-                    if hasattr(rag_chain_template, "invoke"):
-                        return rag_chain_template.invoke({"query": message_text})
-                    elif callable(rag_chain_template):
-                        return rag_chain_template({"query": message_text})
-                    return None
-                return await loop.run_in_executor(None, _call)
-            try:
-                result = await asyncio.wait_for(run_rag(), timeout=5.0)
-                answer = result.get("result", "") if result else ""
-                if answer and len(answer) > 10:
-                    answer = re.sub(r'[^\s]*しましょう[。！？]*', '', answer).strip()
-                    if len(answer) > 300:
-                        answer = answer[:280] + "詳細はお問い合わせください。"
-                    cache_message_response(message_text, answer)
-                    logger.info(f"✅ RAG answer generated: {len(answer)} chars")
-                    return answer
-                else:
-                    raise ValueError("Empty or insufficient RAG response")
-            except asyncio.TimeoutError:
-                logger.warning("⏰ RAG timeout")
-                fb = get_emergency_response_for_question(message_text)
-                cache_message_response(message_text, fb)
-                return fb
-            except Exception as e:
-                logger.error(f"❌ RAG error: {e}")
-                fb = get_emergency_response_for_question(message_text)
-                cache_message_response(message_text, fb)
-                return fb
-
-        if llm_instance:
-            logger.info("🤖 Processing with LLM only...")
-            try:
-                prompt = (
-                    "住宅専門アドバイザーとして簡潔に答えてください。\n\n"
-                    f"質問: {message_text}\n\n"
-                    "【重要】\n- 150文字以内\n- 「〜しましょう」禁止\n- 実用的に\n\n"
-                    "回答:"
-                )
-                if hasattr(llm_instance, "invoke"):
-                    resp = llm_instance.invoke(prompt)
-                    result = resp.content if hasattr(resp, "content") else str(resp)
-                else:
-                    resp = llm_instance(prompt)
-                    result = str(resp)
-                result = re.sub(r'[^\s]*しましょう[。！？]*', '', result).strip()
-                cache_message_response(message_text, result)
-                return result
-            except Exception as e:
-                logger.error(f"❌ LLM error: {e}")
-                fb = get_emergency_response_for_question(message_text)
-                cache_message_response(message_text, fb)
-                return fb
-
-        fb = get_emergency_response_for_question(message_text)
-        cache_message_response(message_text, fb)
-        return fb
-
-    except Exception as e:
-        logger.error(f"💥 User question processing error: {e}")
-        fb = "申し訳ございません。エラーが発生しました。再度お試しください。"
-        cache_message_response(message_text, fb)
-        return fb
-
-def get_emergency_response_for_question(message_text: str) -> str:
-    if "坪単価" in message_text:
-        return "坪単価は約70〜85万円/坪が目安です。詳細はお問い合わせください。"
-    elif "資料" in message_text:
-        return "資料をお送りします。お名前、ご住所、お電話番号をお教えください。"
-    elif "見学" in message_text or "展示" in message_text:
-        return "展示場見学を承ります。ご希望日時をお聞かせください。"
-    else:
-        return "申し訳ございません。詳しくはお問い合わせください。"
-
-# ==============================================================================
-# Webhook（署名検証強化）
-# ==============================================================================
-@router.post("/webhook")
-async def line_webhook(request: Request, background_tasks: BackgroundTasks):
-    logger.info("🚀 LINE Webhook endpoint called")
-    if not line_bot_api or not handler:
-        monitor.log_webhook_event("error", False, {"error": "LINE Bot not configured", "sdk": LINE_SDK_AVAILABLE})
-        return {"status": "error", "message": "LINE Bot not configured", "timestamp": datetime.now().isoformat()}
-    try:
-        body = await request.body()
-        signature = request.headers.get("X-Line-Signature", "")
-        logger.info(f"📨 Webhook received - Body length: {len(body)}, Signature exists: {'Yes' if signature else 'No'}")
-
-        if not signature:
-            monitor.log_webhook_event("signature_error", False, {"error": "missing_signature", "body_length": len(body)})
-            return {"status": "error", "message": "Missing signature", "timestamp": datetime.now().isoformat()}
-
-        try:
-            body_text = body.decode("utf-8")
-            logger.debug(f"Body preview: {body_text[:200]}...")
-            handler.handle(body_text, signature)
-        except InvalidSignatureError as sig_error:
-            monitor.log_webhook_event("signature_error", False, {"error": "invalid_signature", "details": str(sig_error)})
-            return {"status": "signature_error", "timestamp": datetime.now().isoformat()}
-        except Exception as handle_error:
-            monitor.log_webhook_event("handler_error", False, {"error": str(handle_error), "type": type(handle_error).__name__})
-            return {"status": "handler_error", "timestamp": datetime.now().isoformat()}
-
-        monitor.log_webhook_event("webhook_success", True, {"body_length": len(body)})
-        return {"status": "ok", "timestamp": datetime.now().isoformat()}
-
-    except Exception as e:
-        monitor.log_webhook_event("unexpected_error", False, {"error": str(e), "type": type(e).__name__})
-        logger.error(traceback.format_exc())
-        return {"status": "error_handled", "error": str(e), "timestamp": datetime.now().isoformat()}
-
-# ==============================================================================
-# イベントハンドラ（即座応答）
-# ==============================================================================
-if LINE_SDK_AVAILABLE and handler:
-
-    @handler.add(MessageEvent, message=TextMessageContent)
-    def handle_text_message(event):
-        """メッセージイベント：リッチメニュー最優先で即座応答"""
-        start = datetime.now()
-        try:
-            user_id = event.source.user_id
-            message_text = event.message.text
-            logger.info(f"📱 Message from {user_id}: '{message_text}'")
-
-            # 1) リッチメニュー即座判定
-            action = detect_richmenu_action_instant(message_text)
-            if action != "general":
-                logger.info(f"⚡ INSTANT richmenu response for action: {action}")
-                answer = get_instant_richmenu_response(action)
-                send_ok = send_line_reply_safe(event.reply_token, answer)
-
-                dur = (datetime.now() - start).total_seconds()
-                monitor.log_webhook_event("message", send_ok, {
-                    "user_id": user_id,
-                    "processing_time": dur,
-                    "message_len": len(message_text),
-                    "response_len": len(answer),
-                    "response_type": "instant_richmenu",
-                    "action": action,
-                    "instant_response": True,
-                })
-                logger.info(f"✅ INSTANT richmenu reply sent={send_ok} time={dur:.3f}s action={action}")
-                return
-
-            # 2) 通常の質問 → RAG/LLM（5秒タイムアウト）
-            logger.info("🔄 Processing user question with RAG/LLM...")
-            def _process_question():
-                try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    answer_local = loop.run_until_complete(process_user_question(message_text, user_id))
-                    loop.close()
-                    return answer_local
-                except Exception as e:
-                    logger.error(f"Question processing error: {e}")
-                    return get_emergency_response_for_question(message_text)
-
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(_process_question)
-                try:
-                    answer = future.result(timeout=5)
-                except concurrent.futures.TimeoutError:
-                    logger.error("❌ Question processing timeout (5s)")
-                    answer = "処理に時間がかかっています。もう一度お試しください。"
-
-            send_ok = send_line_reply_safe(event.reply_token, answer)
-            dur = (datetime.now() - start).total_seconds()
-            monitor.log_webhook_event("message", send_ok, {
-                "user_id": user_id,
-                "processing_time": dur,
-                "message_len": len(message_text),
-                "response_len": len(answer),
-                "response_type": "user_question",
-            })
-            logger.info(f"✅ Question reply sent={send_ok} time={dur:.2f}s")
-
-        except Exception as e:
-            dur = (datetime.now() - start).total_seconds()
-            logger.error(f"❌ Message handler error: {e}")
-            logger.error(traceback.format_exc())
-            monitor.log_webhook_event("message", False, {
-                "error": str(e),
-                "type": type(e).__name__,
-                "processing_time": dur,
-            })
-            try:
-                emergency = get_emergency_response_for_question(message_text if 'message_text' in locals() else "")
-                send_line_reply_safe(event.reply_token, emergency)
-                logger.info("🆘 Emergency response sent")
-            except Exception as final_error:
-                logger.error(f"💥 Final emergency error: {final_error}")
-
-    @handler.add(PostbackEvent)
-    def handle_postback(event):
-        """Postbackイベント：完全即座応答（全メニュー対応）"""
-        start = datetime.now()
-        try:
-            user_id = event.source.user_id
-            postback_data = event.postback.data or ""
-            logger.info(f"🔙 INSTANT postback from {user_id}: {postback_data}")
-
-            action = "unknown"
-            try:
-                if "action=" in postback_data:
-                    for part in postback_data.split("&"):
-                        if part.startswith("action="):
-                            action = part.split("=", 1)[1]
-                            break
-            except Exception as e:
-                logger.error(f"Postback parse error: {e}")
-
-            response_text = get_instant_richmenu_response(action)
-
-            send_ok = send_line_reply_safe(event.reply_token, response_text)
-            dur = (datetime.now() - start).total_seconds()
-
-            monitor.log_webhook_event("postback", send_ok, {
-                "user_id": user_id,
-                "action": action,
-                "processing_time": dur,
-                "response_type": "instant_postback",
-                "instant_response": True,
-            })
-            logger.info(f"✅ INSTANT postback reply sent={send_ok} time={dur:.3f}s action={action}")
-
-        except Exception as e:
-            dur = (datetime.now() - start).total_seconds()
-            logger.error(f"💥 Postback handler error: {e}")
-            monitor.log_webhook_event("postback", False, {"error": str(e), "processing_time": dur})
-
-# ==============================================================================
-# 送信（安全版）
-# ==============================================================================
 def send_line_reply_safe(reply_token: str, message_text: str) -> bool:
+    """安全なLINE返信送信"""
+    if not line_bot_api:
+        logger.error("LINE Bot API not initialized")
+        return False
+    
     try:
-        safe_token = normalize_line_token(LINE_CHANNEL_ACCESS_TOKEN)
-        if not safe_token:
-            monitor.track_send_result(False, "No valid access token")
+        # トークンの再正規化
+        normalized_token = normalize_line_token_fixed(LINE_CHANNEL_ACCESS_TOKEN)
+        if not normalized_token:
+            logger.error("Failed to normalize access token for reply")
             return False
-        configuration = Configuration(access_token=safe_token)
+        
+        # 新しいConfiguration作成
+        configuration = Configuration(access_token=normalized_token)
+        
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
+            
+            # メッセージ送信
             messaging_api.reply_message_with_http_info(
                 ReplyMessageRequest(
                     reply_token=reply_token,
                     messages=[TextMessage(text=message_text)]
                 )
             )
-        monitor.track_send_result(True)
-        logger.info(f"✅ Reply sent (len={len(message_text)})")
+        
+        logger.info(f"✅ Reply sent successfully (length: {len(message_text)})")
         return True
+        
     except Exception as e:
-        err = f"Failed to send reply: {e}"
-        logger.error(f"❌ {err}")
+        logger.error(f"❌ Failed to send LINE reply: {e}")
         logger.error(traceback.format_exc())
-        monitor.track_send_result(False, err)
         return False
+
+# Webhook エンドポイント
+@router.post("/webhook")
+async def line_webhook_fixed(request: Request, background_tasks: BackgroundTasks):
+    """修正されたLINE Webhook"""
+    logger.info("🚀 LINE Webhook called")
+    
+    if not line_bot_api or not handler:
+        logger.error("❌ LINE Bot not configured properly")
+        return {"status": "error", "message": "LINE Bot not configured"}
+    
+    try:
+        body = await request.body()
+        signature = request.headers.get("X-Line-Signature", "")
+        
+        logger.info(f"📨 Webhook - Body length: {len(body)}, Has signature: {'Yes' if signature else 'No'}")
+        
+        if not signature:
+            logger.error("❌ Missing X-Line-Signature header")
+            return {"status": "error", "message": "Missing signature"}
+        
+        try:
+            body_text = body.decode("utf-8")
+            logger.info(f"📄 Body preview: {body_text[:200]}...")
+            
+            # イベント処理
+            handler.handle(body_text, signature)
+            
+            logger.info("✅ Webhook processed successfully")
+            return {"status": "ok", "timestamp": datetime.now().isoformat()}
+            
+        except InvalidSignatureError as sig_error:
+            logger.error(f"❌ Invalid signature: {sig_error}")
+            return {"status": "signature_error", "timestamp": datetime.now().isoformat()}
+            
+    except Exception as e:
+        logger.error(f"💥 Webhook error: {e}")
+        logger.error(traceback.format_exc())
+        return {"status": "error", "error": str(e), "timestamp": datetime.now().isoformat()}
+
+# イベントハンドラ（修正版）
+if LINE_SDK_AVAILABLE and handler:
+    
+    @handler.add(MessageEvent, message=TextMessageContent)
+    def handle_text_message_fixed(event):
+        """修正されたメッセージハンドラ"""
+        start_time = datetime.now()
+        
+        try:
+            user_id = event.source.user_id
+            message_text = event.message.text
+            reply_token = event.reply_token
+            
+            logger.info(f"📱 Message from {user_id}: '{message_text}'")
+            
+            # リッチメニューアクション検出
+            action = detect_richmenu_action(message_text)
+            
+            if action != "unknown":
+                logger.info(f"🎯 Richmenu action detected: {action}")
+                response_text = RICHMENU_RESPONSES.get(action, RICHMENU_RESPONSES.get("unknown", "申し訳ございません。"))
+            else:
+                logger.info("💬 General message processing")
+                # 一般的な質問処理
+                response_text = process_general_question(message_text)
+            
+            # 返信送信
+            success = send_line_reply_safe(reply_token, response_text)
+            
+            duration = (datetime.now() - start_time).total_seconds()
+            logger.info(f"✅ Message processed: success={success}, time={duration:.3f}s")
+            
+        except Exception as e:
+            logger.error(f"💥 Message handler error: {e}")
+            logger.error(traceback.format_exc())
+            
+            # 緊急時の応答
+            try:
+                emergency_text = "申し訳ございません。一時的にエラーが発生しました。しばらくしてから再度お試しください。"
+                send_line_reply_safe(event.reply_token, emergency_text)
+            except Exception as final_error:
+                logger.error(f"💥 Emergency response failed: {final_error}")
+    
+    @handler.add(PostbackEvent)
+    def handle_postback_fixed(event):
+        """修正されたPostbackハンドラ"""
+        try:
+            user_id = event.source.user_id
+            postback_data = event.postback.data or ""
+            
+            logger.info(f"🔙 Postback from {user_id}: {postback_data}")
+            
+            # Postbackデータの解析
+            if "action=" in postback_data:
+                action_value = ""
+                for part in postback_data.split("&"):
+                    if part.startswith("action="):
+                        action_value = part.split("=", 1)[1]
+                        break
+                
+                response_text = RICHMENU_RESPONSES.get(action_value, "ご利用ありがとうございます。")
+            else:
+                response_text = "メニューからお選びください。"
+            
+            send_line_reply_safe(event.reply_token, response_text)
+            logger.info("✅ Postback processed successfully")
+            
+        except Exception as e:
+            logger.error(f"💥 Postback handler error: {e}")
+
+def process_general_question(message_text: str) -> str:
+    """一般的な質問の処理"""
+    try:
+        # RAGシステムとの連携
+        globals_dict = get_app_globals()
+        if globals_dict.get('rag_chain_template'):
+            result = globals_dict['rag_chain_template'].invoke({"query": message_text})
+            return result.get("result", "申し訳ございません。お答えできませんでした。")
+        else:
+            return "ご質問ありがとうございます。詳しくはお問い合わせください。"
+            
+    except Exception as e:
+        logger.error(f"Error processing general question: {e}")
+        return "申し訳ございません。エラーが発生しました。"
+
+def get_app_globals():
+    """アプリのグローバル変数を取得"""
+    try:
+        import main
+        return {
+            'vectorstore': getattr(main, 'vectorstore', None),
+            'rag_chain_template': getattr(main, 'rag_chain_template', None),
+            'llm_instance': getattr(main, 'llm_instance', None)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get app globals: {e}")
+        return {}
+
+# デバッグエンドポイント
+@router.get("/debug")
+def line_debug_info():
+    """LINE Bot デバッグ情報"""
+    return {
+        "line_sdk_available": LINE_SDK_AVAILABLE,
+        "line_bot_api_initialized": line_bot_api is not None,
+        "handler_initialized": handler is not None,
+        "credentials_set": {
+            "access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
+            "channel_secret_set": bool(LINE_CHANNEL_SECRET)
+        },
+        "normalized_token_length": len(normalize_line_token_fixed(LINE_CHANNEL_ACCESS_TOKEN)) if LINE_CHANNEL_ACCESS_TOKEN else 0,
+        "timestamp": datetime.now().isoformat()
+    }
+
+@router.get("/test-credentials")
+def test_line_credentials():
+    """LINE認証情報テスト"""
+    access_token, channel_secret = get_line_credentials()
+    
+    return {
+        "original_token_type": str(type(access_token)),
+        "original_secret_type": str(type(channel_secret)),
+        "normalized_token_length": len(normalize_line_token_fixed(access_token)) if access_token else 0,
+        "normalized_secret_length": len(normalize_line_token_fixed(channel_secret)) if channel_secret else 0,
+        "token_preview": normalize_line_token_fixed(access_token)[:10] + "..." if access_token else "None",
+        "timestamp": datetime.now().isoformat()
+    }
