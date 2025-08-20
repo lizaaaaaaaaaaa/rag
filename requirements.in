@@ -46,3 +46,4 @@ google-cloud-scheduler
 functions-framework
 pytest
 sqlalchemy
+asyncpg
