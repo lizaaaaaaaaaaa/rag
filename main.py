@@ -1,424 +1,476 @@
-# main.py - 統合改善版（ハルチネーション対策 + 高速応答 + 自動更新）
-import os
-import sys
+"""
+同意管理システム メインAPI
+全コンポーネントの統合・エントリーポイント
+
+統合コンポーネント:
+- 同意ゲート管理
+- WORM ストレージ
+- 監査システム
+- ライフサイクル管理
+- 自動削除システム
+- 日次マニフェスト
+- 監査ダッシュボード
+
+Requirements:
+- FastAPI
+- uvicorn
+- google-cloud-*
+- sqlalchemy[asyncio]
+"""
+
+import asyncio
 import logging
-import traceback
+import sys
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, Any
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import uvicorn
 
-# ログ設定
+# =========================
+# 内部モジュール
+# =========================
+from api.config import settings
+from .database import init_database, close_database
+from .middleware import (
+    ConsentGateMiddleware,
+    AuditLoggingMiddleware,
+    SecurityHeadersMiddleware,
+    RateLimitMiddleware,
+)
+
+# APIルーター
+from .api.routers.consent_gate import router as consent_gate_router
+from .api.routers.audit_system import router as audit_router
+from .api.routers.lifecycle import router as lifecycle_router
+from .api.routers.deletion import router as deletion_router
+from .api.routers.manifest import router as manifest_router
+from .api.routers.dashboard import router as dashboard_router
+
+# サービス
+from .api.services.worm_service import create_worm_manager
+from .api.services.manifest_service import ManifestService
+from .api.services.lifecycle_service import ConsentLifecycleManager
+from .api.services.auto_deletion_service import AutoDeletionService
+
+# ユーティリティ
+from .utils.health_check import HealthChecker
+from .utils.monitoring import setup_monitoring
+from .utils.exception_handlers import setup_exception_handlers
+
+# =========================
+# ロギング設定
+# =========================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("app.log", mode="a") if os.getenv("ENV") != "production" else logging.StreamHandler(sys.stdout),
+        logging.FileHandler("/app/logs/consent_management.log")
+        if settings.environment != "development"
+        else logging.StreamHandler(),
     ],
 )
 logger = logging.getLogger(__name__)
 
-# 環境変数設定
-if os.getenv("ENV") != "production":
+# グローバルサービスインスタンス
+app_services: Dict[str, Any] = {}
+
+# ==================================================
+# アプリケーションライフサイクル管理
+# ==================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """アプリケーションライフサイクル管理"""
+    logger.info("Starting Consent Management System...")
+
     try:
-        from dotenv import load_dotenv
-        load_dotenv(".env")
-        logger.info(">>> Loaded .env for local development")
+        # 1. DB初期化
+        await init_database()
+        logger.info("Database initialized")
+
+        # 2. WORMストレージ初期化
+        worm_manager = await create_worm_manager(
+            project_id=settings.gcp_project_id,
+            bucket_name=settings.worm_bucket_name,
+            kms_key_ring=settings.kms_key_ring,
+            kms_key_name=settings.kms_key_name,
+            location=settings.gcp_region,
+        )
+        app_services["worm_manager"] = worm_manager
+        logger.info("WORM storage initialized")
+
+        # 3. マニフェストサービス
+        manifest_service = ManifestService(
+            worm_manager=worm_manager,
+            project_id=settings.gcp_project_id,
+            notification_config=settings.notification_config,
+        )
+        app_services["manifest_service"] = manifest_service
+        logger.info("Manifest service initialized")
+
+        # 4. ライフサイクル管理
+        lifecycle_manager = ConsentLifecycleManager(
+            worm_manager=worm_manager,
+            manifest_service=manifest_service,
+            project_id=settings.gcp_project_id,
+            notification_config=settings.notification_config,
+        )
+        app_services["lifecycle_manager"] = lifecycle_manager
+        logger.info("Lifecycle manager initialized")
+
+        # 5. 自動削除
+        deletion_service = AutoDeletionService(
+            worm_manager=worm_manager,
+            manifest_service=manifest_service,
+            project_id=settings.gcp_project_id,
+            notification_config=settings.notification_config,
+        )
+        app_services["deletion_service"] = deletion_service
+        logger.info("Auto-deletion service initialized")
+
+        # 6. ヘルスチェッカー
+        health_checker = HealthChecker(app_services)
+        app_services["health_checker"] = health_checker
+        logger.info("Health checker initialized")
+
+        # 7. 監視
+        if settings.enable_monitoring:
+            await setup_monitoring(settings)
+            logger.info("Monitoring system setup completed")
+
+        # 8. 本番スケジューラー
+        if settings.environment == "production":
+            await setup_production_schedules()
+            logger.info("Production schedules setup completed")
+
+        logger.info("Consent Management System startup completed successfully")
+        yield
+
     except Exception as e:
-        logger.warning(f".env load skipped: {e}")
+        logger.error(f"Failed to start application: {e}")
+        raise
 
-# モード設定
-ULTRA_FAST_MODE = os.getenv("ULTRA_FAST_MODE", "true").lower() == "true"
-ENABLE_AUTO_UPDATE = os.getenv("ENABLE_AUTO_UPDATE", "true").lower() == "true"
-ANTI_HALLUCINATION_MODE = os.getenv("ANTI_HALLUCINATION_MODE", "true").lower() == "true"
+    finally:
+        logger.info("Shutting down Consent Management System...")
+        try:
+            await close_database()
+            logger.info("Database connections closed")
+            app_services.clear()
+            logger.info("Services cleanup completed")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
+        logger.info("Consent Management System shutdown completed")
 
-if ULTRA_FAST_MODE:
-    logger.info("🚀 Ultra Fast Mode Enabled - Target: Sub-1-second web responses")
-    os.environ["LANGCHAIN_TRACING_V2"] = "false"
-    os.environ["DISABLE_LANGSMITH"] = "true"
-
-if ANTI_HALLUCINATION_MODE:
-    logger.info("🛡️ Anti-Hallucination Mode Enabled - Enhanced verification")
-
-if ENABLE_AUTO_UPDATE:
-    logger.info("🔄 Auto Update Mode Enabled - Scheduled information updates")
-
-# グローバル変数
-vectorstore = None
-rag_chain_template = None
-llm_instance = None
-
-# FastAPI アプリ初期化
+# ==================================================
+# FastAPIアプリケーション作成
+# ==================================================
 app = FastAPI(
-    title="Enhanced RAG System",
-    description="高速応答 + ハルチネーション対策 + 自動更新対応 RAG システム",
-    version="3.0.0",
-    docs_url="/docs" if os.getenv("ENV") != "production" else None,
-    redoc_url="/redoc" if os.getenv("ENV") != "production" else None,
+    title="Consent Management System",
+    description="""
+    同意管理システム API
+
+    機能:
+    - 同意収集・管理
+    - LIFF連携
+    - WORM ストレージ
+    - 監査証跡管理
+    - ライフサイクル管理
+    - 自動削除機能
+    - コンプライアンス報告
+    """,
+    version="1.0.0",
+    docs_url="/docs" if settings.environment != "production" else None,
+    redoc_url="/redoc" if settings.environment != "production" else None,
+    openapi_url="/openapi.json" if settings.environment != "production" else None,
+    lifespan=lifespan,
 )
 
-# セキュリティ（本番時）
-if os.getenv("ENV") == "production":
-    app.add_middleware(
-        TrustedHostMiddleware,
-        allowed_hosts=[
-            "rag-api-190389115361.asia-northeast1.run.app",
-            "*.run.app",
-            "localhost",
-            "*",  # 必要に応じて制限
-        ],
-    )
-
-# CORS設定
+# ==================================================
+# ミドルウェア設定
+# ==================================================
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://leafy-kitsune-eb4566.netlify.app",
-        "https://preview.studio.site",
-        "https://*.studio.site",
-        "https://liff.line.me",
-        "https://liff-v2.line.me",
-        f"https://liff.line.me/{os.environ.get('LIFF_ID', '2007887876-vMNe74eX')}",
-        "https://rag-frontend-190389115361.asia-northeast1.run.app",
-        "http://localhost:3000",
-        "http://localhost:8501",
-        "http://127.0.0.1:8501",
-        "*",
-    ],
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["*"],
-    max_age=3600,
 )
 
-# パフォーマンス監視ミドルウェア
-@app.middleware("http")
-async def performance_monitoring(request: Request, call_next):
-    start_time = datetime.now()
-    is_critical_endpoint = any(path in str(request.url) for path in ["/chat", "/line/webhook"])
-    response = await call_next(request)
-    process_time = (datetime.now() - start_time).total_seconds()
-    if is_critical_endpoint:
-        if process_time > 1.0:
-            logger.warning(f"🐌 Slow critical endpoint: {request.method} {request.url.path} took {process_time:.2f}s")
-        elif process_time <= 0.5:
-            logger.info(f"⚡ Fast response: {request.method} {request.url.path} - {process_time:.3f}s")
-    response.headers["X-Process-Time"] = str(process_time)
-    response.headers["X-Performance-Target"] = "1.0s" if is_critical_endpoint else "5.0s"
-    response.headers["X-Timestamp"] = start_time.isoformat()
-    return response
+# Trusted Hosts（本番）
+if settings.environment == "production":
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 
-# 起動時処理
-@app.on_event("startup")
-async def integrated_startup():
-    global vectorstore, rag_chain_template, llm_instance
+# セキュリティヘッダー / レート制限 / 監査ログ / 同意ゲート
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.rate_limit_per_minute)
+app.add_middleware(AuditLoggingMiddleware)
+app.add_middleware(
+    ConsentGateMiddleware,
+    excluded_paths=[
+        "/health",
+        "/api/consent/submit",
+        "/api/consent/check",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+    ],
+)
 
-    logger.info("🚀 Integrated Enhanced RAG System Startup")
-    logger.info("=" * 70)
+# 例外ハンドラー
+setup_exception_handlers(app)
 
-    startup_features = []
-    if ULTRA_FAST_MODE:
-        startup_features.append("Ultra Fast Web Responses")
-    if ANTI_HALLUCINATION_MODE:
-        startup_features.append("Anti-Hallucination Verification")
-    if ENABLE_AUTO_UPDATE:
-        startup_features.append("Auto Information Updates")
-    logger.info(f"🎯 Active Features: {', '.join(startup_features)}")
+# ==================================================
+# 依存性注入
+# ==================================================
+def get_worm_manager():
+    if "worm_manager" not in app_services:
+        raise HTTPException(status_code=503, detail="WORM manager not available")
+    return app_services["worm_manager"]
 
-    # 1) LLM初期化
+def get_manifest_service():
+    if "manifest_service" not in app_services:
+        raise HTTPException(status_code=503, detail="Manifest service not available")
+    return app_services["manifest_service"]
+
+def get_lifecycle_manager():
+    if "lifecycle_manager" not in app_services:
+        raise HTTPException(status_code=503, detail="Lifecycle manager not available")
+    return app_services["lifecycle_manager"]
+
+def get_deletion_service():
+    if "deletion_service" not in app_services:
+        raise HTTPException(status_code=503, detail="Deletion service not available")
+    return app_services["deletion_service"]
+
+def get_health_checker():
+    if "health_checker" not in app_services:
+        raise HTTPException(status_code=503, detail="Health checker not available")
+    return app_services["health_checker"]
+
+# ==================================================
+# ルーター登録
+# ==================================================
+app.include_router(consent_gate_router, dependencies=[Depends(get_worm_manager)])
+app.include_router(audit_router, dependencies=[Depends(get_worm_manager)])
+app.include_router(lifecycle_router, dependencies=[Depends(get_lifecycle_manager)])
+app.include_router(deletion_router, dependencies=[Depends(get_deletion_service)])
+app.include_router(manifest_router, dependencies=[Depends(get_manifest_service)])
+app.include_router(dashboard_router, dependencies=[Depends(get_worm_manager)])
+
+# ==================================================
+# 静的ファイル配信
+# ==================================================
+app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/frontend", StaticFiles(directory="frontend", html=True), name="frontend")
+
+# ==================================================
+# ルート／ヘルス／情報
+# ==================================================
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    return """
+    <!DOCTYPE html>
+    <html lang="ja">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>同意管理システム</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 2rem; background: #f5f7fa; }
+            .container { max-width: 800px; margin: 0 auto; background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            h1 { color: #2d3748; margin-bottom: 1rem; }
+            .link-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 2rem; }
+            .link-card { padding: 1rem; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #4a5568; transition: all 0.2s; }
+            .link-card:hover { border-color: #4299e1; color: #2b6cb0; transform: translateY(-2px); }
+            .status { padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.9rem; font-weight: 600; }
+            .status-ok { background: #d4edda; color: #155724; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🔒 同意管理システム</h1>
+            <div class="status status-ok">システム稼働中</div>
+
+            <div class="link-grid">
+                <a href="/frontend/audit_dashboard.html" class="link-card">
+                    <h3>📊 監査ダッシュボード</h3>
+                    <p>リアルタイム監査・統計</p>
+                </a>
+                <a href="/api/docs" class="link-card">
+                    <h3>📖 API ドキュメント</h3>
+                    <p>開発者向け API 仕様</p>
+                </a>
+                <a href="/health" class="link-card">
+                    <h3>🏥 ヘルスチェック</h3>
+                    <p>システム状態確認</p>
+                </a>
+                <a href="/api/audit/compliance/report?start_date=2025-08-01&end_date=2025-08-19" class="link-card">
+                    <h3>📋 コンプライアンス</h3>
+                    <p>法的要件準拠状況</p>
+                </a>
+            </div>
+
+            <div style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid #e2e8f0; font-size: 0.9rem; color: #718096;">
+                <p><strong>同意管理システム v1.0.0</strong></p>
+                <p>法的要件対応: 電気通信事業法、個人情報保護法、GDPR</p>
+                <p>データ保全: 5年WORM、暗号化、監査証跡</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+@app.get("/health")
+async def health_check(health_checker: HealthChecker = Depends(get_health_checker)):
+    """システムヘルスチェック"""
     try:
-        logger.info("🧠 Initializing LLM...")
-        from llm.llm_runner import load_llm
-        llm, tokenizer, max_tokens = load_llm()
-        llm_instance = llm
-        logger.info("✅ LLM initialized successfully")
-        _ = llm.invoke("テスト")  # 簡易テスト
-        logger.info("✅ LLM test successful")
-    except Exception as e:
-        logger.error(f"❌ LLM initialization failed: {e}")
-        llm_instance = None
-
-    # 2) ベクトルストア初期化
-    try:
-        logger.info("🔍 Loading vectorstore...")
-        from rag.ingested_text import load_vectorstore
-        vectorstore = load_vectorstore()
-        if vectorstore:
-            logger.info("✅ Vectorstore loaded successfully")
-            test_results = vectorstore.similarity_search("住宅", k=1)
-            logger.info(f"✅ Vectorstore test successful - found {len(test_results)} results")
-        else:
-            logger.warning("⚠️ Vectorstore is None")
-    except Exception as e:
-        logger.error(f"❌ Vectorstore initialization failed: {e}")
-        vectorstore = None
-
-    # 3) RAGチェーン初期化（統一品質版） ←★修正ポイント
-    try:
-        if vectorstore and llm_instance:
-            logger.info("⛓️ Building unified quality RAG chain...")
-            if ULTRA_FAST_MODE:
-                try:
-                    # 修正された超高速RAGチェーン（signal削除版）
-                    from rag.fast_rag_chain import get_ultra_fast_rag_chain
-                    rag_chain_template = get_ultra_fast_rag_chain(vectorstore=vectorstore, return_source=True)
-                    logger.info("✅ Unified Ultra Fast RAG chain created")
-                except Exception as fast_error:
-                    logger.warning(f"Ultra fast chain fallback: {fast_error}")
-                    # フォールバック：標準RAGチェーン
-                    from rag.ingested_text import get_rag_chain
-                    rag_chain_template = get_rag_chain(vectorstore=vectorstore, return_source=True)
-                    logger.info("✅ Standard RAG chain created (fallback)")
-            else:
-                # 標準RAGチェーン（品質統一）
-                from rag.ingested_text import get_rag_chain
-                rag_chain_template = get_rag_chain(vectorstore=vectorstore, return_source=True)
-                logger.info("✅ Standard RAG chain created")
-
-            # 統一品質テスト
-            test_result = rag_chain_template.invoke({"query": "坪単価について教えて"})
-            test_answer = test_result.get("result", "") if test_result else ""
-            logger.info(f"✅ RAG chain quality test: {len(test_answer)} chars")
-        else:
-            logger.warning("⚠️ RAG chain not created - missing components")
-            rag_chain_template = None
-    except Exception as e:
-        logger.error(f"❌ RAG chain creation failed: {e}")
-        rag_chain_template = None
-
-    # 4) 自動更新システム初期化
-    if ENABLE_AUTO_UPDATE:
-        try:
-            logger.info("🔄 Initializing auto-update system...")
-            logger.info("✅ Auto-update system initialized")
-        except Exception as e:
-            logger.error(f"❌ Auto-update initialization failed: {e}")
-
-    # 5) システム状態ログ
-    system_health = {
-        "llm": llm_instance is not None,
-        "vectorstore": vectorstore is not None,
-        "rag_chain": rag_chain_template is not None,
-        "ultra_fast_mode": ULTRA_FAST_MODE,
-        "anti_hallucination": ANTI_HALLUCINATION_MODE,
-        "auto_update": ENABLE_AUTO_UPDATE,
-    }
-    healthy_components = sum(system_health.values())
-    total_components = len(system_health)
-
-    logger.info("📊 System Health Check:")
-    for component, status in system_health.items():
-        status_icon = "✅" if status else "❌"
-        logger.info(f"  {component}: {status_icon}")
-
-    if healthy_components >= 3:
-        logger.info("🎉 Integrated Enhanced RAG System Ready!")
-        logger.info("⚡ Performance Targets: Web Chat <1s, LINE Bot <3s")
-    else:
-        logger.warning(f"⚠️ System partially operational ({healthy_components}/{total_components})")
-
-    logger.info("=" * 70)
-
-# ルーター登録（統合版） ←★修正ポイント
-try:
-    # 従来のルーターをインポート
-    from api.routers import upload, google_oauth, healthz, line_login
-
-    # チャットルーター（品質統一版）
-    if ULTRA_FAST_MODE:
-        # 修正された超高速チャットルーター（LINEボットと品質統一）
-        from api.routers.chat_ultra_fast import router as ultra_fast_chat_router
-        app.include_router(ultra_fast_chat_router, prefix="/chat", tags=["unified-fast-chat"])
-        logger.info("✅ Unified Ultra Fast Chat router loaded")
-    else:
-        # 標準チャットルーター
-        from api.routers import chat
-        app.include_router(chat.router, prefix="/chat", tags=["chat"])
-        logger.info("✅ Standard Chat router loaded")
-
-    # LINEボットルーター（品質統一確保）
-    if ANTI_HALLUCINATION_MODE:
-        from api.routers.line_bot_fixed import router as fixed_line_router
-        app.include_router(fixed_line_router, tags=["fixed-line"])
-        logger.info("✅ Fixed LINE Bot router loaded (unified quality)")
-    else:
-        # 既存のルーター（品質統一版への更新推奨）
-        from api.routers import line_bot
-        app.include_router(line_bot.router, tags=["line"])
-        logger.info("✅ Standard LINE Bot router loaded")
-
-    # その他の標準ルーター
-    app.include_router(upload.router, prefix="/upload", tags=["upload"])
-    app.include_router(google_oauth.router, tags=["auth"])
-    app.include_router(healthz.router, prefix="/ops", tags=["healthz-ops"])
-    app.include_router(line_login.router, tags=["line-login"])
-
-    logger.info("✅ All routers loaded successfully (quality unified)")
-except Exception as e:
-    logger.error(f"❌ Router loading error: {e}")
-
-# 静的ファイル
-pdf_dir = os.path.join("rag", "vectorstore", "pdfs")
-if os.path.isdir(pdf_dir):
-    app.mount("/pdfs", StaticFiles(directory=pdf_dir), name="pdfs")
-
-# 統合システム監視エンドポイント
-@app.get("/system-status")
-def get_integrated_system_status():
-    """統合システムの詳細状態を取得"""
-    try:
-        performance_metrics: Dict[str, Any] = {}
-
-        if ULTRA_FAST_MODE:
-            try:
-                from api.routers.chat_ultra_fast import ultra_fast_generator
-                performance_metrics["web_chat_cache"] = ultra_fast_generator.cache.get_stats()
-            except Exception:
-                pass
-
-        anti_hallucination_status: Dict[str, Any] = {}
-        if ANTI_HALLUCINATION_MODE:
-            anti_hallucination_status = {
-                "enabled": True,
-                "features": ["RAG Validation", "Web Verification", "Confidence Scoring"],
-                "threshold": 0.7,
-            }
-
-        auto_update_status: Dict[str, Any] = {}
-        if ENABLE_AUTO_UPDATE:
-            auto_update_status = {
-                "enabled": True,
-                "last_update": "2024-01-01T00:00:00",
-                "next_scheduled": "2024-01-08T02:00:00",
-                "update_sources": 5,
-            }
-
-        return {
-            "status": "operational",
-            "version": "3.0.0",
-            "features": {
-                "ultra_fast_mode": ULTRA_FAST_MODE,
-                "anti_hallucination": ANTI_HALLUCINATION_MODE,
-                "auto_update": ENABLE_AUTO_UPDATE,
-            },
-            "components": {
-                "llm": llm_instance is not None,
-                "vectorstore": vectorstore is not None,
-                "rag_chain": rag_chain_template is not None,
-            },
-            "performance": performance_metrics,
-            "anti_hallucination": anti_hallucination_status,
-            "auto_update": auto_update_status,
-            "timestamp": datetime.now().isoformat(),
-        }
-    except Exception as e:
-        logger.error(f"System status error: {e}")
-        return {
-            "status": "error",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat(),
-        }
-
-@app.get("/performance-report")
-def get_performance_report():
-    """パフォーマンスレポートを取得"""
-    try:
-        report = {
-            "targets": {
-                "web_chat_response": "< 1.0 seconds",
-                "line_bot_response": "< 3.0 seconds",
-                "rag_processing": "< 2.0 seconds",
-            },
-            "optimizations": {
-                "ultra_fast_cache": ULTRA_FAST_MODE,
-                "parallel_processing": True,
-                "template_matching": ULTRA_FAST_MODE,
-                "timeout_protection": True,
-            },
-            "monitoring": {
-                "response_time_tracking": True,
-                "performance_alerts": True,
-                "cache_hit_rate_monitoring": ULTRA_FAST_MODE,
-            },
-            "recommendations": [
-                "Monitor cache hit rates for optimal performance",
-                "Regular vectorstore optimization",
-                "Auto-update frequency tuning",
-            ],
-        }
-        return report
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.get("/healthz")
-def integrated_health_check():
-    """統合ヘルスチェック"""
-    try:
-        health_data = {
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "service": "enhanced-rag-api",
-            "version": "3.0.0",
-            "features": {
-                "ultra_fast_mode": ULTRA_FAST_MODE,
-                "anti_hallucination": ANTI_HALLUCINATION_MODE,
-                "auto_update": ENABLE_AUTO_UPDATE,
-            },
-        }
-
-        warnings = []
-        if llm_instance is None:
-            warnings.append("LLM instance not loaded")
-        if vectorstore is None:
-            warnings.append("Vectorstore not loaded")
-        if rag_chain_template is None:
-            warnings.append("RAG chain not initialized")
-
-        if warnings:
-            health_data["status"] = "degraded"
-            health_data["warnings"] = warnings
-
-        return health_data
+        health_status = await health_checker.comprehensive_health_check()
+        status_code = 200 if health_status["overall_status"] in ("healthy", "degraded") else 503
+        return JSONResponse(status_code=status_code, content=health_status)
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat(),
-        }
+        return JSONResponse(
+            status_code=503,
+            content={
+                "overall_status": "unhealthy",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        )
 
-# 自動更新手動トリガー
-@app.post("/trigger-auto-update")
-async def trigger_manual_update():
-    """手動で自動更新を実行"""
-    if not ENABLE_AUTO_UPDATE:
-        raise HTTPException(status_code=400, detail="Auto-update is disabled")
+@app.get("/api/system/info")
+async def system_info():
+    return {
+        "system_name": "Consent Management System",
+        "version": "1.0.0",
+        "environment": settings.environment,
+        "features": [
+            "LIFF同意ゲート",
+            "WORM ストレージ",
+            "監査証跡管理",
+            "ライフサイクル管理",
+            "自動削除機能",
+            "コンプライアンス報告",
+        ],
+        "compliance": ["電気通信事業法", "個人情報保護法", "GDPR Article 17", "ISO 27001"],
+        "data_retention": "5年WORM保全",
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+# ==================================================
+# 管理用エンドポイント
+# ==================================================
+@app.post("/api/admin/emergency-stop")
+async def emergency_stop(
+    reason: str,
+    deletion_service: AutoDeletionService = Depends(get_deletion_service),
+):
+    """緊急停止"""
     try:
-        logger.info("🔄 Manual auto-update triggered")
-        # 実処理呼び出しの代替モック
-        results = {
-            "status": "completed",
-            "sources_updated": 3,
-            "new_faqs_generated": 15,
-            "execution_time": "45.2s",
-            "timestamp": datetime.now().isoformat(),
+        stop_token = await deletion_service.activate_emergency_stop(reason)
+        return {
+            "message": "Emergency stop activated",
+            "reason": reason,
+            "stop_token": stop_token,
+            "timestamp": datetime.utcnow().isoformat(),
         }
-        return results
     except Exception as e:
-        logger.error(f"Manual update failed: {e}")
+        logger.error(f"Emergency stop failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/admin/force-manifest-generation")
+async def force_manifest_generation(
+    background_tasks: BackgroundTasks,
+    manifest_service: ManifestService = Depends(get_manifest_service),
+):
+    """強制マニフェスト生成"""
+    try:
+        background_tasks.add_task(
+            manifest_service.generate_daily_manifest,
+            target_date=datetime.utcnow().date(),
+            force_regenerate=True,
+        )
+        return {"message": "Manifest generation started", "timestamp": datetime.utcnow().isoformat()}
+    except Exception as e:
+        logger.error(f"Force manifest generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/force-lifecycle-processing")
+async def force_lifecycle_processing(
+    background_tasks: BackgroundTasks,
+    lifecycle_manager: ConsentLifecycleManager = Depends(get_lifecycle_manager),
+):
+    """強制ライフサイクル処理"""
+    try:
+        background_tasks.add_task(
+            lifecycle_manager.process_daily_lifecycle,
+            target_date=datetime.utcnow().date(),
+        )
+        return {"message": "Lifecycle processing started", "timestamp": datetime.utcnow().isoformat()}
+    except Exception as e:
+        logger.error(f"Force lifecycle processing failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================================================
+# デバッグ（開発環境のみ）
+# ==================================================
+if settings.environment == "development":
+
+    @app.get("/debug/services")
+    async def debug_services():
+        return {
+            "available_services": list(app_services.keys()),
+            "service_details": {name: str(type(svc)) for name, svc in app_services.items()},
+        }
+
+    @app.get("/debug/config")
+    async def debug_config():
+        return {
+            "environment": settings.environment,
+            "database_url": (settings.database_url[:50] + "...") if settings.database_url else None,
+            "gcp_project": settings.gcp_project_id,
+            "worm_bucket": settings.worm_bucket_name,
+            "features": {
+                "monitoring": settings.enable_monitoring,
+                "rate_limiting": bool(settings.rate_limit_per_minute),
+                "cors": bool(settings.allowed_origins),
+            },
+        }
+
+# ==================================================
+# 本番スケジュール
+# ==================================================
+async def setup_production_schedules():
+    """本番環境スケジュール設定"""
+    try:
+        if "manifest_service" in app_services:
+            await app_services["manifest_service"].setup_daily_schedule("02:00")
+        if "lifecycle_manager" in app_services:
+            await app_services["lifecycle_manager"].setup_lifecycle_schedules()
+        if "deletion_service" in app_services:
+            await app_services["deletion_service"].setup_deletion_schedules()
+        logger.info("Production schedules setup completed")
+    except Exception as e:
+        logger.error(f"Failed to setup production schedules: {e}")
+        # 非致命で続行
+
+# ==================================================
+# 実行
+# ==================================================
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=int(os.environ.get("PORT", 8080)),
-        reload=os.getenv("ENV") != "production",
+        port=8080,
+        reload=True if settings.environment == "development" else False,
+        log_level="info",
+        access_log=True,
     )

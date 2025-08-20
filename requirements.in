@@ -44,3 +44,5 @@ beautifulsoup4
 feedparser
 google-cloud-scheduler
 functions-framework
+pytest
+sqlalchemy
