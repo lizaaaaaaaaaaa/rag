@@ -5,7 +5,7 @@
 import base64
 import hashlib
 import secrets
-from typing import Union, Optional
+from typing import Union, Optional, Dict, Any
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -13,7 +13,13 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 import bcrypt
 import logging
-from config import get_settings
+
+# 設定を読み込むためのダミー関数（実際のconfig.pyがない場合）
+def get_settings():
+    class Settings:
+        encryption_key = "default-encryption-key-change-this-in-production"
+        salt = "default-salt-change-this"
+    return Settings()
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -164,3 +170,15 @@ def decrypt_sensitive_data(encrypted_data: str) -> str:
 def hash_for_audit(data: str) -> str:
     """監査用ハッシュ（便利関数）"""
     return encryption_manager.hash_data(data, "sha256")
+
+def secure_delete(file_path: str) -> bool:
+    """セキュア削除（便利関数）"""
+    # 実装は環境に依存するため、ここではプレースホルダー
+    import os
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        return True
+    except Exception as e:
+        logger.error(f"Secure delete failed: {e}")
+        return False

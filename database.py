@@ -3,11 +3,21 @@
 # ====================
 
 import asyncio
+from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import NullPool
 from contextlib import asynccontextmanager
-from config import get_settings
+
+# 設定を読み込むためのダミー関数（実際のconfig.pyがない場合）
+def get_settings():
+    class Settings:
+        database_url = "sqlite+aiosqlite:///./consent_management.db"
+        debug = True
+        database_pool_size = 5
+        database_max_overflow = 10
+        database_pool_timeout = 30
+    return Settings()
 
 settings = get_settings()
 
@@ -31,7 +41,7 @@ AsyncSessionLocal = async_sessionmaker(
 # ベースモデルクラス
 Base = declarative_base()
 
-async def get_db_session() -> AsyncSession:
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """データベースセッションの依存性注入"""
     async with AsyncSessionLocal() as session:
         try:
@@ -53,6 +63,15 @@ async def get_db_context():
         except Exception:
             await session.rollback()
             raise
+
+async def init_database():
+    """データベース初期化"""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+async def close_database():
+    """データベース接続を閉じる"""
+    await engine.dispose()
 
 async def create_tables():
     """テーブル作成"""

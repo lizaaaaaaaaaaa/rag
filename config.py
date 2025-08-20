@@ -1,90 +1,105 @@
-# ====================
-# config.py
-# ====================
+# config.py - プロジェクトルートに配置
+"""
+設定管理モジュール
+"""
 
 import os
-from typing import Optional
-from pydantic import BaseSettings, validator
-from functools import lru_cache
+from typing import List, Optional, Dict, Any
+from pydantic_settings import BaseSettings
+from pydantic import Field
+
 
 class Settings(BaseSettings):
     """アプリケーション設定"""
     
-    # アプリケーション基本設定
-    app_name: str = "RAG-LLM-Project"
-    app_version: str = "1.0.0"
-    debug: bool = False
-    environment: str = "production"
+    # 基本設定
+    app_name: str = "RAG-LLM Project"
+    version: str = "1.0.0"
+    debug: bool = Field(default=False, env="DEBUG")
+    environment: str = Field(default="development", env="ENVIRONMENT")
     
     # データベース設定
-    database_url: str
-    database_pool_size: int = 10
-    database_max_overflow: int = 20
-    database_pool_timeout: int = 30
+    database_url: str = Field(
+        default="sqlite+aiosqlite:///./rag_llm.db",
+        env="DATABASE_URL"
+    )
+    database_pool_size: int = Field(default=5, env="DB_POOL_SIZE")
+    database_max_overflow: int = Field(default=10, env="DB_MAX_OVERFLOW")
+    database_pool_timeout: int = Field(default=30, env="DB_POOL_TIMEOUT")
     
-    # Google Cloud設定
-    google_cloud_project: str
-    gcs_bucket_name: str
-    gcs_audit_bucket: str
-    gcs_service_account_path: Optional[str] = None
+    # Redis設定
+    redis_url: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
     
-    # Vector Store設定
-    vector_store_type: str = "chroma"  # chroma, pinecone, weaviate
-    chroma_host: str = "localhost"
-    chroma_port: int = 8000
-    embedding_model: str = "text-embedding-ada-002"
+    # セキュリティ設定
+    secret_key: str = Field(
+        default="your-secret-key-change-this-in-production",
+        env="SECRET_KEY"
+    )
+    encryption_key: str = Field(
+        default="default-encryption-key-change-this-in-production",
+        env="ENCRYPTION_KEY"
+    )
+    salt: str = Field(default="default-salt-change-this", env="SALT")
     
-    # OpenAI/LLM設定
-    openai_api_key: str
-    llm_model: str = "gpt-4-turbo-preview"
-    max_tokens: int = 4000
-    temperature: float = 0.1
-    
-    # 認証・セキュリティ設定
-    secret_key: str
-    algorithm: str = "HS256"
+    # JWT設定
+    jwt_secret_key: str = Field(
+        default="jwt-secret-key-change-this-in-production",
+        env="JWT_SECRET_KEY"
+    )
+    jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     
-    # 暗号化設定
-    encryption_key: str
-    salt: str
+    # Google Cloud設定
+    gcp_project_id: str = Field(default="", env="GCP_PROJECT_ID")
+    gcp_region: str = Field(default="asia-northeast1", env="GCP_REGION")
+    gcs_bucket_name: str = Field(default="", env="GCS_BUCKET_NAME")
+    gcs_audit_bucket: str = Field(default="", env="GCS_AUDIT_BUCKET")
+    worm_bucket_name: str = Field(default="", env="WORM_BUCKET_NAME")
+    kms_key_ring: str = Field(default="", env="KMS_KEY_RING")
+    kms_key_name: str = Field(default="", env="KMS_KEY_NAME")
     
-    # 監査設定
-    audit_retention_days: int = 2555  # 7年
-    worm_storage_enabled: bool = True
-    compliance_checks_enabled: bool = True
+    # OpenAI設定
+    openai_api_key: str = Field(default="", env="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-4", env="OPENAI_MODEL")
+    
+    # セキュリティ設定
+    allowed_origins: List[str] = Field(
+        default=["http://localhost:3000", "http://localhost:8080"],
+        env="ALLOWED_ORIGINS"
+    )
+    allowed_hosts: List[str] = Field(
+        default=["localhost", "127.0.0.1"],
+        env="ALLOWED_HOSTS"
+    )
+    
+    # レート制限
+    rate_limit_per_minute: int = Field(default=100, env="RATE_LIMIT_PER_MINUTE")
+    
+    # 機能フラグ
+    enable_monitoring: bool = Field(default=False, env="ENABLE_MONITORING")
+    worm_storage_enabled: bool = Field(default=True, env="WORM_STORAGE_ENABLED")
     
     # 通知設定
-    notification_webhook_url: Optional[str] = None
-    slack_webhook_url: Optional[str] = None
-    email_smtp_server: Optional[str] = None
-    email_username: Optional[str] = None
-    email_password: Optional[str] = None
-    
-    # Redis設定（キャッシュ用）
-    redis_url: str = "redis://localhost:6379"
-    cache_ttl_seconds: int = 3600
-    
-    # APIレート制限
-    rate_limit_per_minute: int = 100
-    
-    @validator('database_url', pre=True)
-    def validate_database_url(cls, v):
-        if not v:
-            raise ValueError('DATABASE_URL is required')
-        return v
-    
-    @validator('secret_key', pre=True)
-    def validate_secret_key(cls, v):
-        if not v or len(v) < 32:
-            raise ValueError('SECRET_KEY must be at least 32 characters')
-        return v
+    notification_config: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "email_enabled": True,
+            "line_enabled": False,
+            "emergency_contacts": [],
+            "smtp": {
+                "host": "localhost",
+                "port": 587,
+                "use_tls": True,
+                "username": "",
+                "password": ""
+            }
+        }
+    )
     
     class Config:
         env_file = ".env"
-        case_sensitive = False
+        env_file_encoding = "utf-8"
 
-@lru_cache()
+
 def get_settings() -> Settings:
-    """設定のシングルトンインスタンスを取得"""
+    """設定インスタンスを取得"""
     return Settings()

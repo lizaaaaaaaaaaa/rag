@@ -126,3 +126,4 @@ class QueryLog(Base):
     __table_args__ = (
         Index('idx_query_user_time', 'user_id', 'timestamp'),
         Index('idx_query_hash', 'query_hash'),
+    )

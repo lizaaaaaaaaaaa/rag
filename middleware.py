@@ -1,5 +1,5 @@
 # ====================
-# middleware.py
+# middleware.py の修正版
 # ====================
 
 import time
@@ -9,7 +9,16 @@ from fastapi import Request, Response, HTTPException, status
 from fastapi.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import JSONResponse
 import logging
-from config import get_settings
+
+# 設定のインポート（修正）
+try:
+    from config import get_settings
+except ImportError:
+    # config.pyが存在しない場合のフォールバック
+    def get_settings():
+        class Settings:
+            rate_limit_per_minute = 100
+        return Settings()
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -42,9 +51,9 @@ class TimingMiddleware(BaseHTTPMiddleware):
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """レート制限ミドルウェア"""
     
-    def __init__(self, app, calls_per_minute: int = 100):
+    def __init__(self, app, requests_per_minute: int = 100):
         super().__init__(app)
-        self.calls_per_minute = calls_per_minute
+        self.requests_per_minute = requests_per_minute
         self.client_requests = {}  # クライアントIP別のリクエスト履歴
     
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
@@ -61,7 +70,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self.client_requests[client_ip] = []
         
         # レート制限チェック
-        if len(self.client_requests[client_ip]) >= self.calls_per_minute:
+        if len(self.client_requests[client_ip]) >= self.requests_per_minute:
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 content={"detail": "Rate limit exceeded"}
@@ -136,3 +145,19 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
         )
         
         return response
+
+class ConsentGateMiddleware(BaseHTTPMiddleware):
+    """同意ゲートミドルウェア"""
+    
+    def __init__(self, app, excluded_paths: list = None):
+        super().__init__(app)
+        self.excluded_paths = excluded_paths or []
+    
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        # 除外パスのチェック
+        if any(request.url.path.startswith(path) for path in self.excluded_paths):
+            return await call_next(request)
+        
+        # 同意チェックロジックをここに実装
+        # 現在はパススルー
+        return await call_next(request)

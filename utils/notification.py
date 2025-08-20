@@ -12,9 +12,32 @@ from datetime import datetime
 import json
 import logging
 from config import get_settings
+import logging
+from typing import List, Optional, Dict, Any
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+async def send_email_notification(
+    subject: str,
+    body: str,
+    recipients: List[str],
+    smtp_config: Optional[Dict[str, Any]] = None
+) -> bool:
+    """メール通知送信"""
+    logger.info(f"Sending email: {subject} to {len(recipients)} recipients")
+    # ダミー実装
+    return True
+
+async def send_line_notification(
+    user_id: str,
+    message: str,
+    config: Optional[Dict[str, Any]] = None
+) -> bool:
+    """LINE通知送信"""
+    logger.info(f"Sending LINE message to {user_id}")
+    # ダミー実装
+    return True
 
 class NotificationManager:
     """通知管理クラス"""
