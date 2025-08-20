@@ -1,4 +1,4 @@
-# infrastructure/lifecycle_management.py - 自動削除・ライフサイクル管理
+# infrastructure/lifecycle_management.py - 自動削除・ライフサイクル管理（完全修正版）
 
 import os
 import logging
@@ -9,6 +9,9 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from google.cloud import storage, firestore, scheduler_v1
 from google.cloud import functions_v1
+from google.cloud.scheduler_v1 import CloudSchedulerClient
+from google.cloud.scheduler_v1.types import Job, PubsubTarget, UpdateJobRequest, CreateJobRequest
+from google.protobuf import field_mask_pb2
 import json
 
 logger = logging.getLogger(__name__)
@@ -406,15 +409,15 @@ class RetentionPolicyManager:
         return requirements["min_years"] <= policy_years <= requirements["max_years"]
 
 class AutomatedLifecycleScheduler:
-    """自動ライフサイクルスケジューラー"""
+    """自動ライフサイクルスケジューラー（Job 型で厳格化）"""
     
     def __init__(self):
         self.project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "rag-cloud-project")
-        self.scheduler_client = scheduler_v1.CloudSchedulerClient()
+        self.scheduler_client: CloudSchedulerClient = CloudSchedulerClient()
         self.location = "asia-northeast1"
     
     async def setup_lifecycle_schedules(self) -> Dict[str, Any]:
-        """ライフサイクルスケジュールを設定"""
+        """ライフサイクルスケジュールを設定（Pylance 型エラー解消版）"""
         try:
             parent = f"projects/{self.project_id}/locations/{self.location}"
             
@@ -443,29 +446,42 @@ class AutomatedLifecycleScheduler:
             
             for schedule_config in schedules:
                 try:
-                    job = {
-                        "name": f"{parent}/jobs/{schedule_config['name']}",
-                        "schedule": schedule_config["schedule"],
-                        "time_zone": "Asia/Tokyo",
-                        "description": schedule_config["description"],
-                        "pubsub_target": {
-                            "topic_name": f"projects/{self.project_id}/topics/lifecycle-triggers",
-                            "data": json.dumps({
-                                "function": schedule_config["target_function"],
-                                "schedule": schedule_config["name"]
-                            }).encode()
-                        }
-                    }
+                    job_name = f"{parent}/jobs/{schedule_config['name']}"
                     
-                    # スケジュールが既に存在するかチェック
+                    # Pub/Sub ターゲット（型オブジェクトで構築）
+                    target_payload = json.dumps({
+                        "function": schedule_config["target_function"],
+                        "schedule": schedule_config["name"]
+                    }).encode()
+                    
+                    pubsub_target = PubsubTarget(
+                        topic_name=f"projects/{self.project_id}/topics/lifecycle-triggers",
+                        data=target_payload
+                    )
+                    
+                    # Job オブジェクトを正しく作成（dict ではなく types.Job）
+                    job = Job(
+                        name=job_name,
+                        schedule=schedule_config["schedule"],
+                        time_zone="Asia/Tokyo",
+                        description=schedule_config["description"],
+                        pubsub_target=pubsub_target,
+                    )
+                    
+                    # 既存チェック
                     try:
-                        self.scheduler_client.get_job(name=job["name"])
-                        # 既存の場合は更新
-                        self.scheduler_client.update_job(job=job)
+                        existing = self.scheduler_client.get_job(name=job_name)
+                        # 既存なら更新（更新マスクを明示）
+                        update_mask = field_mask_pb2.FieldMask(
+                            paths=["schedule", "time_zone", "description", "pubsub_target"]
+                        )
+                        update_req = UpdateJobRequest(job=job, update_mask=update_mask)
+                        self.scheduler_client.update_job(request=update_req)
                         logger.info(f"📅 Updated schedule: {schedule_config['name']}")
-                    except:
-                        # 存在しない場合は作成
-                        self.scheduler_client.create_job(parent=parent, job=job)
+                    except Exception:
+                        # なければ作成
+                        create_req = CreateJobRequest(parent=parent, job=job)
+                        self.scheduler_client.create_job(request=create_req)
                         logger.info(f"🆕 Created schedule: {schedule_config['name']}")
                     
                     setup_results.append({

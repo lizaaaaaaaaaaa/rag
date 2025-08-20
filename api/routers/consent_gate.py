@@ -14,6 +14,8 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from google.cloud import storage
+from google.cloud.storage.bucket import Bucket  # ★ 追加：型注釈用
+from google.cloud.storage.client import Client  # ★ 追加：型注釈用
 import asyncio
 
 logger = logging.getLogger(__name__)
@@ -215,10 +217,10 @@ class ConsentDB:
 # ========== GCS WORM管理 ==========
 class ConsentWORMStorage:
     def __init__(self):
-        self.bucket_name = CONSENT_CONFIG["GCS_CONSENT_BUCKET"]
+        self.bucket_name: str = CONSENT_CONFIG["GCS_CONSENT_BUCKET"]
         try:
-            self.client = storage.Client()
-            self.bucket = self.client.bucket(self.bucket_name)
+            self.client: Optional[Client] = storage.Client()
+            self.bucket: Optional[Bucket] = self.client.bucket(self.bucket_name) if self.client else None
         except Exception as e:
             logger.error(f"❌ Failed to initialize GCS client: {e}")
             self.client = None
@@ -226,7 +228,8 @@ class ConsentWORMStorage:
 
     def save_to_worm(self, consent_data: ConsentRequest) -> str:
         """同意データをWORM保護されたGCSに保存"""
-        if not self.client:
+        # ★ None チェックを強化
+        if not self.client or not self.bucket:
             logger.warning("⚠️ GCS not available, skipping WORM storage")
             return ""
         
@@ -255,7 +258,12 @@ class ConsentWORMStorage:
             
             # オブジェクトロック設定（GCS Bucket Lock）
             try:
-                blob.update_storage_class('ARCHIVE')  # アーカイブストレージクラス
+                # 存在しない環境でも型エラーを出さないために getattr で呼び出し
+                update_storage_class = getattr(blob, "update_storage_class", None)
+                if callable(update_storage_class):
+                    update_storage_class('ARCHIVE')  # アーカイブストレージクラス
+                else:
+                    logger.debug("ℹ️ blob.update_storage_class not available on this SDK version")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to set archive storage class: {e}")
             
@@ -268,7 +276,9 @@ class ConsentWORMStorage:
 
     def setup_bucket_lifecycle(self):
         """バケットライフサイクル設定"""
-        if not self.client:
+        # ★ None チェックを強化
+        if not self.client or not self.bucket:
+            logger.warning("⚠️ GCS client/bucket not available for lifecycle setup")
             return
         
         try:
@@ -284,10 +294,17 @@ class ConsentWORMStorage:
                 ]
             }
             
-            self.bucket.lifecycle_rules = lifecycle_rule["rule"]
-            self.bucket.patch()
-            
-            logger.info("✅ Bucket lifecycle configured for 5-year retention")
+            # lifecycle_rules が存在することを確認
+            if hasattr(self.bucket, "lifecycle_rules"):
+                self.bucket.lifecycle_rules = lifecycle_rule["rule"]
+                # patch メソッドが存在することを確認
+                if hasattr(self.bucket, "patch"):
+                    self.bucket.patch()
+                    logger.info("✅ Bucket lifecycle configured for 5-year retention")
+                else:
+                    logger.warning("⚠️ Bucket.patch() not available on this SDK version")
+            else:
+                logger.warning("⚠️ Bucket.lifecycle_rules attribute not available")
             
         except Exception as e:
             logger.error(f"❌ Failed to setup bucket lifecycle: {e}")
