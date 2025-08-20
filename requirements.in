@@ -47,3 +47,7 @@ functions-framework
 pytest
 sqlalchemy
 asyncpg
+aiofiles
+aioredis
+aiosmtplib
+cryptography

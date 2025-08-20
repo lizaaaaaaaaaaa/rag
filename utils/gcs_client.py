@@ -1,222 +1,194 @@
-# ====================
-# utils/gcs_client.py
-# ====================
+# utils/gcs_client.py - 完全修正版
+"""
+GCS クライアントユーティリティ
+- 監査マニフェストのアップロード
+- WORM ストレージ設定の検証
+"""
 
-import asyncio
-import hashlib
+from __future__ import annotations
+
 import json
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, BinaryIO
-from google.cloud import storage
-from google.cloud.exceptions import NotFound, GoogleCloudError
-from google.api_core import retry
-import aiofiles
 import logging
-from config import get_settings
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, Tuple, List
 
-settings = get_settings()
+from google.cloud import storage
+from google.api_core import exceptions as gcp_exceptions
+
+# ✅ 設定読込の明示（get_settings の未定義エラー対策）
+try:
+    # プロジェクト直下に config.py があり、get_settings() を公開している想定
+    from config import get_settings  # <-- ここがポイント
+except Exception as e:  # pragma: no cover
+    # もし import に失敗した場合のフォールバック（最低限動くダミー設定）
+    get_settings = None  # type: ignore[misc]
+    _import_error = e
+
 logger = logging.getLogger(__name__)
 
+
 class GCSClient:
-    """Google Cloud Storage クライアント"""
-    
-    def __init__(self):
-        self.client = storage.Client(project=settings.google_cloud_project)
-        self.bucket = self.client.bucket(settings.gcs_bucket_name)
-        self.audit_bucket = self.client.bucket(settings.gcs_audit_bucket)
-    
-    async def upload_file(
+    """Google Cloud Storage の薄いラッパー"""
+
+    def __init__(
         self,
-        file_content: bytes,
-        destination_path: str,
-        content_type: str = "application/octet-stream",
-        metadata: Optional[Dict[str, str]] = None
-    ) -> str:
-        """ファイルのアップロード"""
+        project_id: Optional[str] = None,
+        bucket_name: Optional[str] = None,
+        credentials: Any = None,
+    ) -> None:
+        # 設定の取得
+        settings = None
+        if get_settings is not None:
+            try:
+                settings = get_settings()
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"get_settings() failed, fallback to env only: {e}")
+
+        self.project_id: Optional[str] = project_id or getattr(settings, "gcp_project_id", None)
+        self.bucket_name: Optional[str] = bucket_name or getattr(settings, "worm_bucket_name", None)
+
+        # GCS クライアント初期化
         try:
-            blob = self.bucket.blob(destination_path)
-            
-            # メタデータの設定
+            self.client: storage.Client = storage.Client(project=self.project_id, credentials=credentials)
+        except Exception as e:
+            logger.error(f"Failed to initialize GCS client: {e}")
+            raise
+
+        # バケット参照（存在チェックは必要時に行う）
+        self._bucket: Optional[storage.Bucket] = None
+        if self.bucket_name:
+            self._bucket = self.client.bucket(self.bucket_name)
+
+    @property
+    def bucket(self) -> storage.Bucket:
+        if not self._bucket:
+            raise RuntimeError("GCS bucket is not configured. Set 'worm_bucket_name' in settings.")
+        return self._bucket
+
+    # ------------------------------
+    # アップロード
+    # ------------------------------
+
+    def upload_json(
+        self,
+        object_path: str,
+        payload: Dict[str, Any],
+        content_type: str = "application/json",
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """JSON をアップロードして GCS パスを返す"""
+        try:
+            blob = self.bucket.blob(object_path)
             if metadata:
                 blob.metadata = metadata
-            
-            # ファイルのアップロード
-            blob.upload_from_string(
-                file_content,
-                content_type=content_type,
-                retry=retry.Retry(deadline=60)
-            )
-            
-            logger.info(f"File uploaded to GCS: {destination_path}")
-            return f"gs://{settings.gcs_bucket_name}/{destination_path}"
-            
-        except GoogleCloudError as e:
-            logger.error(f"Failed to upload file to GCS: {e}")
+            blob.upload_from_string(json.dumps(payload, ensure_ascii=False), content_type=content_type)
+            logger.info(f"Uploaded JSON to gs://{self.bucket.name}/{object_path}")
+            return f"gs://{self.bucket.name}/{object_path}"
+        except Exception as e:
+            logger.error(f"Failed to upload JSON to {object_path}: {e}")
             raise
-    
-    async def download_file(self, source_path: str) -> bytes:
-        """ファイルのダウンロード"""
-        try:
-            blob = self.bucket.blob(source_path)
-            content = blob.download_as_bytes(retry=retry.Retry(deadline=60))
-            
-            logger.info(f"File downloaded from GCS: {source_path}")
-            return content
-            
-        except NotFound:
-            logger.error(f"File not found in GCS: {source_path}")
-            raise
-        except GoogleCloudError as e:
-            logger.error(f"Failed to download file from GCS: {e}")
-            raise
-    
-    async def delete_file(self, file_path: str) -> bool:
-        """ファイルの削除"""
-        try:
-            blob = self.bucket.blob(file_path)
-            blob.delete(retry=retry.Retry(deadline=30))
-            
-            logger.info(f"File deleted from GCS: {file_path}")
-            return True
-            
-        except NotFound:
-            logger.warning(f"File not found for deletion: {file_path}")
-            return False
-        except GoogleCloudError as e:
-            logger.error(f"Failed to delete file from GCS: {e}")
-            raise
-    
-    async def list_files(self, prefix: str = "", limit: int = 1000) -> List[Dict[str, Any]]:
-        """ファイル一覧の取得"""
-        try:
-            blobs = self.bucket.list_blobs(
-                prefix=prefix,
-                max_results=limit
-            )
-            
-            files = []
-            for blob in blobs:
-                files.append({
-                    "name": blob.name,
-                    "size": blob.size,
-                    "created": blob.time_created.isoformat() if blob.time_created else None,
-                    "updated": blob.updated.isoformat() if blob.updated else None,
-                    "content_type": blob.content_type,
-                    "md5_hash": blob.md5_hash,
-                    "metadata": blob.metadata or {}
-                })
-            
-            return files
-            
-        except GoogleCloudError as e:
-            logger.error(f"Failed to list files from GCS: {e}")
-            raise
-    
-    async def upload_audit_manifest(self, manifest_data: Dict[str, Any]) -> str:
-        """監査マニフェストのアップロード（WORM対応）"""
-        try:
-            timestamp = datetime.utcnow().isoformat()
-            manifest_path = f"audit-manifests/{timestamp.split('T')[0]}/{timestamp}.json"
-            
-            # マニフェストデータにタイムスタンプとハッシュを追加
-            manifest_data.update({
-                "timestamp": timestamp,
-                "hash": hashlib.sha256(
-                    json.dumps(manifest_data, sort_keys=True).encode()
-                ).hexdigest()
-            })
-            
-            blob = self.audit_bucket.blob(manifest_path)
-            
-            # WORM設定（Write Once, Read Many）
-            if settings.worm_storage_enabled:
-                # オブジェクトロック設定
-                blob.metadata = {
-                    "retention-policy": "true",
-                    "immutable": "true",
-                    "created-by": "rag-system"
-                }
-            
-            blob.upload_from_string(
-                json.dumps(manifest_data, indent=2),
-                content_type="application/json"
-            )
-            
-            logger.info(f"Audit manifest uploaded: {manifest_path}")
-            return f"gs://{settings.gcs_audit_bucket}/{manifest_path}"
-            
-        except GoogleCloudError as e:
-            logger.error(f"Failed to upload audit manifest: {e}")
-            raise
-    
-    async def verify_worm_storage(self, file_path: str) -> bool:
-        """WORM ストレージの検証"""
-        try:
-            blob = self.audit_bucket.blob(file_path)
-            
-            if not blob.exists():
-                return False
-            
-            # メタデータの確認
-            metadata = blob.metadata or {}
-            return (
-                metadata.get("retention-policy") == "true" and
-                metadata.get("immutable") == "true"
-            )
-            
-        except GoogleCloudError as e:
-            logger.error(f"Failed to verify WORM storage: {e}")
-            return False
-    
-    async def generate_signed_url(
+
+    def upload_bytes(
         self,
-        file_path: str,
-        expiration_hours: int = 24,
-        method: str = "GET"
+        object_path: str,
+        data: bytes,
+        content_type: str = "application/octet-stream",
+        metadata: Optional[Dict[str, str]] = None,
     ) -> str:
-        """署名付きURLの生成"""
+        """バイナリをアップロードして GCS パスを返す"""
         try:
-            blob = self.bucket.blob(file_path)
-            
-            expiration = datetime.utcnow() + timedelta(hours=expiration_hours)
-            
-            url = blob.generate_signed_url(
-                expiration=expiration,
-                method=method,
-                version="v4"
-            )
-            
-            return url
-            
-        except GoogleCloudError as e:
-            logger.error(f"Failed to generate signed URL: {e}")
+            blob = self.bucket.blob(object_path)
+            if metadata:
+                blob.metadata = metadata
+            blob.upload_from_string(data, content_type=content_type)
+            logger.info(f"Uploaded bytes to gs://{self.bucket.name}/{object_path}")
+            return f"gs://{self.bucket.name}/{object_path}"
+        except Exception as e:
+            logger.error(f"Failed to upload bytes to {object_path}: {e}")
             raise
 
-# シングルトンインスタンス
-gcs_client = GCSClient()
+    # ------------------------------
+    # WORM / バケット設定検証
+    # ------------------------------
 
-# 便利関数
-async def upload_document_chunk(content: str, document_id: str, chunk_index: int) -> str:
-    """ドキュメントチャンクのアップロード"""
-    file_path = f"documents/{document_id}/chunks/{chunk_index:06d}.txt"
-    
-    metadata = {
-        "document-id": document_id,
-        "chunk-index": str(chunk_index),
-        "content-hash": hashlib.sha256(content.encode()).hexdigest()
-    }
-    
-    return await gcs_client.upload_file(
-        content.encode('utf-8'),
-        file_path,
-        content_type="text/plain",
-        metadata=metadata
-    )
+    def verify_bucket_settings(self) -> Dict[str, Any]:
+        """バケットの WORM/セキュリティ関連設定を検証して返す"""
+        try:
+            bucket = self.bucket
+            bucket.reload()
 
-async def upload_audit_manifest(manifest_data: Dict[str, Any]) -> str:
-    """監査マニフェストのアップロード（便利関数）"""
-    return await gcs_client.upload_audit_manifest(manifest_data)
+            # lifecycle_rules は generator の場合があるため安全に扱う
+            lifecycle_rules_raw = getattr(bucket, "lifecycle_rules", None)
+            lifecycle_rules_count = 0
+            if lifecycle_rules_raw is not None:
+                if hasattr(lifecycle_rules_raw, "__len__"):
+                    lifecycle_rules_count = len(lifecycle_rules_raw)  # type: ignore[arg-type]
+                elif hasattr(lifecycle_rules_raw, "__iter__"):
+                    lifecycle_rules_count = len(list(lifecycle_rules_raw))  # 生成器 → list へ
 
-async def verify_worm_storage(file_path: str) -> bool:
-    """WORM ストレージの検証（便利関数）"""
-    return await gcs_client.verify_worm_storage(file_path)
+            status = {
+                "bucket": bucket.name,
+                "project": self.project_id,
+                "uniform_bucket_level_access": getattr(
+                    bucket.iam_configuration, "uniform_bucket_level_access_enabled", False
+                ),
+                "versioning_enabled": bool(getattr(bucket, "versioning_enabled", False)),
+                "retention_period": getattr(bucket, "retention_period", None),
+                "retention_policy_locked": bool(getattr(bucket, "retention_policy_locked", False)),
+                "storage_class": getattr(bucket, "storage_class", None),
+                "lifecycle_rules_count": lifecycle_rules_count,
+            }
+            return status
+        except Exception as e:
+            logger.error(f"Failed to verify bucket settings: {e}")
+            raise
+
+    # ------------------------------
+    # マニフェスト関連
+    # ------------------------------
+
+    def upload_audit_manifest(
+        self,
+        manifest_id: str,
+        entries: List[Dict[str, Any]],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """監査マニフェストを標準パスへ保存"""
+        now = datetime.now(timezone.utc)
+        object_path = f"manifests/{now:%Y/%m/%d}/{manifest_id}.json"
+
+        payload = {
+            "manifest_id": manifest_id,
+            "generated_at": now.isoformat(),
+            "entries": entries,
+            "extra": extra or {},
+            "version": "1.0",
+        }
+
+        metadata = {
+            "manifest_id": manifest_id,
+            "generated_at": now.isoformat(),
+        }
+
+        return self.upload_json(object_path, payload, metadata=metadata)
+
+    # ------------------------------
+    # 便利関数
+    # ------------------------------
+
+    def object_exists(self, object_path: str) -> bool:
+        try:
+            return self.bucket.blob(object_path).exists()
+        except gcp_exceptions.NotFound:
+            return False
+        except Exception as e:
+            logger.error(f"object_exists check failed for {object_path}: {e}")
+            return False
+
+    def download_text(self, object_path: str, encoding: str = "utf-8") -> str:
+        try:
+            blob = self.bucket.blob(object_path)
+            return blob.download_as_text(encoding=encoding)
+        except Exception as e:
+            logger.error(f"Failed to download text from {object_path}: {e}")
+            raise

@@ -1,68 +1,65 @@
-# config.py - プロジェクトルートに配置
 """
 設定管理モジュール
+環境変数とデフォルト値の管理
 """
 
 import os
-from typing import List, Optional, Dict, Any
-from pydantic_settings import BaseSettings
-from pydantic import Field
+from typing import List, Dict, Any, Optional
+from functools import lru_cache
+from pydantic import BaseSettings, Field
 
 
 class Settings(BaseSettings):
     """アプリケーション設定"""
     
     # 基本設定
-    app_name: str = "RAG-LLM Project"
+    app_name: str = "RAG-LLM-Project"
     version: str = "1.0.0"
-    debug: bool = Field(default=False, env="DEBUG")
     environment: str = Field(default="development", env="ENVIRONMENT")
+    debug: bool = Field(default=True, env="DEBUG")
     
     # データベース設定
     database_url: str = Field(
         default="sqlite+aiosqlite:///./rag_llm.db",
         env="DATABASE_URL"
     )
-    database_pool_size: int = Field(default=5, env="DB_POOL_SIZE")
-    database_max_overflow: int = Field(default=10, env="DB_MAX_OVERFLOW")
-    database_pool_timeout: int = Field(default=30, env="DB_POOL_TIMEOUT")
-    
-    # Redis設定
-    redis_url: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
     
     # セキュリティ設定
     secret_key: str = Field(
-        default="your-secret-key-change-this-in-production",
+        default="default-secret-key-change-this-in-production",
         env="SECRET_KEY"
     )
     encryption_key: str = Field(
         default="default-encryption-key-change-this-in-production",
         env="ENCRYPTION_KEY"
     )
-    salt: str = Field(default="default-salt-change-this", env="SALT")
     
-    # JWT設定
-    jwt_secret_key: str = Field(
-        default="jwt-secret-key-change-this-in-production",
-        env="JWT_SECRET_KEY"
-    )
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
+    # API設定
+    openai_api_key: str = Field(default="", env="OPENAI_API_KEY")
     
     # Google Cloud設定
     gcp_project_id: str = Field(default="", env="GCP_PROJECT_ID")
     gcp_region: str = Field(default="asia-northeast1", env="GCP_REGION")
-    gcs_bucket_name: str = Field(default="", env="GCS_BUCKET_NAME")
-    gcs_audit_bucket: str = Field(default="", env="GCS_AUDIT_BUCKET")
-    worm_bucket_name: str = Field(default="", env="WORM_BUCKET_NAME")
-    kms_key_ring: str = Field(default="", env="KMS_KEY_RING")
-    kms_key_name: str = Field(default="", env="KMS_KEY_NAME")
+    google_cloud_project: str = Field(default="", env="GOOGLE_CLOUD_PROJECT")
     
-    # OpenAI設定
-    openai_api_key: str = Field(default="", env="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4", env="OPENAI_MODEL")
+    # Cloud Storage設定
+    gcs_bucket_name: str = Field(default="rag-llm-storage", env="GCS_BUCKET_NAME")
+    gcs_audit_bucket: str = Field(default="rag-llm-audit", env="GCS_AUDIT_BUCKET")
+    worm_bucket_name: str = Field(default="rag-llm-worm", env="WORM_BUCKET_NAME")
+    worm_storage_enabled: bool = Field(default=True, env="WORM_STORAGE_ENABLED")
     
-    # セキュリティ設定
+    # KMS設定
+    kms_key_ring: str = Field(default="rag-llm-keyring", env="KMS_KEY_RING")
+    kms_key_name: str = Field(default="rag-llm-key", env="KMS_KEY_NAME")
+    
+    # Redis設定
+    redis_url: str = Field(default="redis://localhost:6379", env="REDIS_URL")
+    
+    # LINE Bot設定
+    line_channel_access_token: str = Field(default="", env="LINE_CHANNEL_ACCESS_TOKEN")
+    line_channel_secret: str = Field(default="", env="LINE_CHANNEL_SECRET")
+    
+    # CORS設定
     allowed_origins: List[str] = Field(
         default=["http://localhost:3000", "http://localhost:8080"],
         env="ALLOWED_ORIGINS"
@@ -75,31 +72,51 @@ class Settings(BaseSettings):
     # レート制限
     rate_limit_per_minute: int = Field(default=100, env="RATE_LIMIT_PER_MINUTE")
     
-    # 機能フラグ
+    # 監視設定
     enable_monitoring: bool = Field(default=False, env="ENABLE_MONITORING")
-    worm_storage_enabled: bool = Field(default=True, env="WORM_STORAGE_ENABLED")
     
     # 通知設定
-    notification_config: Dict[str, Any] = Field(
-        default_factory=lambda: {
-            "email_enabled": True,
-            "line_enabled": False,
-            "emergency_contacts": [],
-            "smtp": {
-                "host": "localhost",
-                "port": 587,
-                "use_tls": True,
-                "username": "",
-                "password": ""
-            }
-        }
-    )
+    notification_config: Dict[str, Any] = Field(default_factory=dict)
+    
+    # ログ設定
+    log_level: str = Field(default="INFO", env="LOG_LEVEL")
+    log_file: Optional[str] = Field(default=None, env="LOG_FILE")
     
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        case_sensitive = False
 
 
+@lru_cache()
 def get_settings() -> Settings:
-    """設定インスタンスを取得"""
+    """設定のシングルトンインスタンスを取得"""
     return Settings()
+
+
+# デフォルトエクスポート
+settings = get_settings()
+
+# 通知設定の初期化
+if not settings.notification_config:
+    settings.notification_config = {
+        "email_enabled": True,
+        "line_enabled": True,
+        "smtp": {
+            "host": os.getenv("SMTP_HOST", "localhost"),
+            "port": int(os.getenv("SMTP_PORT", "587")),
+            "username": os.getenv("SMTP_USERNAME", ""),
+            "password": os.getenv("SMTP_PASSWORD", ""),
+            "use_tls": os.getenv("SMTP_USE_TLS", "true").lower() == "true",
+        },
+        "line": {
+            "channel_access_token": settings.line_channel_access_token,
+            "channel_secret": settings.line_channel_secret,
+        },
+        "alert_recipients": [
+            "admin@example.com"
+        ],
+        "emergency_contacts": [
+            "emergency@example.com"
+        ]
+    }

@@ -34,12 +34,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from google.cloud import storage, scheduler_v1
 from google.api_core import exceptions as gcp_exceptions
 
-from ..database import get_db_session
-from ..models import ConsentRecord, ConsentWithdrawal, AuditLog
+from database import get_db_session
+from models import ConsentRecord, ConsentWithdrawal, AuditLog
 from .worm_service import EnhancedWORMManager
 from .manifest_service import ManifestService
-from ..utils.notification import send_email_notification
-from ..utils.encryption import encrypt_sensitive_data, secure_delete
+from utils.notification import send_email_notification
+from utils.encryption import encrypt_sensitive_data, secure_delete
 
 # ロギング設定
 logger = logging.getLogger(__name__)
