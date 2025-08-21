@@ -1,18 +1,18 @@
-# api/routers/line_bot_fixed.py - 友達追加挨拶メッセージ対応版（ハルチネーション対策・同期化）
+# api/routers/line_bot_fixed.py - 友達追加挨拶メッセージ対応版（ハルチネーション対策・同期化 + 遅延読み込み）
 
 import logging
 import os
 import traceback
 from datetime import datetime
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Tuple
 
 from fastapi import APIRouter, Request, BackgroundTasks
 
 logger = logging.getLogger(__name__)
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # ハルチネーション対策（同期）: 外部統合が使えればそれを使用し、ダメならローカル実装にフォールバック
-# ------------------------------------------------------------------------------
+# ==============================================================================
 try:
     from integration.anti_hallucination_integration import (
         enhance_line_chat_response_sync as _external_enhance_sync,
@@ -141,9 +141,9 @@ except Exception as _imp_err:
             "anti_hallucination_used": False,
         }
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # LINE Bot SDK v3 読み込み
-# ------------------------------------------------------------------------------
+# ==============================================================================
 try:
     from linebot.v3 import WebhookHandler
     from linebot.v3.exceptions import InvalidSignatureError
@@ -174,10 +174,10 @@ except ImportError as e:
 # ルーター
 router = APIRouter(prefix="/line", tags=["line"])
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # 認証情報の安全取得＆正規化
-# ------------------------------------------------------------------------------
-def get_line_credentials_safe() -> tuple[Optional[str], Optional[str]]:
+# ==============================================================================
+def get_line_credentials_safe() -> Tuple[Optional[str], Optional[str]]:
     """LINE認証情報を安全に取得（Secret Manager フォールバック対応）"""
     access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
     channel_secret = os.getenv("LINE_CHANNEL_SECRET")
@@ -278,9 +278,9 @@ def normalize_line_token_ultimate(token: Any) -> str:
 
     return token_str
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # LINE Bot 初期化
-# ------------------------------------------------------------------------------
+# ==============================================================================
 LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = get_line_credentials_safe()
 
 line_bot_api = None
@@ -318,9 +318,9 @@ if LINE_SDK_AVAILABLE:
 else:
     logger.warning("⚠️ LINE Bot SDK not available")
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # 応答テンプレート
-# ------------------------------------------------------------------------------
+# ==============================================================================
 GREETING_MESSAGE = """こんにちは！キノエデザインです。
 この度は友だち追加ありがとうございます✨
 
@@ -427,9 +427,9 @@ https://kinoe-design.com
 お気軽にお声かけください！""",
 }
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # 判定・返信ユーティリティ
-# ------------------------------------------------------------------------------
+# ==============================================================================
 def detect_richmenu_action(message_text: str) -> str:
     """リッチメニューアクションを検出"""
     text_clean = message_text.lower().replace(" ", "").replace("　", "")
@@ -490,9 +490,9 @@ def send_line_reply_ultimate_safe(reply_token: str, message_text: str) -> bool:
         logger.error(f"🔍 Error details: {traceback.format_exc()}")
         return False
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # Webhook エンドポイント
-# ------------------------------------------------------------------------------
+# ==============================================================================
 @router.post("/webhook")
 async def line_webhook_ultimate(request: Request, background_tasks: BackgroundTasks):
     """究極に安全なLINE Webhook（友達追加対応・同期ハンドラ前提）"""
@@ -531,57 +531,84 @@ async def line_webhook_ultimate(request: Request, background_tasks: BackgroundTa
         logger.error(traceback.format_exc())
         return {"status": "error", "error": str(e), "timestamp": datetime.now().isoformat()}
 
-# ------------------------------------------------------------------------------
-# RAG 連携（同期版）
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# RAG 連携（同期版／遅延読み込み対応）
+# ==============================================================================
 def get_app_globals() -> Dict[str, Any]:
-    """アプリのグローバル変数を取得"""
+    """アプリのグローバル変数を取得（遅延読み込み対応）"""
     try:
         import main
 
+        # 現状の参照を取得
+        vectorstore = getattr(main, "vectorstore", None)
+        rag_chain_template = getattr(main, "rag_chain_template", None)
+        llm_instance = getattr(main, "llm_instance", None)
+
+        # 必要に応じて遅延初期化を実行
+        if vectorstore is None and hasattr(main, "ensure_vectorstore_loaded"):
+            logger.info("🔄 Triggering lazy vectorstore loading...")
+            vectorstore = main.ensure_vectorstore_loaded()
+
+        if rag_chain_template is None and hasattr(main, "ensure_rag_chain_loaded"):
+            logger.info("🔄 Triggering lazy RAG chain loading...")
+            rag_chain_template = main.ensure_rag_chain_loaded()
+
         return {
-            "vectorstore": getattr(main, "vectorstore", None),
-            "rag_chain_template": getattr(main, "rag_chain_template", None),
-            "llm_instance": getattr(main, "llm_instance", None),
+            "vectorstore": vectorstore,
+            "rag_chain_template": rag_chain_template,
+            "llm_instance": llm_instance,
         }
     except Exception as e:
-        logger.error(f"Failed to get app globals: {e}")
+        logger.error(f"Failed to get app globals with lazy loading: {e}")
         return {}
 
+
 def process_general_question_sync(message_text: str, user_id: str = "unknown") -> str:
-    """一般的な質問の処理（同期版・ハルチネーション対策適用）"""
+    """一般的な質問の処理（同期版）- 遅延読み込み対応"""
     try:
+        # RAG システムとの連携（遅延読み込み対応）
         globals_dict = get_app_globals()
         original_response: Optional[str] = None
 
-        if globals_dict.get("rag_chain_template"):
+        # RAGチェーンが利用可能な場合のみ実行
+        rag_chain = globals_dict.get("rag_chain_template")
+        if rag_chain:
             try:
-                result = globals_dict["rag_chain_template"].invoke({"query": message_text})
+                result = rag_chain.invoke({"query": message_text})
                 original_response = result.get("result", "申し訳ございません。お答えできませんでした。")
+                logger.info(f"✅ RAG processing successful for query: {message_text[:50]}...")
             except Exception as e:
-                logger.warning(f"RAG invoke warning (sync): {e}")
+                logger.warning(f"⚠️ RAG processing failed, using fallback: {e}")
+                original_response = None
+        else:
+            logger.info("ℹ️ RAG chain not available, using fallback response")
+            original_response = None
 
-        enhanced = enhance_line_chat_response_sync(
-            query=message_text, user_id=user_id, original_response=original_response
+        # フォールバック応答の準備
+        if not original_response:
+            original_response = "お尋ねの件について、詳しくは直接お問い合わせください。"
+
+        # 同期版のハルチネーション対策を適用
+        enhanced_result = enhance_line_chat_response_sync(
+            query=message_text,
+            user_id=user_id,
+            original_response=original_response,
         )
-        final_answer = enhanced.get("answer") or "申し訳ございません。お答えできませんでした。"
+
+        final_answer = enhanced_result.get("answer") or "申し訳ございません。お答えできませんでした。"
 
         logger.info(
-            f"LINE response enhanced - Anti-hallucination: {enhanced.get('anti_hallucination_used', False)}"
+            f"LINE response enhanced - Anti-hallucination: {enhanced_result.get('anti_hallucination_used', False)}"
         )
-        if enhanced.get("last_updated"):
-            logger.info(f"Last updated: {enhanced['last_updated']}")
-        if enhanced.get("warnings"):
-            logger.info(f"Warnings: {enhanced['warnings']}")
-
         return final_answer
-    except Exception as e:
-        logger.error(f"Error processing general question (sync): {e}")
-        return "申し訳ございません。エラーが発生しました。"
 
-# ------------------------------------------------------------------------------
+    except Exception as e:
+        logger.error(f"Error processing general question: {e}")
+        return "申し訳ございません。一時的にエラーが発生しました。しばらくしてから再度お試しください。"
+
+# ==============================================================================
 # イベントハンドラ（Follow / Message / Postback）— 同期化済み
-# ------------------------------------------------------------------------------
+# ==============================================================================
 if LINE_SDK_AVAILABLE and handler:
 
     @handler.add(FollowEvent)
@@ -670,9 +697,9 @@ if LINE_SDK_AVAILABLE and handler:
         except Exception as e:
             logger.error(f"💥 Postback handler error: {e}")
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # デバッグ系エンドポイント
-# ------------------------------------------------------------------------------
+# ==============================================================================
 @router.get("/debug-ultimate")
 def line_debug_ultimate():
     """LINE Bot デバッグ情報（完全版）"""

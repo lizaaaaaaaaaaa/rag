@@ -140,156 +140,147 @@ async def performance_monitoring(request: Request, call_next):
     return response
 
 # ------------------------------------------------------------------------------
-# 起動時処理
+# 起動時処理（最適化：高速起動 + 遅延初期化）
 # ------------------------------------------------------------------------------
 @app.on_event("startup")
-async def integrated_startup():
+async def optimized_startup():
     global vectorstore, rag_chain_template, llm_instance
 
-    logger.info("🚀 Integrated Enhanced RAG System Startup with Anti-Hallucination")
-    logger.info("=" * 70)
+    logger.info("🚀 Fast Startup Mode - Enhanced RAG System")
+    logger.info("=" * 50)
 
-    features = []
-    if ULTRA_FAST_MODE:
-        features.append("Ultra Fast Web Responses")
-    if ANTI_HALLUCINATION_MODE:
-        features.append("Anti-Hallucination Verification")
-    if ENABLE_AUTO_UPDATE:
-        features.append("Auto Information Updates")
-    logger.info(f"🎯 Active Features: {', '.join(features) if features else 'None'}")
+    # 本番環境では起動を高速化
+    ENV = os.getenv("ENV", "development")
+    FAST_STARTUP = ENV == "production" or os.getenv("FAST_STARTUP", "false").lower() == "true"
 
-    # 1) LLM 初期化
+    if FAST_STARTUP:
+        logger.info("⚡ Fast startup mode enabled - deferring heavy initialization")
+        try:
+            # 最低限のヘルスチェック用設定（遅延読み込み）
+            llm_instance = None
+            vectorstore = None
+            rag_chain_template = None
+
+            logger.info("✅ Fast startup completed - heavy initialization deferred")
+            logger.info("🎯 Startup time optimized for Cloud Run health checks")
+            return
+        except Exception as e:
+            logger.error(f"❌ Fast startup failed: {e}")
+            # フォールバックとして通常の初期化を実行
+
+    # 通常の起動処理（開発環境またはフォールバック）
+    logger.info("🔧 Full initialization mode")
+
+    # 1) LLM 初期化（軽量版）
     try:
         logger.info("🧠 Initializing LLM...")
-        from llm.llm_runner import load_llm  # プロジェクト内ユーティリティ想定
-        llm, tokenizer, max_tokens = load_llm()
-        llm_instance = llm
-        logger.info("✅ LLM initialized successfully")
-        _ = llm.invoke("テスト")  # 簡易テスト
-        logger.info("✅ LLM test successful")
+        if os.getenv("SKIP_LLM_INIT", "false").lower() == "true":
+            logger.info("⚠️ LLM initialization skipped")
+            llm_instance = None
+        else:
+            from llm.llm_runner import load_llm  # プロジェクト内ユーティリティ想定
+            llm, tokenizer, max_tokens = load_llm()
+            llm_instance = llm
+            logger.info("✅ LLM initialized")
     except Exception as e:
-        logger.error(f"❌ LLM initialization failed: {e}")
+        logger.warning(f"⚠️ LLM initialization skipped: {e}")
         llm_instance = None
 
-    # 2) ベクトルストア初期化
+    # 2) ベクトルストア初期化（軽量版）
     try:
         logger.info("🔍 Loading vectorstore...")
-        from rag.ingested_text import load_vectorstore  # プロジェクト内ユーティリティ想定
-        vectorstore = load_vectorstore()
-        if vectorstore:
-            logger.info("✅ Vectorstore loaded successfully")
-            try:
-                test_results = vectorstore.similarity_search("住宅", k=1)
-                logger.info(
-                    f"✅ Vectorstore test successful - found {len(test_results)} results"
-                )
-            except Exception as e:
-                logger.warning(f"Vectorstore test failed: {e}")
+        if os.getenv("SKIP_VECTORSTORE_INIT", "false").lower() == "true":
+            logger.info("⚠️ Vectorstore initialization skipped")
+            vectorstore = None
         else:
-            logger.warning("⚠️ Vectorstore is None")
+            from rag.ingested_text import load_vectorstore  # プロジェクト内ユーティリティ想定
+            vectorstore = load_vectorstore()
+            logger.info("✅ Vectorstore loaded")
     except Exception as e:
-        logger.error(f"❌ Vectorstore initialization failed: {e}")
+        logger.warning(f"⚠️ Vectorstore initialization skipped: {e}")
         vectorstore = None
 
-    # 3) RAG チェーン初期化（統一品質版）
+    # 3) RAG チェーン初期化（軽量版）
     try:
         if vectorstore and llm_instance:
-            logger.info("⛓️ Building unified quality RAG chain...")
+            logger.info("⛓️ Building RAG chain...")
             if ULTRA_FAST_MODE:
-                try:
-                    # 超高速版（signal 依存など環境差異はモジュール側で吸収）
-                    from rag.fast_rag_chain import get_ultra_fast_rag_chain
-                    rag_chain_template = get_ultra_fast_rag_chain(
-                        vectorstore=vectorstore, return_source=True
-                    )
-                    logger.info("✅ Unified Ultra Fast RAG chain created")
-                except Exception as fast_error:
-                    logger.warning(f"Ultra fast chain fallback: {fast_error}")
-                    from rag.ingested_text import get_rag_chain
-                    rag_chain_template = get_rag_chain(
-                        vectorstore=vectorstore, return_source=True
-                    )
-                    logger.info("✅ Standard RAG chain created (fallback)")
+                from rag.fast_rag_chain import get_ultra_fast_rag_chain
+                rag_chain_template = get_ultra_fast_rag_chain(
+                    vectorstore=vectorstore, return_source=True
+                )
             else:
                 from rag.ingested_text import get_rag_chain
                 rag_chain_template = get_rag_chain(
                     vectorstore=vectorstore, return_source=True
                 )
-                logger.info("✅ Standard RAG chain created")
-
-            # 品質テスト
-            try:
-                test_result = rag_chain_template.invoke({"query": "坪単価について教えて"})
-                test_answer = (test_result or {}).get("result", "")
-                logger.info(f"✅ RAG chain quality test: {len(test_answer)} chars")
-            except Exception as e:
-                logger.warning(f"RAG chain quality test failed: {e}")
+            logger.info("✅ RAG chain created")
         else:
             logger.warning("⚠️ RAG chain not created - missing components")
             rag_chain_template = None
     except Exception as e:
-        logger.error(f"❌ RAG chain creation failed: {e}")
+        logger.warning(f"⚠️ RAG chain creation skipped: {e}")
         rag_chain_template = None
 
-    # 4) 自動更新システム（モック初期化）
-    if ENABLE_AUTO_UPDATE:
+    # システム状態
+    components_loaded = sum([
+        llm_instance is not None,
+        vectorstore is not None,
+        rag_chain_template is not None
+    ])
+    logger.info(f"📊 Components loaded: {components_loaded}/3")
+    logger.info("🎉 Startup completed - System ready")
+    logger.info("=" * 50)
+
+# ------------------------------------------------------------------------------
+# 遅延初期化ヘルパー
+# ------------------------------------------------------------------------------
+def ensure_llm_loaded():
+    """LLMが未初期化の場合に初期化"""
+    global llm_instance
+    if llm_instance is None:
         try:
-            logger.info("🔄 Initializing auto-update system...")
-            logger.info("✅ Auto-update system initialized")
+            logger.info("🔄 Lazy loading LLM...")
+            from llm.llm_runner import load_llm
+            llm, tokenizer, max_tokens = load_llm()
+            llm_instance = llm
+            logger.info("✅ LLM lazy loaded successfully")
         except Exception as e:
-            logger.error(f"❌ Auto-update initialization failed: {e}")
+            logger.error(f"❌ LLM lazy loading failed: {e}")
+    return llm_instance
 
-    # 5) ハルチネーション対策システムの初期化
-    if ANTI_HALLUCINATION_MODE:
+def ensure_vectorstore_loaded():
+    """ベクトルストアが未初期化の場合に初期化"""
+    global vectorstore
+    if vectorstore is None:
         try:
-            logger.info("🛡️ Initializing anti-hallucination system...")
-            # 必要な環境変数の確認
-            google_api_key = os.environ.get("GOOGLE_SEARCH_API_KEY")
-            google_cx = os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
+            logger.info("🔄 Lazy loading vectorstore...")
+            from rag.ingested_text import load_vectorstore
+            vectorstore = load_vectorstore()
+            logger.info("✅ Vectorstore lazy loaded successfully")
+        except Exception as e:
+            logger.error(f"❌ Vectorstore lazy loading failed: {e}")
+    return vectorstore
 
-            if google_api_key and google_cx:
-                logger.info("✅ Google Search API credentials found")
-            else:
-                logger.warning("⚠️ Google Search API credentials not found - anti-hallucination features limited")
-
-            # ハルチネーション対策モジュールの初期化テスト
+def ensure_rag_chain_loaded():
+    """RAGチェーンが未初期化の場合に初期化"""
+    global rag_chain_template
+    if rag_chain_template is None:
+        llm = ensure_llm_loaded()
+        vs = ensure_vectorstore_loaded()
+        if llm and vs:
             try:
-                from integration.anti_hallucination_integration import AntiHallucinationIntegration  # noqa: F401
-                logger.info("✅ Anti-hallucination integration module loaded")
-            except ImportError as e:
-                logger.warning(f"⚠️ Anti-hallucination integration not available: {e}")
-
-            logger.info("✅ Anti-hallucination system initialized")
-        except Exception as e:
-            logger.error(f"❌ Anti-hallucination system initialization failed: {e}")
-
-    # 6) システム状態ログ
-    system_health = {
-        "llm": llm_instance is not None,
-        "vectorstore": vectorstore is not None,
-        "rag_chain": rag_chain_template is not None,
-        "ultra_fast_mode": ULTRA_FAST_MODE,
-        "anti_hallucination": ANTI_HALLUCINATION_MODE,
-        "auto_update": ENABLE_AUTO_UPDATE,
-    }
-    healthy_components = sum(bool(v) for v in system_health.values())
-    total_components = len(system_health)
-
-    logger.info("📊 System Health Check:")
-    for component, status in system_health.items():
-        logger.info(f"  {component}: {'✅' if status else '❌'}")
-
-    if healthy_components >= 3:
-        logger.info("🎉 Integrated Enhanced RAG System Ready with Anti-Hallucination!")
-        logger.info("⚡ Performance Targets: Web Chat <1s, LINE Bot <3s")
-        if ANTI_HALLUCINATION_MODE:
-            logger.info("🛡️ Anti-Hallucination Protection: Active")
-    else:
-        logger.warning(
-            f"⚠️ System partially operational ({healthy_components}/{total_components})"
-        )
-
-    logger.info("=" * 70)
+                logger.info("🔄 Lazy loading RAG chain...")
+                if ULTRA_FAST_MODE:
+                    from rag.fast_rag_chain import get_ultra_fast_rag_chain
+                    rag_chain_template = get_ultra_fast_rag_chain(vectorstore=vs, return_source=True)
+                else:
+                    from rag.ingested_text import get_rag_chain
+                    rag_chain_template = get_rag_chain(vectorstore=vs, return_source=True)
+                logger.info("✅ RAG chain lazy loaded successfully")
+            except Exception as e:
+                logger.error(f"❌ RAG chain lazy loading failed: {e}")
+    return rag_chain_template
 
 # ------------------------------------------------------------------------------
 # ルーター登録（安全な動的読み込みユーティリティ）
@@ -418,26 +409,26 @@ def get_performance_report():
                 "web_chat_response": "< 1.0 seconds",
                 "line_bot_response": "< 3.0 seconds",
                 "rag_processing": "< 2.0 seconds",
-                "anti_hallucination_check": "< 5.0 seconds",  # 追加
+                "anti_hallucination_check": "< 5.0 seconds",
             },
             "optimizations": {
                 "ultra_fast_cache": ULTRA_FAST_MODE,
                 "parallel_processing": True,
                 "template_matching": ULTRA_FAST_MODE,
                 "timeout_protection": True,
-                "anti_hallucination_integration": ANTI_HALLUCINATION_MODE,  # 追加
+                "anti_hallucination_integration": ANTI_HALLUCINATION_MODE,
             },
             "monitoring": {
                 "response_time_tracking": True,
                 "performance_alerts": True,
                 "cache_hit_rate_monitoring": ULTRA_FAST_MODE,
-                "hallucination_detection": ANTI_HALLUCINATION_MODE,  # 追加
+                "hallucination_detection": ANTI_HALLUCINATION_MODE,
             },
             "recommendations": [
                 "Monitor cache hit rates for optimal performance",
                 "Regular vectorstore optimization",
                 "Auto-update frequency tuning",
-                "Anti-hallucination threshold adjustment",  # 追加
+                "Anti-hallucination threshold adjustment",
             ],
         }
     except Exception as e:
@@ -486,6 +477,27 @@ def integrated_health_check():
             "error": str(e),
             "timestamp": datetime.now().isoformat(),
         }
+
+# ------------------------------------------------------------------------------
+# Cloud Run 向けの軽量ヘルスチェック（起動直後でも成功）
+# ------------------------------------------------------------------------------
+@app.get("/healthz/ready")
+def health_check_ready():
+    """Cloud Run用のレディネスチェック（軽量・依存なし）"""
+    return {
+        "status": "ready",
+        "timestamp": datetime.now().isoformat(),
+        "service": "rag-api",
+        "version": "3.1.0",
+    }
+
+@app.get("/healthz/live")
+def health_check_live():
+    """Cloud Run用のライブネスチェック（軽量・依存なし）"""
+    return {
+        "status": "alive",
+        "timestamp": datetime.now().isoformat(),
+    }
 
 # ------------------------------------------------------------------------------
 # 自動更新（手動トリガー）
@@ -572,9 +584,7 @@ async def test_anti_hallucination():
         test_response = "住宅ローン控除は、住宅購入時の所得税控除制度です。"
 
         enhanced_result = await enhance_web_chat_response(
-            query=test_query,
-            original_response=test_response,
-            user_context={"username": "test_user"},
+            query=test_query, original_response=test_response, user_context={"username": "test_user"}
         )
 
         return {
