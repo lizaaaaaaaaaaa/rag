@@ -481,6 +481,138 @@ class AntiHallucinationIntegrationTest:
             print(f"最終更新日: {result['last_updated']}")
             print(f"警告: {result['warnings']}")
 
+# ==============================================================================
+# 同期版の統合関数（イベントループエラー対策）
+# ==============================================================================
+
+def enhance_line_chat_response_sync(
+    query: str,
+    user_id: str,
+    original_response: str = None
+) -> Dict[str, Any]:
+    """LINEチャット回答の強化（同期版）- イベントループエラー対策"""
+    
+    integration = AntiHallucinationIntegration()
+    
+    # ハルチネーション対策が必要かチェック
+    if integration.should_use_anti_hallucination(query):
+        logger.info("🛡️ Using sync anti-hallucination for LINE chat")
+        
+        try:
+            # 基本的なフィルタリング処理（非同期検索は行わない）
+            if original_response:
+                # 簡易的な品質チェック
+                if len(original_response.strip()) < 10:
+                    enhanced_answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
+                elif "エラー" in original_response or "申し訳" in original_response:
+                    enhanced_answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
+                else:
+                    # 補助金・最新情報に関する注意書きを追加
+                    if any(keyword in query.lower() for keyword in ["補助金", "助成金", "最新", "2024", "2025"]):
+                        enhanced_answer = original_response + "\n\n※補助金制度は年度ごとに変更される可能性があります。最新情報については公式サイトでご確認ください。"
+                    else:
+                        enhanced_answer = original_response
+            else:
+                enhanced_answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
+            
+            return {
+                "answer": enhanced_answer,
+                "confidence_level": 0.6,
+                "verification_method": "sync_basic_filtering",
+                "verification_note": "⚠️ 基本的な品質チェック済み（同期処理）",
+                "last_updated": datetime.now().strftime("%Y-%m-%d"),
+                "sources": [],
+                "warnings": ["同期処理のため限定的な検証"],
+                "anti_hallucination_used": True
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Sync anti-hallucination error: {e}")
+            return {
+                "answer": "お尋ねの件について、詳しくは直接お問い合わせください。",
+                "confidence_level": 0.0,
+                "verification_method": "error_fallback",
+                "verification_note": "❌ 処理エラー",
+                "last_updated": None,
+                "sources": [],
+                "warnings": [f"処理エラー: {str(e)}"],
+                "anti_hallucination_used": True
+            }
+    else:
+        # 通常のRAG応答をそのまま返す
+        return {
+            "answer": original_response or "申し訳ございません。お答えできませんでした。",
+            "confidence_level": 0.8,
+            "verification_method": "standard_rag",
+            "verification_note": "📚 社内データ",
+            "last_updated": None,
+            "sources": [],
+            "warnings": [],
+            "anti_hallucination_used": False
+        }
+
+
+def enhance_web_chat_response_sync(
+    query: str,
+    original_response: str,
+    user_context: Dict = None
+) -> Dict[str, Any]:
+    """Webチャット回答の強化（同期版）"""
+    
+    integration = AntiHallucinationIntegration()
+    
+    # ハルチネーション対策が必要かチェック
+    if integration.should_use_anti_hallucination(query):
+        logger.info("🛡️ Using sync anti-hallucination for web chat")
+        
+        try:
+            # 基本的なフィルタリング処理
+            if original_response and len(original_response.strip()) >= 10:
+                # 補助金・最新情報に関する注意書きを追加
+                if any(keyword in query.lower() for keyword in ["補助金", "助成金", "最新", "2024", "2025"]):
+                    enhanced_answer = original_response + "\n\n※制度は年度ごとに変更される可能性があります。最新情報については公式サイトでご確認ください。"
+                else:
+                    enhanced_answer = original_response
+            else:
+                enhanced_answer = "申し訳ございません。お尋ねの件について、詳しくは直接お問い合わせください。"
+            
+            return {
+                "answer": enhanced_answer,
+                "confidence_level": 0.7,
+                "verification_method": "sync_web_filtering",
+                "verification_note": "📚 社内データ + 基本検証",
+                "last_updated": datetime.now().strftime("%Y-%m-%d"),
+                "sources": [],
+                "warnings": [],
+                "anti_hallucination_used": True
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Sync web anti-hallucination error: {e}")
+            return {
+                "answer": "申し訳ございません。エラーが発生しました。",
+                "confidence_level": 0.0,
+                "verification_method": "error_fallback",
+                "verification_note": "❌ 処理エラー",
+                "last_updated": None,
+                "sources": [],
+                "warnings": [f"処理エラー: {str(e)}"],
+                "anti_hallucination_used": True
+            }
+    else:
+        # 通常のRAG応答をそのまま返す
+        return {
+            "answer": original_response,
+            "confidence_level": 0.8,
+            "verification_method": "standard_rag",
+            "verification_note": "📚 社内データベース",
+            "last_updated": None,
+            "sources": [],
+            "warnings": [],
+            "anti_hallucination_used": False
+        }
+
+
 # メイン実行（テスト用）
 if __name__ == "__main__":
     async def main():
