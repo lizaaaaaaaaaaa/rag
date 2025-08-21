@@ -1,4 +1,4 @@
-# api/routers/line_bot_fixed.py - 修正版LINE Bot実装
+# api/routers/line_bot_fixed.py - 友達追加挨拶メッセージ対応版
 
 import logging
 import os
@@ -18,7 +18,8 @@ try:
     from linebot.v3.messaging import (
         Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage,
     )
-    from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent
+    # FollowEventを追加でインポート
+    from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent, FollowEvent
     LINE_SDK_AVAILABLE = True
     logger.info("✅ LINE Bot SDK v3 imported successfully")
 except ImportError as e:
@@ -190,6 +191,17 @@ if LINE_SDK_AVAILABLE:
 else:
     logger.warning("⚠️ LINE Bot SDK not available")
 
+# 友達追加時の挨拶メッセージ
+GREETING_MESSAGE = """こんにちは！キノエデザインです。
+この度は友だち追加ありがとうございます✨
+
+目的のボタンをタップ👇
+🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画 / 🌐サイト / 💬チャット
+
+AIは24時間、担当者は当日〜翌営業日に返信します。
+
+取扱い(プライバシーポリシー)：〔https://preview.studio.site/live/EjOQljz1WJ/privacy-policy〕"""
+
 # リッチメニュー応答定義（修正版）
 RICHMENU_RESPONSES = {
     "AI相談": """🤖 AI住まい相談を開始します！
@@ -358,8 +370,8 @@ def send_line_reply_ultimate_safe(reply_token: str, message_text: str) -> bool:
 # Webhook エンドポイント
 @router.post("/webhook")
 async def line_webhook_ultimate(request: Request, background_tasks: BackgroundTasks):
-    """究極に安全なLINE Webhook（完全修正版）"""
-    logger.info("🚀 LINE Webhook called (Ultimate Safe Version)")
+    """究極に安全なLINE Webhook（友達追加対応版）"""
+    logger.info("🚀 LINE Webhook called (Ultimate Safe Version with Follow Support)")
     
     if not line_bot_api or not handler:
         logger.error("❌ LINE Bot not configured properly")
@@ -394,8 +406,42 @@ async def line_webhook_ultimate(request: Request, background_tasks: BackgroundTa
         logger.error(traceback.format_exc())
         return {"status": "error", "error": str(e), "timestamp": datetime.now().isoformat()}
 
-# イベントハンドラ（完全修正版）
+# イベントハンドラ（友達追加対応版）
 if LINE_SDK_AVAILABLE and handler:
+    
+    # 🆕 友達追加イベントハンドラー
+    @handler.add(FollowEvent)
+    def handle_follow_event(event):
+        """友達追加時のハンドラー（挨拶メッセージ送信）"""
+        start_time = datetime.now()
+        
+        try:
+            user_id = event.source.user_id
+            reply_token = event.reply_token
+            
+            logger.info(f"👤 New follower: {user_id}")
+            logger.info("📬 Sending greeting message...")
+            
+            # 挨拶メッセージを送信
+            success = send_line_reply_ultimate_safe(reply_token, GREETING_MESSAGE)
+            
+            duration = (datetime.now() - start_time).total_seconds()
+            
+            if success:
+                logger.info(f"✅ Greeting message sent successfully: user={user_id}, time={duration:.3f}s")
+            else:
+                logger.error(f"❌ Failed to send greeting message: user={user_id}")
+            
+        except Exception as e:
+            logger.error(f"💥 Follow event handler error: {e}")
+            logger.error(traceback.format_exc())
+            
+            # 緊急時の応答
+            try:
+                emergency_greeting = "こんにちは！キノエデザインです。友だち追加ありがとうございます！"
+                send_line_reply_ultimate_safe(event.reply_token, emergency_greeting)
+            except Exception as final_error:
+                logger.error(f"💥 Emergency greeting failed: {final_error}")
     
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message_ultimate(event):
@@ -508,6 +554,8 @@ def line_debug_ultimate():
         "line_sdk_available": LINE_SDK_AVAILABLE,
         "line_bot_api_initialized": line_bot_api is not None,
         "handler_initialized": handler is not None,
+        "follow_event_supported": True,  # 友達追加対応フラグ
+        "greeting_message_configured": True,  # 挨拶メッセージ設定フラグ
         "credentials_debug": {
             "raw_token_type": type(raw_token).__name__ if raw_token else "None",
             "raw_token_length": len(str(raw_token)) if raw_token else 0,
@@ -516,6 +564,19 @@ def line_debug_ultimate():
             "normalized_token_valid": len(normalized_token) > 50,
             "normalized_starts_with_bearer": normalized_token.startswith("Bearer ") if normalized_token else False
         },
-        "initialization_status": "✅ Success" if line_bot_api and handler else "❌ Failed",
+        "initialization_status": "✅ Success with Follow Support" if line_bot_api and handler else "❌ Failed",
+        "greeting_message_preview": GREETING_MESSAGE[:100] + "..." if len(GREETING_MESSAGE) > 100 else GREETING_MESSAGE,
+        "timestamp": datetime.now().isoformat()
+    }
+
+# 友達追加テスト用エンドポイント
+@router.get("/test-greeting")
+def test_greeting_message():
+    """挨拶メッセージのテスト表示"""
+    return {
+        "greeting_message": GREETING_MESSAGE,
+        "message_length": len(GREETING_MESSAGE),
+        "follow_event_configured": True,
+        "test_info": "This is the message that will be sent when users follow the LINE bot",
         "timestamp": datetime.now().isoformat()
     }
