@@ -1,6 +1,15 @@
-# cloudbuild.yaml - RAG統合版CI/CDパイプライン
-# 現在の設定 + cloudbuild-enhanced.yamlの機能を段階的に統合
+# cloudbuild.yaml - RAG統合版CI/CDパイプライン修正版
+# Cloud Build ログ設定エラー修正
 
+# ログ設定を追加（サービスアカウント使用時の要件）
+options:
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+  substitutionOption: ALLOW_LOOSE
+
+# タイムアウト設定
+timeout: '3600s'
 
 steps:
   # ========== Phase 1: 基本機能強化 ==========
@@ -19,7 +28,7 @@ steps:
           echo "No requirements.txt found, skipping tests"
         fi
     id: 'test-and-validate'
-
+    timeout: '600s'
 
   # 2. 超高速APIサーバー用イメージビルド（既存設定を強化）
   - name: 'gcr.io/cloud-builders/docker'
@@ -36,7 +45,6 @@ steps:
     id: 'build-enhanced-api'
     waitFor: ['test-and-validate']
 
-
   # 3. APIサーバーイメージをArtifact Registryにプッシュ
   - name: 'gcr.io/cloud-builders/docker'
     args: [
@@ -46,7 +54,6 @@ steps:
     timeout: '600s'
     id: 'push-enhanced-api'
     waitFor: ['build-enhanced-api']
-
 
   # 4. 超高性能APIサーバーをCloud Runにデプロイ（大幅強化）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -60,11 +67,11 @@ steps:
       - --platform=managed
       - --allow-unauthenticated
       - --memory=8Gi
-      - --cpu=4                           # 2→4に強化
-      - --timeout=300s                    # 600s→300sに短縮
-      - --min-instances=3                 # 2→3に強化
-      - --max-instances=20                # 15→20に強化
-      - --concurrency=1000                # 200→1000に大幅強化
+      - --cpu=4
+      - --timeout=300s
+      - --min-instances=3
+      - --max-instances=20
+      - --concurrency=1000
       - --port=8080
       - --set-env-vars=ULTRA_FAST_MODE=true,ANTI_HALLUCINATION_MODE=true,ENABLE_AUTO_UPDATE=true,MAX_NEW_TOKENS=150,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,OPENAI_TEMPERATURE=0.1,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app,RAG_SEARCH_K=2,RAG_CHUNK_SIZE=300,RAG_TIMEOUT=2,LINE_RESPONSE_TIMEOUT=3,WEB_SEARCH_TIMEOUT=3,ENABLE_RESPONSE_CACHE=true,CACHE_SIZE=500,CACHE_TTL=3600,CONFIDENCE_THRESHOLD=0.7
       - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest,GOOGLE_SEARCH_API_KEY=GOOGLE_SEARCH_API_KEY:latest,GOOGLE_SEARCH_ENGINE_ID=GOOGLE_SEARCH_ENGINE_ID:latest,LINE_CHANNEL_ID=LINE_CHANNEL_ID:latest,LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,LINE_LOGIN_CHANNEL_ID=LINE_LOGIN_CHANNEL_ID:latest,LINE_LOGIN_CHANNEL_SECRET=LINE_LOGIN_CHANNEL_SECRET:latest,LINE_LOGIN_REDIRECT_URI=LINE_LOGIN_REDIRECT_URI:latest,LIFF_ID=LIFF_ID:latest,JWT_SECRET=JWT_SECRET:latest
@@ -73,7 +80,6 @@ steps:
     timeout: '1200s'
     id: 'deploy-enhanced-api'
     waitFor: ['push-enhanced-api']
-
 
   # 5. 高速化対応フロントエンドビルド（既存設定を強化）
   - name: 'gcr.io/cloud-builders/docker'
@@ -87,7 +93,7 @@ steps:
     ]
     timeout: '900s'
     id: 'build-enhanced-frontend'
-
+    waitFor: ['deploy-enhanced-api']
 
   # 6. フロントエンドイメージをArtifact Registryにプッシュ
   - name: 'gcr.io/cloud-builders/docker'
@@ -99,6 +105,63 @@ steps:
     id: 'push-enhanced-frontend'
     waitFor: ['build-enhanced-frontend']
 
-
   # 7. 高速化対応フロントエンドをCloud Runにデプロイ（強化）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - rag-frontend
+      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest
+      - --region=asia-northeast1
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=4Gi
+      - --cpu=2
+      - --timeout=300s
+      - --min-instances=1
+      - --max-instances=10
+      - --concurrency=500
+      - --port=8080
+      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,ENV=production
+      - --service-account=190389115361-compute@developer.gserviceaccount.com
+    timeout: '600s'
+    id: 'deploy-enhanced-frontend'
+    waitFor: ['push-enhanced-frontend']
+
+  # 8. デプロイ確認と通知
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "=== デプロイ完了確認 ==="
+        echo "API URL: https://rag-api-190389115361.asia-northeast1.run.app"
+        echo "Frontend URL: https://rag-frontend-190389115361.asia-northeast1.run.app"
+        echo "デプロイ時刻: $(date)"
+        
+        # API ヘルスチェック
+        for i in {1..5}; do
+          if curl -f "https://rag-api-190389115361.asia-northeast1.run.app/healthz" 2>/dev/null; then
+            echo "✅ API Health Check OK"
+            break
+          else
+            echo "⏳ API Health Check... (${i}/5)"
+            sleep 10
+          fi
+        done
+        
+        echo "🚀 デプロイが完了しました！"
+    timeout: '300s'
+    id: 'deployment-verification'
+    waitFor: ['deploy-enhanced-frontend']
+
+# Cloud Build サービスアカウント設定
+serviceAccount: 'projects/rag-cloud-project/serviceAccounts/190389115361-compute@developer.gserviceaccount.com'
+
+# 置換変数
+substitutions:
+  _PROJECT_ID: 'rag-cloud-project'
+  _REGION: 'asia-northeast1'
+  _REGISTRY: 'asia-northeast1-docker.pkg.dev'
+  _REPOSITORY: 'rag-chat-pro'
