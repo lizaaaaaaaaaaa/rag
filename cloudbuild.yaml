@@ -1,9 +1,10 @@
-# cloudbuild.yaml - RAG統合版CI/CDパイプライン（Cloud Runタイムアウト対策版）
+# cloudbuild.yaml - RAG統合版CI/CDパイプライン
 # 現在の設定 + cloudbuild-enhanced.yamlの機能を段階的に統合
+
 
 steps:
   # ========== Phase 1: 基本機能強化 ==========
-  
+ 
   # 1. 依存関係のキャッシュとインストール（新機能）
   - name: 'python:3.11-slim'
     entrypoint: 'bash'
@@ -18,6 +19,7 @@ steps:
           echo "No requirements.txt found, skipping tests"
         fi
     id: 'test-and-validate'
+
 
   # 2. 超高速APIサーバー用イメージビルド（既存設定を強化）
   - name: 'gcr.io/cloud-builders/docker'
@@ -34,6 +36,7 @@ steps:
     id: 'build-enhanced-api'
     waitFor: ['test-and-validate']
 
+
   # 3. APIサーバーイメージをArtifact Registryにプッシュ
   - name: 'gcr.io/cloud-builders/docker'
     args: [
@@ -44,7 +47,8 @@ steps:
     id: 'push-enhanced-api'
     waitFor: ['build-enhanced-api']
 
-  # 4. 超高性能APIサーバーをCloud Runにデプロイ（タイムアウト対策強化）
+
+  # 4. 超高性能APIサーバーをCloud Runにデプロイ（大幅強化）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -56,77 +60,22 @@ steps:
       - --platform=managed
       - --allow-unauthenticated
       - --memory=8Gi
-      - --cpu=4                           
-      - --timeout=600s                    # タイムアウトを600秒に延長
-      - --min-instances=1                 # 最小インスタンス数を1に
-      - --max-instances=20                
-      - --concurrency=1000                
+      - --cpu=4                           # 2→4に強化
+      - --timeout=300s                    # 600s→300sに短縮
+      - --min-instances=3                 # 2→3に強化
+      - --max-instances=20                # 15→20に強化
+      - --concurrency=1000                # 200→1000に大幅強化
       - --port=8080
-      # Cloud Run プローブ設定の調整
-      - --update-env-vars=STARTUP_PROBE_TIMEOUT=60,LIVENESS_PROBE_TIMEOUT=30,READINESS_PROBE_TIMEOUT=30
-      - --set-env-vars=ULTRA_FAST_MODE=true,ANTI_HALLUCINATION_MODE=true,ENABLE_AUTO_UPDATE=true,MAX_NEW_TOKENS=150,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,OPENAI_TEMPERATURE=0.1,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app,RAG_SEARCH_K=2,RAG_CHUNK_SIZE=300,RAG_TIMEOUT=2,LINE_RESPONSE_TIMEOUT=3,WEB_SEARCH_TIMEOUT=3,ENABLE_RESPONSE_CACHE=true,CACHE_SIZE=500,CACHE_TTL=3600,CONFIDENCE_THRESHOLD=0.7,FAST_STARTUP=true,SKIP_LLM_INIT=false,SKIP_VECTORSTORE_INIT=false
+      - --set-env-vars=ULTRA_FAST_MODE=true,ANTI_HALLUCINATION_MODE=true,ENABLE_AUTO_UPDATE=true,MAX_NEW_TOKENS=150,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,OPENAI_TEMPERATURE=0.1,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app,RAG_SEARCH_K=2,RAG_CHUNK_SIZE=300,RAG_TIMEOUT=2,LINE_RESPONSE_TIMEOUT=3,WEB_SEARCH_TIMEOUT=3,ENABLE_RESPONSE_CACHE=true,CACHE_SIZE=500,CACHE_TTL=3600,CONFIDENCE_THRESHOLD=0.7
       - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest,GOOGLE_SEARCH_API_KEY=GOOGLE_SEARCH_API_KEY:latest,GOOGLE_SEARCH_ENGINE_ID=GOOGLE_SEARCH_ENGINE_ID:latest,LINE_CHANNEL_ID=LINE_CHANNEL_ID:latest,LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,LINE_LOGIN_CHANNEL_ID=LINE_LOGIN_CHANNEL_ID:latest,LINE_LOGIN_CHANNEL_SECRET=LINE_LOGIN_CHANNEL_SECRET:latest,LINE_LOGIN_REDIRECT_URI=LINE_LOGIN_REDIRECT_URI:latest,LIFF_ID=LIFF_ID:latest,JWT_SECRET=JWT_SECRET:latest
       - --service-account=190389115361-compute@developer.gserviceaccount.com
       - --vpc-egress=all-traffic
-    timeout: '1800s'  # Cloud Runデプロイタイムアウトを30分に延長
+    timeout: '1200s'
     id: 'deploy-enhanced-api'
     waitFor: ['push-enhanced-api']
 
-  # 5. Cloud Run サービス設定の追加調整（プローブ設定）
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        echo "Updating Cloud Run service with extended probe timeouts..."
-        
-        # サービス設定をYAMLで出力
-        gcloud run services describe rag-api --region=asia-northeast1 --format=export > service.yaml
-        
-        # プローブ設定を更新（YAMLを直接編集）
-        cat >> probe_patch.yaml << 'EOF'
-        spec:
-          template:
-            metadata:
-              annotations:
-                run.googleapis.com/startup-cpu-boost: "true"
-            spec:
-              containers:
-              - livenessProbe:
-                  httpGet:
-                    path: /healthz/live
-                    port: 8080
-                  initialDelaySeconds: 30
-                  periodSeconds: 60
-                  timeoutSeconds: 30
-                  failureThreshold: 3
-                startupProbe:
-                  httpGet:
-                    path: /healthz/ready
-                    port: 8080
-                  initialDelaySeconds: 60
-                  periodSeconds: 30
-                  timeoutSeconds: 30
-                  failureThreshold: 5
-                readinessProbe:
-                  httpGet:
-                    path: /healthz/ready
-                    port: 8080
-                  initialDelaySeconds: 30
-                  periodSeconds: 10
-                  timeoutSeconds: 10
-                  failureThreshold: 3
-        EOF
-        
-        # サービスを更新
-        gcloud run services replace service.yaml --region=asia-northeast1
-        
-        echo "✅ Cloud Run service updated with extended probe timeouts"
-    timeout: '600s'
-    id: 'update-probe-settings'
-    waitFor: ['deploy-enhanced-api']
 
-  # 6. 高速化対応フロントエンドビルド（既存設定を強化）
+  # 5. 高速化対応フロントエンドビルド（既存設定を強化）
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
@@ -139,7 +88,8 @@ steps:
     timeout: '900s'
     id: 'build-enhanced-frontend'
 
-  # 7. フロントエンドイメージをArtifact Registryにプッシュ
+
+  # 6. フロントエンドイメージをArtifact Registryにプッシュ
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
@@ -149,7 +99,8 @@ steps:
     id: 'push-enhanced-frontend'
     waitFor: ['build-enhanced-frontend']
 
-  # 8. 高速化対応フロントエンドをCloud Runにデプロイ（強化）
+
+  # 7. 高速化対応フロントエンドをCloud Runにデプロイ（強化）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -162,20 +113,21 @@ steps:
       - --allow-unauthenticated
       - --memory=2Gi
       - --cpu=2
-      - --timeout=180s                    
-      - --min-instances=1                 
+      - --timeout=180s                    # 300s→180sに短縮
+      - --min-instances=1                 # 0→1に強化
       - --max-instances=10
-      - --concurrency=200                 
+      - --concurrency=200                 # 80→200に強化
       - --port=8080
       - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,ENABLE_PERFORMANCE_MONITORING=true
       - --set-secrets=DB_PASSWORD=db-password:latest
     timeout: '1200s'
     id: 'deploy-enhanced-frontend'
-    waitFor: ['push-enhanced-frontend', 'update-probe-settings']
+    waitFor: ['push-enhanced-frontend', 'deploy-enhanced-api']
+
 
   # ========== Phase 2: 自動化機能（条件付き有効化） ==========
-  
-  # 9. 自動更新Cloud Functionをデプロイ（オプション機能）
+ 
+  # 8. 自動更新Cloud Functionをデプロイ（オプション機能）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
@@ -207,61 +159,97 @@ steps:
     id: 'deploy-auto-update-function'
     waitFor: ['deploy-enhanced-frontend']
 
-  # ========== Phase 3: デプロイ後の検証 ==========
 
-  # 10. デプロイ検証とヘルスチェック
+  # ========== Phase 3: インフラ構築（条件付き有効化） ==========
+
+
+  # 9. 必要なPub/Subトピックを作成（オプション）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        echo "🔍 Verifying deployment health..."
-        
-        # APIサービスのURLを取得
-        API_URL=$(gcloud run services describe rag-api --region=asia-northeast1 --format='value(status.url)')
-        echo "API URL: $API_URL"
-        
-        # ヘルスチェック実行（最大3回リトライ）
-        for i in {1..3}; do
-          echo "Health check attempt $i/3..."
-          
-          if curl -f --max-time 30 --silent "$API_URL/healthz/ready"; then
-            echo "✅ API service is healthy"
-            break
-          else
-            echo "⚠️ Health check failed, waiting 30s before retry..."
-            if [ $i -eq 3 ]; then
-              echo "❌ Final health check failed"
-              exit 1
-            fi
-            sleep 30
-          fi
-        done
-        
-        # 軽量な機能テスト
-        echo "🧪 Running basic functionality test..."
-        
-        TEST_RESPONSE=$(curl -s --max-time 30 -X POST \
-          -H "Content-Type: application/json" \
-          -d '{"question":"テスト","username":"build_test"}' \
-          "$API_URL/chat/" || echo "TIMEOUT")
-        
-        if [[ "$TEST_RESPONSE" == "TIMEOUT" ]]; then
-          echo "⚠️ Chat endpoint test timed out (acceptable for startup)"
-        elif echo "$TEST_RESPONSE" | grep -q "answer"; then
-          echo "✅ Chat endpoint is working"
+        if [ "${_ENABLE_AUTO_UPDATE}" = "true" ]; then
+          echo "Setting up Pub/Sub infrastructure..."
+          # トピックの存在確認と作成
+          gcloud pubsub topics describe update-trigger || \
+          gcloud pubsub topics create update-trigger
+
+
+          # サブスクリプションの作成
+          gcloud pubsub subscriptions describe update-subscription || \
+          gcloud pubsub subscriptions create update-subscription \
+            --topic=update-trigger \
+            --ack-deadline=600
         else
-          echo "⚠️ Chat endpoint test inconclusive"
+          echo "Pub/Sub setup skipped (set _ENABLE_AUTO_UPDATE=true to enable)"
         fi
-        
-        echo "🎉 Deployment verification completed"
-    timeout: '300s'
-    id: 'verify-deployment'
+    id: 'setup-pubsub'
     waitFor: ['deploy-auto-update-function']
+
+
+  # 10. Cloud Schedulerジョブを作成/更新（オプション）
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "${_ENABLE_AUTO_UPDATE}" = "true" ]; then
+          echo "Setting up scheduled updates..."
+          # 既存のスケジューラーがあれば削除
+          gcloud scheduler jobs delete weekly-update --quiet || echo "No existing weekly job to delete"
+          gcloud scheduler jobs delete monthly-update --quiet || echo "No existing monthly job to delete"
+         
+          # 新しいスケジューラーを作成
+          gcloud scheduler jobs create pubsub weekly-update \
+            --schedule="0 2 * * 1" \
+            --topic=update-trigger \
+            --message-body='{"type": "weekly_update", "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' \
+            --time-zone="Asia/Tokyo" \
+            --description="RAG自動更新（毎週月曜日午前2時）"
+         
+          # 月次更新スケジューラーも作成
+          gcloud scheduler jobs create pubsub monthly-update \
+            --schedule="0 3 1 * *" \
+            --topic=update-trigger \
+            --message-body='{"type": "monthly_update", "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' \
+            --time-zone="Asia/Tokyo" \
+            --description="RAG詳細更新（毎月1日午前3時）"
+        else
+          echo "Scheduler setup skipped (set _ENABLE_AUTO_UPDATE=true to enable)"
+        fi
+    id: 'setup-scheduler'
+    waitFor: ['setup-pubsub']
+
+
+  # 11. Firestore インデックス設定（オプション）
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "${_ENABLE_AUTO_UPDATE}" = "true" ]; then
+          echo "Setting up Firestore..."
+          # Firestoreデータベースの存在確認と作成
+          gcloud firestore databases describe --format="value(name)" || \
+          gcloud firestore databases create --region=asia-northeast1
+
+
+          # インデックス設定ファイルがある場合はデプロイ
+          if [ -f "firestore.indexes.json" ]; then
+            gcloud firestore indexes composite create --collection-group=update_logs --field-config field-path=timestamp,order=descending --field-config field-path=source_id,order=ascending || echo "Index may already exist"
+          fi
+        else
+          echo "Firestore setup skipped (set _ENABLE_AUTO_UPDATE=true to enable)"
+        fi
+    id: 'setup-firestore'
+    waitFor: ['setup-scheduler']
+
 
 images:
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
   - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest'
+
 
 # 高性能ビルドマシン設定
 options:
@@ -272,10 +260,12 @@ options:
     - 'ULTRA_FAST_BUILD=true'
     - 'CLOUDBUILD_ENHANCED=true'
 
+
 # 拡張可能な置換変数
 substitutions:
   _ENABLE_AUTO_UPDATE: 'false'    # 自動更新機能の有効化フラグ
   _ENV: 'production'              # 環境設定
   _DEBUG_MODE: 'false'            # デバッグモード
+
 
 timeout: '3600s'
