@@ -3,6 +3,7 @@ import os
 import sys
 import importlib
 import logging
+import time
 from datetime import datetime
 from typing import Dict, Any
 
@@ -11,6 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+# ------------------------------------------------------------------------------
+# 起動時間を記録（ヘルスチェック用）
+# ------------------------------------------------------------------------------
+START_TIME = time.time()
 
 # ------------------------------------------------------------------------------
 # ログ設定
@@ -278,6 +284,144 @@ if os.path.isdir(pdf_dir):
     app.mount("/pdfs", StaticFiles(directory=pdf_dir), name="pdfs")
 
 # ------------------------------------------------------------------------------
+# Cloud Run用ヘルスチェックエンドポイント（改善版）
+# ------------------------------------------------------------------------------
+@app.get("/healthz")
+async def health_check():
+    """
+    Cloud Run用ヘルスチェックエンドポイント
+    起動から30秒以内は起動中として扱う
+    """
+    current_time = time.time()
+    uptime = current_time - START_TIME
+    
+    # 基本的なヘルスチェック
+    health_status = {
+        "status": "healthy",
+        "uptime": f"{uptime:.2f}s",
+        "timestamp": datetime.now().isoformat(),
+        "service": "enhanced-rag-api",
+        "version": "3.1.0",
+        "startup_mode": "ultra_fast",
+        "features": {
+            "ultra_fast_mode": ULTRA_FAST_MODE,
+            "anti_hallucination": ANTI_HALLUCINATION_MODE,
+            "auto_update": ENABLE_AUTO_UPDATE,
+        }
+    }
+    
+    # 起動中の場合（30秒以内）
+    if uptime < 30:
+        health_status["status"] = "starting"
+        health_status["message"] = "Service is starting up"
+        health_status["progress"] = f"{min(100, int(uptime / 30 * 100))}%"
+    
+    # 環境変数の存在確認（最小限のチェック）
+    try:
+        # 重要な環境変数の存在確認（OpenAI APIキーなど）
+        critical_env_vars = []
+        if os.getenv("ENV") == "production":
+            critical_env_vars = ["OPENAI_API_KEY"]
+        
+        missing_vars = []
+        for env_var in critical_env_vars:
+            if not os.getenv(env_var):
+                missing_vars.append(env_var)
+        
+        if missing_vars:
+            health_status["status"] = "degraded"
+            health_status["warning"] = f"Missing environment variables: {', '.join(missing_vars)}"
+            # 起動中は503を返さない（Cloud Runの起動を妨げないため）
+            if uptime >= 30:
+                return JSONResponse(
+                    status_code=503,
+                    content=health_status
+                )
+    except Exception as e:
+        health_status["status"] = "unhealthy"
+        health_status["error"] = str(e)
+        # 起動中は503を返さない
+        if uptime >= 30:
+            return JSONResponse(
+                status_code=503,
+                content=health_status
+            )
+    
+    # コンポーネント状態（遅延読み込みなので未読み込みでもOK）
+    health_status["components"] = {
+        "llm_loaded": llm_instance is not None,
+        "vectorstore_loaded": vectorstore is not None,
+        "rag_chain_loaded": rag_chain_template is not None,
+        "lazy_loading_available": True,
+    }
+    
+    # 全てのコンポーネントが未読み込みでも healthy とする
+    if not any(health_status["components"].values()):
+        health_status["note"] = "Components will be lazy-loaded on first access"
+    
+    return JSONResponse(
+        status_code=200,
+        content=health_status
+    )
+
+@app.get("/healthz/ready")
+async def readiness_check():
+    """
+    準備完了チェック（Cloud Runの準備状態確認用）
+    """
+    current_time = time.time()
+    uptime = current_time - START_TIME
+    
+    try:
+        # アプリケーションが完全に準備できているかチェック
+        # 起動から10秒経過していれば準備完了とする（超高速起動モード）
+        if uptime < 10:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "not_ready",
+                    "message": f"Service is starting up ({int(uptime)}s elapsed)",
+                    "timestamp": datetime.now().isoformat(),
+                    "progress": f"{min(100, int(uptime / 10 * 100))}%"
+                }
+            )
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "ready",
+                "message": "Service is ready to serve traffic",
+                "timestamp": datetime.now().isoformat(),
+                "uptime": f"{uptime:.2f}s",
+                "service": "rag-api",
+                "version": "3.1.0"
+            }
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+@app.get("/healthz/live")
+async def liveness_check():
+    """
+    生存確認チェック（基本的な応答確認）
+    """
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "alive",
+            "timestamp": datetime.now().isoformat(),
+            "uptime": f"{time.time() - START_TIME:.2f}s"
+        }
+    )
+
+# ------------------------------------------------------------------------------
 # モニタリング系エンドポイント
 # ------------------------------------------------------------------------------
 @app.get("/system-status")
@@ -326,6 +470,7 @@ def get_integrated_system_status():
         return {
             "status": "operational",
             "version": "3.1.0",
+            "uptime": f"{time.time() - START_TIME:.2f}s",
             "features": {
                 "ultra_fast_mode": ULTRA_FAST_MODE,
                 "anti_hallucination": ANTI_HALLUCINATION_MODE,
@@ -382,70 +527,6 @@ def get_performance_report():
         }
     except Exception as e:
         return {"error": str(e)}
-
-# ------------------------------------------------------------------------------
-# 軽量ヘルスチェックエンドポイント（Cloud Run最適化）
-# ------------------------------------------------------------------------------
-@app.get("/healthz/ready")
-def health_check_ready():
-    """Cloud Run用のレディネスチェック（超軽量・依存なし）"""
-    return {
-        "status": "ready",
-        "timestamp": datetime.now().isoformat(),
-        "service": "rag-api",
-        "version": "3.1.0",
-    }
-
-@app.get("/healthz/live")
-def health_check_live():
-    """Cloud Run用のライブネスチェック（超軽量・依存なし）"""
-    return {
-        "status": "alive",
-        "timestamp": datetime.now().isoformat(),
-    }
-
-@app.get("/healthz")
-def ultra_lightweight_health_check():
-    """超軽量ヘルスチェック（Cloud Runスタートアップ最適化）"""
-    try:
-        # 最小限のチェックのみ - 重い処理は一切行わない
-        health_data = {
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "service": "enhanced-rag-api",
-            "version": "3.1.0",
-            "startup_mode": "ultra_fast",
-            "features": {
-                "ultra_fast_mode": ULTRA_FAST_MODE,
-                "anti_hallucination": ANTI_HALLUCINATION_MODE,
-                "auto_update": ENABLE_AUTO_UPDATE,
-            },
-        }
-
-        # 軽量なコンポーネント状態チェック（遅延読み込み呼び出しはしない）
-        components_status = {
-            "llm_loaded": llm_instance is not None,
-            "vectorstore_loaded": vectorstore is not None,
-            "rag_chain_loaded": rag_chain_template is not None,
-            "lazy_loading_available": True,
-        }
-        
-        health_data["components"] = components_status
-
-        # 重要：全てのコンポーネントが未読み込みでも healthy とする（遅延読み込み前提）
-        if not any(components_status.values()):
-            health_data["note"] = "Components will be lazy-loaded on first access"
-
-        return health_data
-    except Exception as e:
-        logger.error(f"Lightweight health check failed: {e}")
-        # エラーでも最小限の情報は返す
-        return {
-            "status": "minimal",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat(),
-            "service": "rag-api",
-        }
 
 # ------------------------------------------------------------------------------
 # 自動更新（手動トリガー）
