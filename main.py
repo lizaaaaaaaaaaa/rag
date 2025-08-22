@@ -1,4 +1,4 @@
-# main.py - RAG API メインアプリケーション（修正版）
+# main.py - RAG API メインアプリケーション（LINEボットルーティング修正版）
 
 import logging
 import os
@@ -370,7 +370,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             }
         )
 
-# LINEボット関連ルーター追加
+# アプリケーション起動時の処理（修正版）
 @app.on_event("startup")
 async def startup_event():
     """アプリケーション起動時の処理"""
@@ -379,11 +379,11 @@ async def startup_event():
     # RAGシステムの初期化
     await initialize_rag_system()
     
-    # LINEボットルーターの追加
+    # LINEボットルーターの追加（修正：prefixを削除）
     try:
         from api.routers.line_bot_fixed import router as line_router
-        app.include_router(line_router, prefix="/line", tags=["line"])
-        logger.info("✅ LINE bot router added")
+        app.include_router(line_router, tags=["line"])  # prefixを削除
+        logger.info("✅ LINE bot router added (fixed routing)")
     except Exception as e:
         logger.error(f"❌ Failed to add LINE bot router: {e}")
     
