@@ -1,5 +1,4 @@
-# api/routers/chat_ultra_fast.py - LINEボットと品質統一版
-
+# main.py - RAG API メインアプリケーション
 
 import logging
 import os
@@ -12,17 +11,30 @@ import concurrent.futures
 from uuid import uuid4
 import traceback
 
-
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-
+# ログ設定
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# FastAPI アプリケーションインスタンス
+app = FastAPI(
+    title="RAG API",
+    description="AI Chat API with RAG functionality",
+    version="1.0.0"
+)
 
-router = APIRouter()
-
+# CORS設定
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 本番環境では適切に制限してください
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 統一されたキャッシュシステム
 class UnifiedFastCache:
@@ -130,19 +142,7 @@ class UnifiedResponseGenerator:
                 self.cache.set(query, result)
                 return result
            
-            # 3. RAG処理（タイムアウト対応、LINEボットと同じ品質）
-            rag_response = await self._unified_rag_processing(query)
-            if rag_response:
-                result = {
-                    "answer": rag_response,
-                    "processing_time": time.time() - start_time,
-                    "source": "rag",
-                    "status": "ok"
-                }
-                self.cache.set(query, result)
-                return result
-           
-            # 4. 統一フォールバック（LINEボットと同じ品質）
+            # 3. 統一フォールバック（LINEボットと同じ品質）
             fallback_response = self._generate_unified_fallback(query)
             result = {
                 "answer": fallback_response,
@@ -184,62 +184,6 @@ class UnifiedResponseGenerator:
        
         return None
    
-    async def _unified_rag_processing(self, query: str) -> Optional[str]:
-        """統一されたRAG処理（LINEボットと同じ品質）"""
-        try:
-            # アプリのグローバル変数を取得
-            globals_dict = self._get_app_globals()
-            rag_chain = globals_dict.get('rag_chain_template')
-           
-            if not rag_chain:
-                logger.warning("RAG chain not available")
-                return None
-           
-            # 非同期でRAG処理（タイムアウト付き）
-            def run_rag():
-                try:
-                    result = rag_chain.invoke({"query": query})
-                    return result.get("result", "")
-                except Exception as e:
-                    logger.error(f"RAG processing error: {e}")
-                    return None
-           
-            # 5秒タイムアウトで実行（LINEボットより少し余裕を持たせる）
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = loop.run_in_executor(executor, run_rag)
-                try:
-                    rag_result = await asyncio.wait_for(future, timeout=5.0)
-                    if rag_result and len(rag_result.strip()) > 10:
-                        # 自然な回答に変換（ingested_textの機能を活用）
-                        enhanced = self._enhance_rag_response(rag_result, query)
-                        logger.info(f"⚡ Unified RAG success: {len(enhanced)} chars")
-                        return enhanced
-                except asyncio.TimeoutError:
-                    logger.warning("⏰ RAG processing timeout (5s)")
-                    return None
-                   
-        except Exception as e:
-            logger.error(f"Unified RAG error: {e}")
-       
-        return None
-   
-    def _enhance_rag_response(self, raw_response: str, query: str) -> str:
-        """RAG回答を自然な形に変換（ingested_textと統一）"""
-        try:
-            # ingested_textの自然回答生成機能を使用
-            from rag.ingested_text import create_natural_response
-            enhanced = create_natural_response(raw_response, query)
-           
-            if enhanced and len(enhanced.strip()) > 10:
-                return enhanced
-            else:
-                return self._generate_unified_fallback(query)
-               
-        except Exception as e:
-            logger.error(f"Response enhancement error: {e}")
-            return self._generate_unified_fallback(query)
-   
     def _generate_unified_fallback(self, query: str) -> str:
         """LINEボットと統一されたフォールバック応答"""
         if "坪単価" in query or "価格" in query:
@@ -252,19 +196,6 @@ class UnifiedResponseGenerator:
             return "資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。"
         else:
             return "お尋ねの内容について詳しくご案内いたします。住宅に関することでしたら何でもお気軽にお問い合わせください。"
-   
-    def _get_app_globals(self):
-        """アプリのグローバル変数を取得"""
-        try:
-            import main
-            return {
-                'vectorstore': getattr(main, 'vectorstore', None),
-                'rag_chain_template': getattr(main, 'rag_chain_template', None),
-                'llm_instance': getattr(main, 'llm_instance', None)
-            }
-        except Exception as e:
-            logger.error(f"Failed to get app globals: {e}")
-            return {'vectorstore': None, 'rag_chain_template': None, 'llm_instance': None}
 
 
 # リクエストモデル
@@ -277,7 +208,28 @@ class UnifiedChatRequest(BaseModel):
 unified_generator = UnifiedResponseGenerator()
 
 
-@router.post("/", summary="統一品質 AI チャット")
+# ヘルスチェックエンドポイント
+@app.get("/healthz")
+async def health_check():
+    """ヘルスチェックエンドポイント"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "rag-api"
+    }
+
+
+@app.get("/")
+async def root():
+    """ルートエンドポイント"""
+    return {
+        "message": "RAG API is running",
+        "version": "1.0.0",
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.post("/chat")
 async def unified_chat_endpoint(req: UnifiedChatRequest, request: Request):
     """LINEボットと同じ品質のチャットエンドポイント"""
    
@@ -335,14 +287,8 @@ async def unified_chat_endpoint(req: UnifiedChatRequest, request: Request):
         )
 
 
-@router.post("", include_in_schema=False)
-async def unified_chat_endpoint_slashless(req: UnifiedChatRequest, request: Request):
-    """スラッシュなしエンドポイント"""
-    return await unified_chat_endpoint(req, request)
-
-
 # パフォーマンス監視エンドポイント
-@router.get("/performance-stats")
+@app.get("/performance-stats")
 def get_unified_performance_stats():
     """統一品質パフォーマンス統計を取得"""
     cache_stats = unified_generator.cache.get_stats()
@@ -365,7 +311,7 @@ def get_unified_performance_stats():
     }
 
 
-@router.post("/clear-cache")
+@app.post("/clear-cache")
 def clear_unified_cache():
     """統一キャッシュをクリア"""
     old_stats = unified_generator.cache.get_stats()
@@ -380,7 +326,7 @@ def clear_unified_cache():
 
 
 # テンプレート管理エンドポイント
-@router.get("/response-templates")
+@app.get("/response-templates")
 def get_unified_response_templates():
     """統一回答テンプレート一覧を取得"""
     return {
@@ -391,7 +337,7 @@ def get_unified_response_templates():
     }
 
 
-@router.post("/add-template")
+@app.post("/add-template")
 def add_unified_response_template(keyword: str, response: str):
     """新しい統一回答テンプレートを追加"""
     unified_generator.response_templates[keyword] = response
@@ -404,3 +350,7 @@ def add_unified_response_template(keyword: str, response: str):
         "timestamp": datetime.now().isoformat()
     }
 
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
