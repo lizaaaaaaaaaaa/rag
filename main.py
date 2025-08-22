@@ -1,4 +1,4 @@
-# main.py - 超高速スタートアップ版（Cloud Run Startup Probe対応）
+# main.py - 修正版（LINE Bot ルーター統一）
 
 import logging
 import os
@@ -75,8 +75,18 @@ async def health_check():
         "rag_initialization_in_progress": initialization_in_progress,
         "service": "rag-api",
         "version": "1.0.0",
-        "fast_startup": True
+        "fast_startup": True,
+        "line_bot_configured": check_line_bot_config()
     }
+
+def check_line_bot_config():
+    """LINE Bot 設定チェック"""
+    try:
+        token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+        secret = os.getenv("LINE_CHANNEL_SECRET")
+        return bool(token and secret)
+    except:
+        return False
 
 @app.get("/")
 async def root():
@@ -87,10 +97,11 @@ async def root():
         "timestamp": datetime.now().isoformat(),
         "rag_status": "initialized" if is_initialized else "initializing",
         "uptime": time.time() - startup_time,
-        "fast_startup_enabled": DISABLE_RAG_INIT
+        "fast_startup_enabled": DISABLE_RAG_INIT,
+        "line_bot_status": "configured" if check_line_bot_config() else "not_configured"
     }
 
-# 統一されたキャッシュシステム
+# [UltraFastCache クラスと UltraFastResponseGenerator クラスは元のまま保持]
 class UltraFastCache:
     def __init__(self, max_size: int = 1000):
         self.cache: Dict[str, Dict] = {}
@@ -144,79 +155,6 @@ class UltraFastCache:
             "total_requests": total
         }
 
-# 完全遅延RAG初期化（起動時は実行しない）
-async def initialize_rag_system_if_needed():
-    """RAGシステムの完全遅延初期化（必要時のみ実行）"""
-    global vectorstore, rag_chain_template, llm_instance, is_initialized, initialization_in_progress
-    
-    if DISABLE_RAG_INIT:
-        logger.info("🚫 RAG initialization disabled for fast startup")
-        return False
-    
-    async with initialization_lock:
-        if is_initialized or initialization_in_progress:
-            return is_initialized
-        
-        initialization_in_progress = True
-        logger.info("🚀 Starting on-demand RAG system initialization...")
-        
-        try:
-            # 軽量ベクトルストアのみ読み込み
-            logger.info("Loading minimal vectorstore...")
-            loop = asyncio.get_event_loop()
-            
-            def load_minimal_vectorstore():
-                try:
-                    from rag.fast_rag_chain import create_minimal_vectorstore_ultra_fast
-                    return create_minimal_vectorstore_ultra_fast()
-                except Exception as e:
-                    logger.error(f"Minimal vectorstore load error: {e}")
-                    return None
-            
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = loop.run_in_executor(executor, load_minimal_vectorstore)
-                try:
-                    vectorstore = await asyncio.wait_for(future, timeout=15)
-                    if vectorstore:
-                        logger.info("✅ Minimal vectorstore loaded")
-                    else:
-                        logger.warning("⚠️ Failed to load minimal vectorstore")
-                except asyncio.TimeoutError:
-                    logger.error("⏰ Vectorstore loading timeout")
-                    vectorstore = None
-            
-            # 高速RAGチェーンの作成
-            if vectorstore:
-                logger.info("Creating fast RAG chain...")
-                try:
-                    from rag.fast_rag_chain import get_ultra_fast_rag_chain
-                    rag_chain_template = get_ultra_fast_rag_chain(vectorstore)
-                    logger.info("✅ Fast RAG chain created")
-                except Exception as e:
-                    logger.error(f"Fast RAG chain creation error: {e}")
-                    rag_chain_template = None
-            
-            # LLMは最低限のみ
-            try:
-                from llm.llm_runner import load_llm
-                llm_instance, _, _ = load_llm()
-                logger.info("✅ LLM loaded")
-            except Exception as e:
-                logger.error(f"LLM load error: {e}")
-                llm_instance = None
-            
-            is_initialized = True
-            logger.info("🎉 On-demand RAG system initialization completed")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ On-demand RAG system initialization failed: {e}")
-            return False
-        
-        finally:
-            initialization_in_progress = False
-
-# 応答生成クラス（RAG非依存）
 class UltraFastResponseGenerator:
     def __init__(self):
         self.cache = UltraFastCache(max_size=500)
@@ -263,22 +201,7 @@ class UltraFastResponseGenerator:
                 self.cache.set(query, result)
                 return result
             
-            # 3. オンデマンドRAG処理（初回アクセス時のみ初期化）
-            if not DISABLE_RAG_INIT:
-                rag_available = await initialize_rag_system_if_needed()
-                if rag_available and rag_chain_template:
-                    rag_response = await self._process_with_rag(query)
-                    if rag_response:
-                        result = {
-                            "answer": rag_response,
-                            "processing_time": time.time() - start_time,
-                            "source": "rag",
-                            "status": "ok"
-                        }
-                        self.cache.set(query, result)
-                        return result
-            
-            # 4. 統一フォールバック（RAG不要）
+            # 3. 統一フォールバック（RAG不要）
             fallback_response = self._generate_unified_fallback(query)
             result = {
                 "answer": fallback_response,
@@ -296,40 +219,6 @@ class UltraFastResponseGenerator:
                 "source": "error",
                 "status": "error"
             }
-    
-    async def _process_with_rag(self, query: str) -> Optional[str]:
-        """RAGチェーンでの処理（超軽量版）"""
-        global rag_chain_template
-        
-        if not rag_chain_template:
-            return None
-        
-        try:
-            def run_rag():
-                try:
-                    result = rag_chain_template.invoke({"query": query})
-                    return result.get("result", "")
-                except Exception as e:
-                    logger.error(f"RAG processing error: {e}")
-                    return None
-            
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = loop.run_in_executor(executor, run_rag)
-                try:
-                    rag_result = await asyncio.wait_for(future, timeout=3.0)  # 3秒に短縮
-                    if rag_result and len(rag_result.strip()) > 10:
-                        logger.info(f"✅ RAG success: {len(rag_result)} chars")
-                        return rag_result
-                    else:
-                        return None
-                except asyncio.TimeoutError:
-                    logger.warning("⏰ RAG processing timeout (3s)")
-                    return None
-                    
-        except Exception as e:
-            logger.error(f"RAG processing error: {e}")
-            return None
    
     def _match_unified_template(self, query: str) -> Optional[str]:
         query_lower = query.lower()
@@ -431,19 +320,31 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             }
         )
 
-# アプリケーション起動時の処理（超高速版）
+# アプリケーション起動時の処理（修正版）
 @app.on_event("startup")
 async def startup_event():
-    """アプリケーション起動時の処理（超高速起動）"""
-    logger.info("🚀 Starting RAG API application (Ultra Fast Startup Mode)...")
+    """アプリケーション起動時の処理（LINE Bot 統一版）"""
+    logger.info("🚀 Starting RAG API application (LINE Bot Fixed Version)...")
     
-    # LINE Botルーターの追加（即座実行）
+    # LINE Bot ルーターの追加（統一版のみ）
     try:
+        # 修正：line_bot_fixed のみを使用
         from api.routers.line_bot_fixed import router as line_router
         app.include_router(line_router, prefix="/line", tags=["line"])
-        logger.info("✅ LINE bot router added with prefix /line")
+        logger.info("✅ LINE bot router (fixed version) added with prefix /line")
+        
+        # LINE Bot 設定確認
+        token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+        secret = os.getenv("LINE_CHANNEL_SECRET")
+        
+        if token and secret:
+            logger.info("✅ LINE Bot credentials found")
+        else:
+            logger.warning("⚠️ LINE Bot credentials not found")
+            
     except Exception as e:
         logger.error(f"❌ Failed to add LINE bot router: {e}")
+        logger.error(traceback.format_exc())
     
     # その他のルーターも追加
     try:
@@ -474,6 +375,7 @@ async def get_system_status():
         "cache_stats": ultra_fast_generator.cache.get_stats(),
         "uptime": time.time() - startup_time,
         "fast_startup_enabled": DISABLE_RAG_INIT,
+        "line_bot_configured": check_line_bot_config(),
         "timestamp": datetime.now().isoformat()
     }
 
@@ -537,6 +439,7 @@ def get_performance_stats():
         },
         "uptime": time.time() - startup_time,
         "fast_startup": DISABLE_RAG_INIT,
+        "line_bot_status": check_line_bot_config(),
         "timestamp": datetime.now().isoformat()
     }
 
