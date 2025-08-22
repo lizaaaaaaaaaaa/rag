@@ -1,4 +1,4 @@
-# cloudbuild.yaml - RAG統合版CI/CDパイプライン（シンプル修正版）
+# cloudbuild.yaml - RAG統合版CI/CDパイプライン（エラー修正版）
 
 steps:
   # 1. 依存関係のキャッシュとインストール
@@ -23,7 +23,7 @@ steps:
       '--no-cache',
       '--build-arg', 'ULTRA_FAST_MODE=true',
       '--build-arg', 'ANTI_HALLUCINATION_MODE=true',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest',
+      '-t', 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/rag-chat-pro/rag-api:latest',
       '-f', 'Dockerfile.api',
       '.'
     ]
@@ -35,7 +35,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
+      'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/rag-chat-pro/rag-api:latest'
     ]
     timeout: '600s'
     id: 'push-enhanced-api'
@@ -48,8 +48,8 @@ steps:
       - run
       - deploy
       - rag-api
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest
-      - --region=asia-northeast1
+      - --image=asia-northeast1-docker.pkg.dev/${PROJECT_ID}/rag-chat-pro/rag-api:latest
+      - --region=${_REGION}
       - --platform=managed
       - --allow-unauthenticated
       - --memory=8Gi
@@ -59,9 +59,9 @@ steps:
       - --max-instances=20
       - --concurrency=1000
       - --port=8080
-      - --set-env-vars=ULTRA_FAST_MODE=true,ANTI_HALLUCINATION_MODE=true,ENABLE_AUTO_UPDATE=true,MAX_NEW_TOKENS=150,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,OPENAI_TEMPERATURE=0.1,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app,RAG_SEARCH_K=2,RAG_CHUNK_SIZE=300,RAG_TIMEOUT=2,LINE_RESPONSE_TIMEOUT=3,WEB_SEARCH_TIMEOUT=3,ENABLE_RESPONSE_CACHE=true,CACHE_SIZE=500,CACHE_TTL=3600,CONFIDENCE_THRESHOLD=0.7,FAST_STARTUP=true
+      - --set-env-vars=ULTRA_FAST_MODE=true,ANTI_HALLUCINATION_MODE=true,ENABLE_AUTO_UPDATE=true,MAX_NEW_TOKENS=150,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-${PROJECT_ID}-${_REGION},ENV=${_ENV},OPENAI_MODEL_NAME=gpt-3.5-turbo,OPENAI_TEMPERATURE=0.1,FRONTEND_URL=${_FRONTEND_URL},RAG_SEARCH_K=2,RAG_CHUNK_SIZE=300,RAG_TIMEOUT=2,LINE_RESPONSE_TIMEOUT=3,WEB_SEARCH_TIMEOUT=3,ENABLE_RESPONSE_CACHE=true,CACHE_SIZE=500,CACHE_TTL=3600,CONFIDENCE_THRESHOLD=0.7,FAST_STARTUP=true
       - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest,GOOGLE_SEARCH_API_KEY=GOOGLE_SEARCH_API_KEY:latest,GOOGLE_SEARCH_ENGINE_ID=GOOGLE_SEARCH_ENGINE_ID:latest,LINE_CHANNEL_ID=LINE_CHANNEL_ID:latest,LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,LINE_LOGIN_CHANNEL_ID=LINE_LOGIN_CHANNEL_ID:latest,LINE_LOGIN_CHANNEL_SECRET=LINE_LOGIN_CHANNEL_SECRET:latest,LINE_LOGIN_REDIRECT_URI=LINE_LOGIN_REDIRECT_URI:latest,LIFF_ID=LIFF_ID:latest,JWT_SECRET=JWT_SECRET:latest
-      - --service-account=190389115361-compute@developer.gserviceaccount.com
+      - --service-account=${_SERVICE_ACCOUNT}
       - --vpc-egress=all-traffic
     timeout: '1200s'
     id: 'deploy-enhanced-api'
@@ -72,8 +72,8 @@ steps:
     args: [
       'build',
       '--no-cache',
-      '--build-arg', 'API_URL=https://rag-api-190389115361.asia-northeast1.run.app',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest',
+      '--build-arg', 'API_URL=${_API_URL}',
+      '-t', 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/rag-chat-pro/rag-frontend:latest',
       '-f', 'Dockerfile.front',
       '.'
     ]
@@ -84,7 +84,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest'
+      'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/rag-chat-pro/rag-frontend:latest'
     ]
     timeout: '600s'
     id: 'push-enhanced-frontend'
@@ -97,8 +97,8 @@ steps:
       - run
       - deploy
       - rag-frontend
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest
-      - --region=asia-northeast1
+      - --image=asia-northeast1-docker.pkg.dev/${PROJECT_ID}/rag-chat-pro/rag-frontend:latest
+      - --region=${_REGION}
       - --platform=managed
       - --allow-unauthenticated
       - --memory=2Gi
@@ -108,7 +108,7 @@ steps:
       - --max-instances=10
       - --concurrency=200
       - --port=8080
-      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,ENABLE_PERFORMANCE_MONITORING=true
+      - --set-env-vars=API_URL=${_API_URL},ENABLE_PERFORMANCE_MONITORING=true
       - --set-secrets=DB_PASSWORD=db-password:latest
     timeout: '1200s'
     id: 'deploy-enhanced-frontend'
@@ -123,7 +123,7 @@ steps:
         echo "🔍 Verifying deployment health..."
         
         # APIサービスのURLを取得
-        API_URL=$(gcloud run services describe rag-api --region=asia-northeast1 --format='value(status.url)')
+        API_URL=$(gcloud run services describe rag-api --region=${_REGION} --format='value(status.url)')
         echo "API URL: $API_URL"
         
         # 簡単なヘルスチェック（3回リトライ）
@@ -148,8 +148,8 @@ steps:
     waitFor: ['deploy-enhanced-frontend']
 
 images:
-  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
-  - 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest'
+  - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/rag-chat-pro/rag-api:latest'
+  - 'asia-northeast1-docker.pkg.dev/${PROJECT_ID}/rag-chat-pro/rag-frontend:latest'
 
 # ビルドマシン設定
 options:
@@ -161,5 +161,9 @@ options:
 substitutions:
   _ENV: 'production'
   _DEBUG_MODE: 'false'
+  _REGION: 'asia-northeast1'
+  _API_URL: 'https://rag-api-190389115361.asia-northeast1.run.app'
+  _FRONTEND_URL: 'https://rag-frontend-190389115361.asia-northeast1.run.app'
+  _SERVICE_ACCOUNT: '190389115361-compute@developer.gserviceaccount.com'
 
 timeout: '3600s'
