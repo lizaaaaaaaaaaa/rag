@@ -1,4 +1,4 @@
-# rag/fast_rag_chain.py - Cloud Run対応版（signal削除、asyncio使用）
+# rag/fast_rag_chain.py - Cloud Run対応版（signal削除、asyncio使用）- main.py統合修正版
 
 from __future__ import annotations
 import os
@@ -75,9 +75,8 @@ def create_ultra_fast_response(raw_response: str, query: str) -> str:
         return generate_ultra_quick_fallback(query)
     
     # 自然な回答生成を統合
-    from rag.ingested_text import create_natural_response
-    
     try:
+        from rag.ingested_text import create_natural_response
         # ingested_textの自然回答生成機能を活用
         natural_response = create_natural_response(raw_response, query)
         
@@ -102,6 +101,15 @@ def generate_ultra_quick_fallback(query: str) -> str:
         return "資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。"
     elif "見学" in query or "展示" in query:
         return "展示場見学を承ります。ご希望の日時をお聞かせください。スタッフが丁寧にご案内いたします。"
+    # === main.pyとの統一性を向上（LINE Bot対応） ===
+    elif "ai相談" in query.lower() or "AI相談" in query:
+        return "🤖 AI住まい相談を開始します！住宅に関するご質問をお気軽にどうぞ。坪単価、標準仕様、性能、資料請求など何でもお聞きください😊"
+    elif "ai住まいサイト" in query.lower() or "サイト" in query:
+        return "🌐 住まい情報サイトをご案内します。詳しくはこちら→ https://kinoe-design.com"
+    elif "資金計画" in query:
+        return "💰 資金計画についてご相談承ります。住宅ローンや支援制度など、お気軽にお問い合わせください。"
+    elif "チャット相談" in query or "チャット" in query:
+        return "💬 スタッフとのご相談を承ります。住まいづくりに関することなら何でもお気軽にお聞かせください。"
     else:
         return "お尋ねの内容について詳しくご案内いたします。住宅に関することでしたら何でもお気軽にお問い合わせください。"
 
@@ -130,9 +138,10 @@ def load_ultra_fast_vectorstore():
         return create_minimal_vectorstore_ultra_fast()
 
 def create_minimal_vectorstore_ultra_fast():
-    """最小限のベクトルストア作成"""
+    """最小限のベクトルストア作成（main.pyとの統一性向上）"""
     embeddings = UltraFastEmbedding()
     
+    # === main.pyのテンプレートと統一したドキュメント ===
     minimal_docs = [
         Document(
             page_content="キノエデザインの坪単価は約70〜85万円/坪です。お客様のご希望される仕様によって変動いたします。詳細なお見積りをご提供いたします。",
@@ -145,6 +154,18 @@ def create_minimal_vectorstore_ultra_fast():
         Document(
             page_content="高性能な断熱材を使用し、快適な住環境を実現しています。ZEH基準に対応した省エネ性能です。",
             metadata={"source": "performance_info", "page": 1}
+        ),
+        Document(
+            page_content="耐震性能については、耐震等級3を標準とし、地震に強い安心・安全な住まいをご提供しています。構造計算に基づいた確かな技術で建築いたします。",
+            metadata={"source": "safety_info", "page": 1}
+        ),
+        Document(
+            page_content="資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。3営業日以内にお送りいたします。",
+            metadata={"source": "contact_info", "page": 1}
+        ),
+        Document(
+            page_content="展示場見学を承ります。ご希望の日時をお聞かせください。スタッフが丁寧にご案内いたします。最新の住宅仕様をご確認いただけます。",
+            metadata={"source": "visit_info", "page": 1}
         )
     ]
     
@@ -181,14 +202,14 @@ async def async_rag_processing(rag_chain, inputs, timeout_seconds=5):
         raise
 
 def get_ultra_fast_rag_chain(vectorstore, return_source: bool = True):
-    """Cloud Run対応超高速RAGチェーン（signal削除版）"""
+    """Cloud Run対応超高速RAGチェーン（signal削除版）- main.py統合修正版"""
     logger.info("Creating Cloud Run compatible ultra fast RAG chain...")
     
     try:
         from llm.llm_runner import load_llm
         llm, _, _ = load_llm()
         
-        # 改良されたプロンプト（LINEボットと統一）
+        # 改良されたプロンプト（LINEボットとmain.pyで統一）
         ultra_fast_prompt = """あなたは親切で知識豊富な住宅・建築の専門アドバイザーです。
 以下の参考情報を基に、質問に対して自然で分かりやすい回答を提供してください。
 
@@ -220,7 +241,7 @@ def get_ultra_fast_rag_chain(vectorstore, return_source: bool = True):
             chain_type_kwargs={"prompt": prompt}
         )
         
-        # Cloud Run対応ラッパー（signal削除版）
+        # Cloud Run対応ラッパー（signal削除版・main.py統合）
         class CloudRunCompatibleChain:
             def __init__(self, base_chain):
                 self.base_chain = base_chain
@@ -282,7 +303,7 @@ def get_ultra_fast_rag_chain(vectorstore, return_source: bool = True):
         return create_emergency_chain_ultra_fast(vectorstore)
 
 def create_emergency_chain_ultra_fast(vectorstore):
-    """緊急用超高速チェーン（signal不使用）"""
+    """緊急用超高速チェーン（signal不使用・main.py統合）"""
     logger.info("Creating emergency ultra fast chain...")
     
     class EmergencyCloudRunChain:
@@ -332,6 +353,25 @@ def create_emergency_chain_ultra_fast(vectorstore):
     
     return EmergencyCloudRunChain(vectorstore)
 
+# === main.pyとの統合用ヘルパー関数 ===
+def ensure_vectorstore_loaded():
+    """main.pyからの遅延初期化用"""
+    try:
+        return load_ultra_fast_vectorstore()
+    except Exception as e:
+        logger.error(f"Vectorstore loading failed: {e}")
+        return create_minimal_vectorstore_ultra_fast()
+
+def ensure_rag_chain_loaded(vectorstore=None):
+    """main.pyからの遅延初期化用"""
+    try:
+        if not vectorstore:
+            vectorstore = ensure_vectorstore_loaded()
+        return get_ultra_fast_rag_chain(vectorstore)
+    except Exception as e:
+        logger.error(f"RAG chain loading failed: {e}")
+        return create_emergency_chain_ultra_fast(vectorstore)
+
 # キャッシュ統計（変更なし）
 def get_ultra_fast_cache_stats():
     """超高速キャッシュの統計情報"""
@@ -367,11 +407,14 @@ if __name__ == "__main__":
         rag_chain = get_ultra_fast_rag_chain(vectorstore)
         print("✅ Cloud Run compatible RAG chain created")
         
-        # テスト
+        # テスト（main.pyと同じテンプレートを含む）
         test_queries = [
             "坪単価について教えて",
             "標準仕様は？",
-            "断熱性能について"
+            "断熱性能について",
+            "AI相談",
+            "AI住まいサイト",
+            "資金計画"
         ]
         
         for query in test_queries:

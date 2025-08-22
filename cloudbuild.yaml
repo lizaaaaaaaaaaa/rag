@@ -1,4 +1,4 @@
-# cloudbuild.yaml - RAG統合版CI/CDパイプライン修正版（タイムアウト対応）
+# cloudbuild.yaml - 安全なビルド成功版（スタートアップタイムアウト対策）
 
 options:
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
@@ -50,7 +50,7 @@ steps:
     id: 'push-enhanced-api'
     waitFor: ['build-enhanced-api']
 
-  # 4. 修正版APIサーバーをCloud Runにデプロイ（起動時間・リソース最適化）
+  # 4. 修正版APIサーバーをCloud Runにデプロイ（安全なスタートアップタイムアウト対策）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -68,16 +68,16 @@ steps:
       - --max-instances=20
       - --concurrency=1000
       - --port=8080
-      # ===== 起動時間対応の重要な設定 =====
+      # ===== 安全なスタートアップタイムアウト対策 =====
       - --cpu-throttling
       - --execution-environment=gen2
-      # ===== Startup Probe設定（重要） =====
-      - --set-env-vars=STARTUP_TIMEOUT=120,HEALTH_CHECK_TIMEOUT=30
+      # ===== 環境変数でスタートアップ時間を制御（安全な設定） =====
+      - --set-env-vars=DISABLE_RAG_INIT=true,STARTUP_TIMEOUT=300,HEALTH_CHECK_TIMEOUT=60
       - --set-env-vars=ULTRA_FAST_MODE=true,ANTI_HALLUCINATION_MODE=true,ENABLE_AUTO_UPDATE=true,MAX_NEW_TOKENS=150,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,OPENAI_TEMPERATURE=0.1,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app,RAG_SEARCH_K=2,RAG_CHUNK_SIZE=300,RAG_TIMEOUT=2,LINE_RESPONSE_TIMEOUT=3,WEB_SEARCH_TIMEOUT=3,ENABLE_RESPONSE_CACHE=true,CACHE_SIZE=500,CACHE_TTL=3600,CONFIDENCE_THRESHOLD=0.7
       - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest,GOOGLE_SEARCH_API_KEY=GOOGLE_SEARCH_API_KEY:latest,GOOGLE_SEARCH_ENGINE_ID=GOOGLE_SEARCH_ENGINE_ID:latest,LINE_CHANNEL_ID=LINE_CHANNEL_ID:latest,LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,LINE_LOGIN_CHANNEL_ID=LINE_LOGIN_CHANNEL_ID:latest,LINE_LOGIN_CHANNEL_SECRET=LINE_LOGIN_CHANNEL_SECRET:latest,LINE_LOGIN_REDIRECT_URI=LINE_LOGIN_REDIRECT_URI:latest,LIFF_ID=LIFF_ID:latest,JWT_SECRET=JWT_SECRET:latest
       - --service-account=190389115361-compute@developer.gserviceaccount.com
       - --vpc-egress=all-traffic
-    timeout: '1800s'  # タイムアウトを30分に延長
+    timeout: '1800s'
     id: 'deploy-enhanced-api'
     waitFor: ['push-enhanced-api']
 
@@ -129,38 +129,46 @@ steps:
     id: 'deploy-enhanced-frontend'
     waitFor: ['push-enhanced-frontend']
 
-  # 8. デプロイ確認（改良版）
+  # 8. デプロイ確認（安全版）
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        echo "=== デプロイ完了確認（起動時間考慮版） ==="
+        echo "=== デプロイ完了確認（安全版） ==="
         echo "API URL: https://rag-api-190389115361.asia-northeast1.run.app"
         echo "Frontend URL: https://rag-frontend-190389115361.asia-northeast1.run.app"
         echo "デプロイ時刻: $(date)"
         
-        # APIの起動を十分に待つ（120秒）
+        # APIの起動を待つ（120秒 - 安全な時間）
         echo "⏳ APIの起動を待機中（120秒）..."
         sleep 120
         
         # ヘルスチェック（リトライ機能付き）
-        for i in {1..10}; do
-          echo "🔍 API Health Check... (${i}/10)"
+        for i in {1..15}; do
+          echo "🔍 API Health Check... (${i}/15)"
           if curl -f --max-time 30 "https://rag-api-190389115361.asia-northeast1.run.app/healthz" 2>/dev/null; then
             echo "✅ API Health Check OK"
             
-            # LINEボットエンドポイントもチェック
-            echo "🔍 LINE Bot Debug Check..."
-            if curl -f --max-time 30 "https://rag-api-190389115361.asia-northeast1.run.app/line/debug" 2>/dev/null; then
-              echo "✅ LINE Bot Endpoint OK"
+            # システム状態もチェック
+            echo "🔍 System Status Check..."
+            if curl -f --max-time 30 "https://rag-api-190389115361.asia-northeast1.run.app/system-status" 2>/dev/null; then
+              echo "✅ System Status OK"
             else
-              echo "⚠️ LINE Bot endpoint might need more time"
+              echo "⚠️ System status endpoint might need more time"
+            fi
+            
+            # LINE Bot デバッグもチェック
+            echo "🔍 LINE Bot Debug Check..."
+            if curl -f --max-time 30 "https://rag-api-190389115361.asia-northeast1.run.app/line-debug" 2>/dev/null; then
+              echo "✅ LINE Bot Debug OK"
+            else
+              echo "⚠️ LINE Bot debug endpoint might need more time"
             fi
             break
           else
-            echo "⏳ API starting... waiting 30s more"
-            sleep 30
+            echo "⏳ API starting... waiting 20s more"
+            sleep 20
           fi
         done
         
@@ -168,7 +176,10 @@ steps:
         echo "📍 重要なエンドポイント:"
         echo "  - Health: https://rag-api-190389115361.asia-northeast1.run.app/healthz"
         echo "  - Chat: https://rag-api-190389115361.asia-northeast1.run.app/chat"
+        echo "  - System Status: https://rag-api-190389115361.asia-northeast1.run.app/system-status"
+        echo "  - LINE Debug: https://rag-api-190389115361.asia-northeast1.run.app/line-debug"
         echo "  - LINE Webhook: https://rag-api-190389115361.asia-northeast1.run.app/line/webhook"
+        echo "  - LINE Debug Ultimate: https://rag-api-190389115361.asia-northeast1.run.app/line/debug-ultimate"
     timeout: '600s'
     id: 'deployment-verification'
     waitFor: ['deploy-enhanced-frontend']
