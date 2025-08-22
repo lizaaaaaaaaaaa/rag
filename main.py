@@ -1,4 +1,4 @@
-# main.py - RAG API メインアプリケーション（LINEボットルーティング修正版）
+# main.py - 起動時間最適化版（Cloud Run Startup Probe対応）
 
 import logging
 import os
@@ -42,6 +42,47 @@ rag_chain_template = None
 llm_instance = None
 initialization_lock = asyncio.Lock()
 is_initialized = False
+initialization_in_progress = False
+
+# 起動時刻を記録
+startup_time = time.time()
+
+# 軽量ヘルスチェック（RAG初期化を待たない）
+@app.get("/healthz")
+async def health_check():
+    """軽量ヘルスチェック（Cloud Run Startup Probe対応）"""
+    uptime = time.time() - startup_time
+    
+    # 起動から5秒以内なら常にOK（起動プローブ対策）
+    if uptime < 5:
+        return {
+            "status": "starting",
+            "uptime": uptime,
+            "timestamp": datetime.now().isoformat(),
+            "message": "Application is starting up"
+        }
+    
+    # 基本的なアプリケーション健全性チェック
+    return {
+        "status": "healthy",
+        "uptime": uptime,
+        "timestamp": datetime.now().isoformat(),
+        "rag_initialized": is_initialized,
+        "rag_initialization_in_progress": initialization_in_progress,
+        "service": "rag-api",
+        "version": "1.0.0"
+    }
+
+@app.get("/")
+async def root():
+    """ルートエンドポイント（軽量）"""
+    return {
+        "message": "RAG API is running",
+        "version": "1.0.0",
+        "timestamp": datetime.now().isoformat(),
+        "rag_status": "initialized" if is_initialized else "initializing",
+        "uptime": time.time() - startup_time
+    }
 
 # 統一されたキャッシュシステム
 class UnifiedFastCache:
@@ -97,32 +138,75 @@ class UnifiedFastCache:
             "total_requests": total
         }
 
-# RAG初期化関数
+# 遅延RAG初期化（非ブロッキング）
 async def initialize_rag_system():
-    """RAGシステムの初期化"""
-    global vectorstore, rag_chain_template, llm_instance, is_initialized
+    """RAGシステムの遅延初期化（Cloud Run対応）"""
+    global vectorstore, rag_chain_template, llm_instance, is_initialized, initialization_in_progress
     
     async with initialization_lock:
-        if is_initialized:
+        if is_initialized or initialization_in_progress:
             return
         
-        logger.info("🚀 Initializing RAG system...")
+        initialization_in_progress = True
+        logger.info("🚀 Starting delayed RAG system initialization...")
         
         try:
-            # 1. ベクトルストアの読み込み
-            from rag.ingested_text import load_vectorstore
-            vectorstore = load_vectorstore()
-            logger.info("✅ Vectorstore loaded")
+            # 1. ベクトルストアの読み込み（タイムアウト付き）
+            logger.info("Loading vectorstore...")
+            loop = asyncio.get_event_loop()
             
-            # 2. LLMの初期化
-            from llm.llm_runner import load_llm
-            llm_instance, _, _ = load_llm()
-            logger.info("✅ LLM loaded")
+            def load_vectorstore_sync():
+                try:
+                    from rag.ingested_text import load_vectorstore
+                    return load_vectorstore()
+                except Exception as e:
+                    logger.error(f"Vectorstore load error: {e}")
+                    # フォールバック: 最小限のベクトルストア
+                    from rag.fast_rag_chain import create_minimal_vectorstore_ultra_fast
+                    return create_minimal_vectorstore_ultra_fast()
             
-            # 3. RAGチェーンの作成
-            from rag.ingested_text import get_rag_chain
-            rag_chain_template = get_rag_chain(vectorstore, return_source=True)
-            logger.info("✅ RAG chain created")
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = loop.run_in_executor(executor, load_vectorstore_sync)
+                try:
+                    vectorstore = await asyncio.wait_for(future, timeout=30)
+                    logger.info("✅ Vectorstore loaded")
+                except asyncio.TimeoutError:
+                    logger.error("⏰ Vectorstore loading timeout, using minimal version")
+                    from rag.fast_rag_chain import create_minimal_vectorstore_ultra_fast
+                    vectorstore = create_minimal_vectorstore_ultra_fast()
+            
+            # 2. LLMの初期化（タイムアウト付き）
+            logger.info("Loading LLM...")
+            def load_llm_sync():
+                try:
+                    from llm.llm_runner import load_llm
+                    return load_llm()
+                except Exception as e:
+                    logger.error(f"LLM load error: {e}")
+                    return None, None, None
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = loop.run_in_executor(executor, load_llm_sync)
+                try:
+                    llm_instance, _, _ = await asyncio.wait_for(future, timeout=20)
+                    logger.info("✅ LLM loaded")
+                except asyncio.TimeoutError:
+                    logger.error("⏰ LLM loading timeout, will use fallback")
+                    llm_instance = None
+            
+            # 3. RAGチェーンの作成（最優先）
+            if vectorstore:
+                logger.info("Creating RAG chain...")
+                try:
+                    from rag.ingested_text import get_rag_chain
+                    rag_chain_template = get_rag_chain(vectorstore, return_source=True)
+                    logger.info("✅ RAG chain created")
+                except Exception as e:
+                    logger.error(f"RAG chain creation error: {e}")
+                    # フォールバック: 高速チェーン
+                    from rag.fast_rag_chain import get_ultra_fast_rag_chain
+                    rag_chain_template = get_ultra_fast_rag_chain(vectorstore)
+                    logger.info("✅ Fallback RAG chain created")
             
             is_initialized = True
             logger.info("🎉 RAG system initialization completed")
@@ -131,17 +215,20 @@ async def initialize_rag_system():
             logger.error(f"❌ RAG system initialization failed: {e}")
             logger.error(traceback.format_exc())
             
-            # フォールバック: 最小限のシステム
+            # 緊急フォールバック
             try:
                 from rag.fast_rag_chain import load_ultra_fast_vectorstore, get_ultra_fast_rag_chain
                 vectorstore = load_ultra_fast_vectorstore()
                 rag_chain_template = get_ultra_fast_rag_chain(vectorstore)
-                logger.info("✅ Fallback RAG system initialized")
                 is_initialized = True
+                logger.info("✅ Emergency fallback RAG system initialized")
             except Exception as fallback_error:
-                logger.error(f"❌ Fallback initialization also failed: {fallback_error}")
+                logger.error(f"❌ Emergency fallback also failed: {fallback_error}")
+        
+        finally:
+            initialization_in_progress = False
 
-# 応答生成クラス（RAG統合版）
+# 応答生成クラス（軽量版）
 class RAGIntegratedResponseGenerator:
     def __init__(self):
         self.cache = UnifiedFastCache(max_size=500)
@@ -158,7 +245,7 @@ class RAGIntegratedResponseGenerator:
         }
    
     async def generate_rag_response(self, query: str, user: str) -> Dict[str, Any]:
-        """RAG統合レスポンス生成"""
+        """RAG統合レスポンス生成（タイムアウト対応）"""
         start_time = time.time()
         
         try:
@@ -184,19 +271,20 @@ class RAGIntegratedResponseGenerator:
                 self.cache.set(query, result)
                 return result
             
-            # 3. RAG処理（メイン処理）
-            rag_response = await self._process_with_rag(query)
-            if rag_response:
-                result = {
-                    "answer": rag_response,
-                    "processing_time": time.time() - start_time,
-                    "source": "rag",
-                    "status": "ok"
-                }
-                self.cache.set(query, result)
-                return result
+            # 3. RAG処理（RAG初期化完了時のみ）
+            if is_initialized and rag_chain_template:
+                rag_response = await self._process_with_rag(query)
+                if rag_response:
+                    result = {
+                        "answer": rag_response,
+                        "processing_time": time.time() - start_time,
+                        "source": "rag",
+                        "status": "ok"
+                    }
+                    self.cache.set(query, result)
+                    return result
             
-            # 4. フォールバック
+            # 4. フォールバック（RAG未初期化でも動作）
             fallback_response = self._generate_unified_fallback(query)
             result = {
                 "answer": fallback_response,
@@ -216,15 +304,13 @@ class RAGIntegratedResponseGenerator:
             }
     
     async def _process_with_rag(self, query: str) -> Optional[str]:
-        """RAGチェーンでの処理"""
+        """RAGチェーンでの処理（タイムアウト短縮版）"""
         global rag_chain_template
         
         if not rag_chain_template:
-            logger.warning("RAG chain not initialized")
             return None
         
         try:
-            # タイムアウト付きでRAG処理
             def run_rag():
                 try:
                     result = rag_chain_template.invoke({"query": query})
@@ -237,15 +323,14 @@ class RAGIntegratedResponseGenerator:
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = loop.run_in_executor(executor, run_rag)
                 try:
-                    rag_result = await asyncio.wait_for(future, timeout=8.0)
+                    rag_result = await asyncio.wait_for(future, timeout=5.0)  # 5秒に短縮
                     if rag_result and len(rag_result.strip()) > 10:
                         logger.info(f"✅ RAG success: {len(rag_result)} chars")
                         return rag_result
                     else:
-                        logger.warning("RAG returned empty or short result")
                         return None
                 except asyncio.TimeoutError:
-                    logger.warning("⏰ RAG processing timeout (8s)")
+                    logger.warning("⏰ RAG processing timeout (5s)")
                     return None
                     
         except Exception as e:
@@ -290,43 +375,17 @@ class ChatRequest(BaseModel):
 # グローバルインスタンス
 rag_generator = RAGIntegratedResponseGenerator()
 
-# ヘルスチェックエンドポイント（改良版）
-@app.get("/healthz")
-async def health_check():
-    """高速ヘルスチェック（RAG初期化状態に関わらず常に成功）"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "service": "rag-api",
-        "version": "1.0.0",
-        "rag_initialized": is_initialized,
-        "uptime": time.time()  # 起動時間の目安
-    }
-
-@app.get("/")
-async def root():
-    return {
-        "message": "RAG API is running",
-        "version": "1.0.0",
-        "timestamp": datetime.now().isoformat(),
-        "rag_status": "initialized" if is_initialized else "initializing"
-    }
-
 # メインチャットエンドポイント
 @app.post("/chat")
 @app.post("/chat/")
 async def chat_endpoint(req: ChatRequest, request: Request):
-    """RAG統合チャットエンドポイント"""
+    """RAG統合チャットエンドポイント（軽量版）"""
     
     overall_start = time.time()
-    logger.info(f"🚀 RAG processing: {req.question[:50]}...")
-    
-    # RAGシステム初期化確認
-    if not is_initialized:
-        await initialize_rag_system()
+    logger.info(f"🚀 Chat request: {req.question[:50]}...")
     
     try:
-        # RAG統合応答生成
+        # RAG統合応答生成（初期化状態に関わらず動作）
         response = await rag_generator.generate_rag_response(
             req.question,
             req.username or "web-user"
@@ -346,7 +405,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                 "total_time": total_time,
                 "processing_time": response.get("processing_time", 0),
                 "source": response.get("source"),
-                "rag_enabled": True
+                "rag_enabled": is_initialized
             }
         }
         
@@ -355,7 +414,6 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         error_id = str(uuid4())[:8]
         
         logger.error(f"❌ Chat error [{error_id}]: {e}")
-        logger.error(traceback.format_exc())
         
         fallback_answer = rag_generator._generate_unified_fallback(req.question if hasattr(req, 'question') else "")
         
@@ -373,37 +431,40 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             }
         )
 
-# アプリケーション起動時の処理（高速起動対応版）
+# アプリケーション起動時の処理（最適化版）
 @app.on_event("startup")
 async def startup_event():
-    """アプリケーション起動時の処理（遅延初期化対応）"""
-    logger.info("🚀 Starting RAG API application...")
+    """アプリケーション起動時の処理（即座起動対応）"""
+    logger.info("🚀 Starting RAG API application (Cloud Run optimized)...")
     
-    # LINEボットルーターの追加（修正：prefixを削除）
+    # LINE Botルーターの追加（即座実行）
     try:
         from api.routers.line_bot_fixed import router as line_router
-        app.include_router(line_router, tags=["line"])  # prefixを削除
-        logger.info("✅ LINE bot router added (fixed routing)")
+        # prefixを明示的に指定
+        app.include_router(line_router, prefix="/line", tags=["line"])
+        logger.info("✅ LINE bot router added with prefix /line")
     except Exception as e:
         logger.error(f"❌ Failed to add LINE bot router: {e}")
     
     # その他のルーターも追加
     try:
-        # アップロード機能
         from api.routers.upload import router as upload_router
         app.include_router(upload_router, prefix="/upload", tags=["upload"])
         logger.info("✅ Upload router added")
     except Exception as e:
         logger.error(f"❌ Failed to add upload router: {e}")
     
-    # RAGシステムの初期化を遅延実行（バックグラウンド）
+    # RAGシステムの初期化を遅延実行（非ブロッキング）
+    logger.info("🔄 Scheduling delayed RAG initialization...")
     asyncio.create_task(delayed_rag_initialization())
+    
+    logger.info("✅ Application startup completed")
 
 async def delayed_rag_initialization():
-    """遅延RAG初期化（ヘルスチェック後に実行）"""
+    """遅延RAG初期化（Cloud Run起動後に実行）"""
     try:
-        # 3秒待機してからRAG初期化開始
-        await asyncio.sleep(3)
+        # 10秒待機してからRAG初期化開始（Startup Probe対策）
+        await asyncio.sleep(10)
         logger.info("🔄 Starting delayed RAG initialization...")
         await initialize_rag_system()
         logger.info("🎉 Delayed RAG initialization completed")
@@ -416,10 +477,12 @@ async def get_system_status():
     """システム状態取得"""
     return {
         "rag_initialized": is_initialized,
+        "rag_initialization_in_progress": initialization_in_progress,
         "vectorstore_loaded": vectorstore is not None,
         "rag_chain_loaded": rag_chain_template is not None,
         "llm_loaded": llm_instance is not None,
         "cache_stats": rag_generator.cache.get_stats(),
+        "uptime": time.time() - startup_time,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -443,34 +506,7 @@ def get_performance_stats():
             "cache_hit_rate": "> 50%",
             "rag_success_rate": "> 80%"
         },
-        "timestamp": datetime.now().isoformat()
-    }
-
-# キャッシュクリア
-@app.post("/clear-cache")
-def clear_cache():
-    old_stats = rag_generator.cache.get_stats()
-    rag_generator.cache = UnifiedFastCache(max_size=500)
-    
-    return {
-        "status": "cache_cleared",
-        "previous_stats": old_stats,
-        "new_cache_size": 0,
-        "timestamp": datetime.now().isoformat()
-    }
-
-# RAGシステム再初期化
-@app.post("/reinitialize-rag")
-async def reinitialize_rag():
-    """RAGシステムの再初期化"""
-    global is_initialized
-    is_initialized = False
-    
-    await initialize_rag_system()
-    
-    return {
-        "status": "reinitialized",
-        "rag_initialized": is_initialized,
+        "uptime": time.time() - startup_time,
         "timestamp": datetime.now().isoformat()
     }
 
