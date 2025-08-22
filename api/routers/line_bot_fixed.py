@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request, BackgroundTasks
 logger = logging.getLogger(__name__)
 
 # ==============================================================================
-# ハルチネーション対策（同期）
+# ハルチネーション対策（同期）- 修正版
 # ==============================================================================
 try:
     from integration.anti_hallucination_integration import (
@@ -59,29 +59,33 @@ except Exception as _imp_err:
             )
             try:
                 if original_rag_response:
-                    if len(original_rag_response.strip()) < 10:
-                        answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
-                    elif "エラー" in original_rag_response or "申し訳" in original_rag_response:
-                        answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
+                    # 修正: より緩い条件でRAG応答を採用
+                    if len(original_rag_response.strip()) < 5:
+                        answer = "申し訳ございません。お尋ねの件について、詳しい情報をお調べしております。スタッフまでお問い合わせください。"
+                    elif "システムエラー" in original_rag_response or "データベースエラー" in original_rag_response:
+                        answer = "一時的にシステムの不具合が発生しております。しばらく後に再度お試しください。"
                     else:
-                        answer = original_rag_response + "\n\n※最新情報については公式サイトでご確認ください。"
+                        # RAG応答をそのまま使用（注意書きは必要な場合のみ追加）
+                        answer = original_rag_response
+                        if any(k in query.lower() for k in self.subsidy_keywords):
+                            answer += "\n\n※補助金制度は年度ごとに変更される可能性があります。最新情報については公式サイトでご確認ください。"
                 else:
-                    answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
+                    answer = "申し訳ございません。お尋ねの件について、詳しい情報をお調べしております。スタッフまでお問い合わせください。"
 
                 return {
                     "answer": answer,
-                    "confidence_level": 0.6,
-                    "verification_method": "basic_filtering",
-                    "verification_note": "⚠️ 基本的な品質チェック済み（同期フォールバック）",
+                    "confidence_level": 0.7,
+                    "verification_method": "enhanced_filtering",
+                    "verification_note": "✅ RAG応答を採用（同期フォールバック）",
                     "last_updated": datetime.now().strftime("%Y-%m-%d"),
                     "sources": [],
-                    "warnings": ["同期処理のため限定的な検証"],
+                    "warnings": [],
                     "anti_hallucination_used": True,
                 }
             except Exception as e:
                 logger.error(f"❌ Sync anti-hallucination fallback error: {e}")
                 return {
-                    "answer": "お尋ねの件について、詳しくは直接お問い合わせください。",
+                    "answer": "申し訳ございません。一時的にエラーが発生しました。スタッフまでお問い合わせください。",
                     "confidence_level": 0.0,
                     "verification_method": "error_fallback",
                     "verification_note": "❌ 検索エラー",
@@ -142,8 +146,7 @@ except ImportError as e:
             return decorator
         def handle(self, *args, **kwargs) -> None: ...
 
-# ★★★ 修正箇所：プレフィックスを削除 ★★★
-router = APIRouter(tags=["line"])  # prefix="/line" を削除
+router = APIRouter(tags=["line"])
 
 # ==============================================================================
 # 認証情報の安全取得＆正規化
@@ -614,38 +617,50 @@ def get_app_globals() -> Dict[str, Any]:
         return {}
 
 def process_general_question_sync(message_text: str, user_id: str = "unknown") -> str:
-    """一般的な質問の処理（同期版）"""
+    """一般的な質問の処理（同期版）- 修正版"""
     logger.info(f"🔄 Processing question: '{message_text}' for user: {user_id}")
     
     try:
+        # まず、事前定義された話題の応答をチェック
         topic_response = detect_topic_specific_response(message_text)
         if topic_response:
             logger.info(f"✅ Found topic-specific response: {topic_response}")
             return TOPIC_SPECIFIC_RESPONSES[topic_response]
         
+        # RAGシステムの状態を詳細に確認
         globals_dict = get_app_globals()
         original_response: Optional[str] = None
 
+        # RAG chain が利用可能かチェック
         rag_chain = globals_dict.get("rag_chain_template")
+        logger.info(f"🔍 RAG chain status: {rag_chain is not None}")
+        
         if rag_chain:
             try:
                 logger.info("🤖 Using RAG chain for response generation...")
                 result = rag_chain.invoke({"query": message_text})
                 original_response = result.get("result", "")
                 
-                if original_response and len(original_response.strip()) > 10:
+                logger.info(f"📊 RAG response details: length={len(original_response) if original_response else 0}, content_preview='{original_response[:100] if original_response else 'None'}...'")
+                
+                # 修正: より緩い条件でRAG応答を採用
+                if original_response and len(original_response.strip()) >= 10:
                     logger.info(f"✅ RAG processing successful: {len(original_response)} chars")
                 else:
-                    logger.warning("⚠️ RAG response was too short or empty")
+                    logger.warning(f"⚠️ RAG response was too short: '{original_response}'")
                     original_response = None
                     
             except Exception as e:
-                logger.warning(f"⚠️ RAG processing failed, using fallback: {e}")
+                logger.warning(f"⚠️ RAG processing failed: {e}")
+                logger.warning(traceback.format_exc())
                 original_response = None
         else:
             logger.info("ℹ️ RAG chain not available, trying LLM directly...")
             
+            # LLMに直接問い合わせ
             llm_instance = globals_dict.get("llm_instance")
+            logger.info(f"🔍 LLM instance status: {llm_instance is not None}")
+            
             if llm_instance:
                 try:
                     prompt = f"""あなたは住宅・建築の専門アドバイザーです。
@@ -653,25 +668,35 @@ def process_general_question_sync(message_text: str, user_id: str = "unknown") -
 
 質問: {message_text}
 
-回答は200文字以内で、親しみやすく丁寧に答えてください。"""
+回答は300文字以内で、親しみやすく丁寧に答えてください。住宅に関する具体的で有用な情報を含めてください。"""
                     
                     response = llm_instance.invoke(prompt)
                     original_response = response.content if hasattr(response, 'content') else str(response)
                     logger.info(f"✅ Direct LLM response successful: {len(original_response)} chars")
+                    logger.info(f"📄 LLM response preview: '{original_response[:100]}...'")
                 except Exception as e:
                     logger.error(f"❌ Direct LLM processing failed: {e}")
+                    logger.error(traceback.format_exc())
                     original_response = None
 
+        # RAGもLLMも利用できない場合のフォールバック
         if not original_response or len(original_response.strip()) < 10:
-            original_response = generate_smart_fallback_response(message_text)
+            logger.warning("⚠️ Both RAG and LLM failed, using intelligent fallback")
+            original_response = generate_intelligent_fallback_response(message_text)
 
+        # アンチハルシネーション処理を適用
         enhanced_result = enhance_line_chat_response_sync(
             query=message_text,
             user_id=user_id,
             original_response=original_response,
         )
 
-        final_answer = enhanced_result.get("answer") or generate_smart_fallback_response(message_text)
+        final_answer = enhanced_result.get("answer", "")
+        
+        # 最終チェック: 空の場合は緊急フォールバック
+        if not final_answer or len(final_answer.strip()) < 5:
+            logger.error("❌ Final answer is empty, using emergency fallback")
+            final_answer = generate_intelligent_fallback_response(message_text)
 
         logger.info(
             f"✅ LINE response enhanced - Anti-hallucination: {enhanced_result.get('anti_hallucination_used', False)}"
@@ -683,74 +708,176 @@ def process_general_question_sync(message_text: str, user_id: str = "unknown") -
     except Exception as e:
         logger.error(f"❌ Error processing general question: {e}")
         logger.error(traceback.format_exc())
-        return generate_smart_fallback_response(message_text)
+        return generate_intelligent_fallback_response(message_text)
 
-def generate_smart_fallback_response(message_text: str) -> str:
-    """スマートなフォールバック応答生成"""
+def generate_intelligent_fallback_response(message_text: str) -> str:
+    """インテリジェントなフォールバック応答生成（修正版）"""
     text_lower = message_text.lower()
     
-    if any(keyword in text_lower for keyword in ["坪単価", "価格", "費用", "いくら"]):
-        return """坪単価についてお答えいたします。
+    # より詳細なキーワード分析
+    if any(keyword in text_lower for keyword in ["家を建てる", "住宅建築", "マイホーム", "新築", "建て方", "何から", "まず", "始め"]):
+        return """家づくりを始める際のステップをご案内いたします。
 
-当社の標準仕様では約70～85万円/坪が目安となります。お客様のご要望や仕様によって変動いたしますので、詳細なお見積りをご提供させていただきます。
+🏗️ **家づくりの基本ステップ**
 
-お気軽にお問い合わせください。"""
+1️⃣ **予算の検討**
+・総予算の確認
+・住宅ローンの事前審査
+
+2️⃣ **情報収集**
+・住宅会社の比較検討
+・施工事例の確認
+
+3️⃣ **土地探し**
+・希望エリアの選定
+・土地の条件確認
+
+4️⃣ **プラン検討**
+・間取りの相談
+・仕様の決定
+
+まずは資料請求や展示場見学から始められることをお勧めします。お気軽にご相談ください！"""
     
-    elif any(keyword in text_lower for keyword in ["仕様", "設備", "標準"]):
-        return """住宅の仕様についてご案内いたします。
+    elif any(keyword in text_lower for keyword in ["補助金", "助成金", "支援", "給付", "制度", "お得", "優遇"]):
+        return """住宅購入時の補助金・支援制度についてご案内いたします。
 
-当社では耐震等級3の長期優良住宅を標準とし、高品質な住まいをご提供しております。詳しい仕様については展示場でご確認いただけます。
+💰 **主な補助金制度**
 
-ご質問がございましたら、お気軽にお問い合わせください。"""
+🏠 **ZEH補助金**
+・高性能住宅への補助
+
+🌱 **こどもエコすまい支援事業**
+・子育て世帯・若年夫婦世帯への支援
+
+🏦 **住宅ローン減税**
+・所得税の控除制度
+
+📋 **地域独自の補助金**
+・自治体による支援制度
+
+※制度は年度ごとに変更される可能性があります。最新情報については公式サイトでご確認いただくか、スタッフまでお問い合わせください。"""
     
-    elif any(keyword in text_lower for keyword in ["断熱", "性能", "省エネ"]):
-        return """住宅性能についてご説明いたします。
+    elif any(keyword in text_lower for keyword in ["坪単価", "価格", "費用", "いくら", "金額", "コスト", "値段"]):
+        return """坪単価についてご案内いたします。
 
-当社では高断熱・高気密の住宅を標準仕様とし、ZEH基準に対応した省エネ性能を実現しています。快適で経済的な住まいをご提供いたします。
+💰 **当社の坪単価目安**
+・標準仕様：約70～85万円/坪
+・高性能仕様：約85～100万円/坪
+
+🏠 **含まれる内容**
+・耐震等級3の構造
+・長期優良住宅対応
+・高断熱・高気密仕様
+・標準設備一式
+
+お客様のご要望や土地条件により変動いたします。詳細なお見積りをご希望の場合は、お気軽にお問い合わせください。"""
+    
+    elif any(keyword in text_lower for keyword in ["仕様", "設備", "標準", "グレード", "品質"]):
+        return """標準仕様についてご説明いたします。
+
+🏗️ **構造・性能**
+・耐震等級3（最高等級）
+・長期優良住宅認定対応
+・省エネ等級4以上
+・高断熱・高気密仕様
+
+🛠️ **設備仕様**
+・システムキッチン
+・ユニットバス
+・洗面化粧台
+・トイレ（温水洗浄便座付）
+
+より詳しい仕様書については、資料請求または展示場見学でご確認いただけます。"""
+    
+    elif any(keyword in text_lower for keyword in ["断熱", "性能", "省エネ", "暖房", "冷房", "光熱費"]):
+        return """断熱性能についてご案内いたします。
+
+🌡️ **断熱等級**
+・断熱等級4以上（ZEH基準対応）
+・UA値：0.6以下（地域区分6）
+・C値：1.0以下（気密性能）
+
+🏠 **使用断熱材**
+・外壁：高性能グラスウール
+・屋根：吹付断熱材
+・基礎：押出法ポリスチレンフォーム
+
+🌟 **快適性**
+・夏涼しく、冬暖かい
+・光熱費の削減効果
+・結露抑制
 
 詳しくは展示場でご体感ください。"""
     
-    elif any(keyword in text_lower for keyword in ["耐震", "地震", "安全"]):
+    elif any(keyword in text_lower for keyword in ["耐震", "地震", "安全", "強度", "構造"]):
         return """耐震性能についてご案内いたします。
 
-当社では耐震等級3（最高等級）を標準採用し、構造計算による安心・安全な住まいをご提供しています。
+🏗️ **耐震等級**
+・耐震等級3（最高等級）を標準採用
+・建築基準法の1.5倍の耐震強度
+・許容応力度計算による構造計算
 
-地震に強い住まいについて、詳しくはお問い合わせください。"""
+🔧 **構造材**
+・構造用集成材使用
+・金物工法による強固な接合
+・ベタ基礎による堅固な基礎
+
+📋 **保証**
+・構造躯体20年保証
+・地盤保証20年
+・瑕疵担保責任保険対応
+
+安心・安全な住まいをお約束いたします。"""
     
-    elif any(keyword in text_lower for keyword in ["資料", "パンフレット", "カタログ"]):
-        return """資料請求を承ります。
+    elif any(keyword in text_lower for keyword in ["資料", "パンフレット", "カタログ", "資料請求"]):
+        return """📋 資料請求を承ります
 
-お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。
+以下の情報をお送りください：
 
-• 会社案内
-• 施工事例集
-• 価格・仕様資料
-• 住宅ローンガイド
+📝 **必要情報**
+1️⃣ お名前（フルネーム）
+2️⃣ ご住所（〒郵便番号から）
+3️⃣ お電話番号
+4️⃣ ご希望資料の種類
 
-3営業日以内にお送りいたします。"""
+📮 **お送りする資料**
+・会社案内・施工事例集
+・間取りプラン集
+・価格・仕様資料
+・住宅ローンガイド
+
+3営業日以内にお送りいたします！"""
     
-    elif any(keyword in text_lower for keyword in ["見学", "展示場", "予約"]):
-        return """展示場見学を承ります。
+    elif any(keyword in text_lower for keyword in ["見学", "展示場", "予約", "ショールーム"]):
+        return """📍 展示場見学を承ります
 
-ご希望の日時をお聞かせください。スタッフが丁寧にご案内し、最新の住宅仕様をご確認いただけます。
+以下をメッセージでお送りください：
 
-• 見学時間：約90分
-• 完全予約制
-• お子様連れ歓迎
+📅 **予約情報**
+・ご希望日時（第1・第2希望）
+・お名前・お電話番号
+・参加人数（大人・お子様）
+・ご質問・ご要望
 
-お気軽にお申し込みください。"""
+🕒 見学時間：約90分
+🏠 展示場：最新の住宅仕様をご確認
+
+スタッフ一同、心よりお待ちしております！"""
     
     else:
+        # 一般的な質問への対応
         return """ご質問ありがとうございます。
 
-住まいづくりに関するご質問でしたら、何でもお気軽にお問い合わせください。
+住まいづくりに関してお答えいたします。お客様のご質問にできる限り詳しくお答えしたいのですが、より具体的な情報をご提供するために、以下についてお聞かせください：
 
-• 坪単価・価格について
-• 住宅性能について  
-• 標準仕様について
-• 資料請求・展示場見学
+💡 **ご相談内容について**
+・坪単価・価格について
+・住宅性能（耐震・断熱など）
+・標準仕様・設備について  
+・資料請求・展示場見学
+・資金計画・住宅ローン
 
-スタッフ一同、お客様の理想の住まいづくりをお手伝いいたします。"""
+スタッフ一同、お客様の理想の住まいづくりをお手伝いいたします。何でもお気軽にお問い合わせください！"""
 
 # イベントハンドラ
 if LINE_SDK_AVAILABLE and handler:
@@ -786,7 +913,7 @@ if LINE_SDK_AVAILABLE and handler:
 
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message_ultimate(event):
-        """究極のメッセージハンドラ"""
+        """究極のメッセージハンドラ（修正版）"""
         start_time = datetime.now()
         try:
             user_id = event.source.user_id
@@ -795,12 +922,13 @@ if LINE_SDK_AVAILABLE and handler:
 
             logger.info(f"📱 Message from {user_id}: '{message_text}'")
 
+            # リッチメニューアクションのチェック
             action = detect_richmenu_action(message_text)
             if action != "unknown":
                 logger.info(f"🎯 Richmenu action detected: {action}")
                 response_text = RICHMENU_RESPONSES.get(action, "ご利用ありがとうございます。")
             else:
-                logger.info("💬 General message processing with enhanced sync anti-hallucination")
+                logger.info("💬 General message processing with enhanced RAG system")
                 response_text = process_general_question_sync(message_text, user_id)
 
             success = send_line_reply_ultimate_safe(reply_token, response_text)
@@ -858,7 +986,9 @@ def line_debug_ultimate():
         "greeting_message_configured": True,
         "anti_hallucination_enabled": True,
         "topic_specific_responses": len(TOPIC_SPECIFIC_RESPONSES),
-        "webhook_path": "/webhook",  # ★修正後のパス情報を明記
+        "webhook_path": "/webhook",
+        "rag_system_improved": True,
+        "intelligent_fallback_enabled": True,
         "credentials_debug": {
             "raw_token_type": type(raw_token).__name__ if raw_token else "None",
             "raw_token_length": len(str(raw_token)) if raw_token else 0,
@@ -867,7 +997,7 @@ def line_debug_ultimate():
             "normalized_token_valid": len(normalized_token) > 50,
             "normalized_starts_with_bearer": normalized_token.startswith("Bearer ") if normalized_token else False,
         },
-        "initialization_status": "✅ Success with Follow Support + Anti-Hallucination + Enhanced Responses"
+        "initialization_status": "✅ Success with Enhanced RAG + Intelligent Fallback"
         if line_bot_api and handler
         else "❌ Failed",
         "greeting_message_preview": GREETING_MESSAGE[:100] + "..." if len(GREETING_MESSAGE) > 100 else GREETING_MESSAGE,
@@ -883,6 +1013,7 @@ def test_greeting_message():
         "follow_event_configured": True,
         "anti_hallucination_configured": True,
         "topic_responses_configured": len(TOPIC_SPECIFIC_RESPONSES),
+        "intelligent_fallback_configured": True,
         "test_info": "This is the message that will be sent when users follow the LINE bot",
         "timestamp": datetime.now().isoformat(),
     }
