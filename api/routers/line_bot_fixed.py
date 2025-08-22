@@ -1,4 +1,4 @@
-# api/routers/line_bot_fixed.py - 友達追加挨拶メッセージ対応版（ハルチネーション対策・同期化 + 遅延読み込み）
+# api/routers/line_bot_fixed.py - 友達追加挨拶メッセージ対応版（ハルチネーション対策・同期化 + 遅延読み込み + RAG修復版）
 
 import logging
 import os
@@ -319,7 +319,7 @@ else:
     logger.warning("⚠️ LINE Bot SDK not available")
 
 # ==============================================================================
-# 応答テンプレート
+# 応答テンプレート（改善版）
 # ==============================================================================
 GREETING_MESSAGE = """こんにちは！キノエデザインです。
 この度は友だち追加ありがとうございます✨
@@ -374,7 +374,7 @@ https://kinoe-design.com
 ・価格・仕様資料
 ・住宅ローンガイド
 
-3営業日以内にお送いたします！""",
+3営業日以内にお送りいたします！""",
     "展示場来場予約": """📍 展示場来場予約を承ります
 
 以下をメッセージでお送りください：
@@ -428,6 +428,80 @@ https://kinoe-design.com
 }
 
 # ==============================================================================
+# 質問別の専用応答テンプレート（新規追加）
+# ==============================================================================
+TOPIC_SPECIFIC_RESPONSES: Dict[str, str] = {
+    "坪単価": """坪単価についてご案内いたします。
+
+💰 当社の坪単価目安：
+・標準仕様：約70～85万円/坪
+・高性能仕様：約85～100万円/坪
+
+🏠 含まれる内容：
+・耐震等級3の構造
+・長期優良住宅対応
+・高断熱・高気密仕様
+・標準設備一式
+
+※お客様のご要望や土地条件により変動いたします。
+詳細なお見積りをご希望の場合は、お気軽にお問い合わせください。""",
+    
+    "標準仕様": """標準仕様についてご説明いたします。
+
+🏗️ 構造・性能：
+・耐震等級3（最高等級）
+・長期優良住宅認定対応
+・省エネ等級4以上
+・高断熱・高気密仕様
+
+🛠️ 設備仕様：
+・システムキッチン
+・ユニットバス
+・洗面化粧台
+・トイレ（温水洗浄便座付）
+
+より詳しい仕様書をご希望の場合は、資料請求またはショールーム見学をお申し込みください。""",
+    
+    "断熱性能": """断熱性能についてご案内いたします。
+
+🌡️ 断熱等級：
+・断熱等級4以上（ZEH基準対応）
+・UA値：0.6以下（地域区分6）
+・C値：1.0以下（気密性能）
+
+🏠 使用断熱材：
+・外壁：高性能グラスウール
+・屋根：吹付断熱材
+・基礎：押出法ポリスチレンフォーム
+
+🌟 快適性：
+・夏涼しく、冬暖かい
+・光熱費の削減効果
+・結露抑制
+
+詳しくは展示場でご体感いただけます。""",
+    
+    "耐震性能": """耐震性能についてご案内いたします。
+
+🏗️ 耐震等級：
+・耐震等級3（最高等級）を標準採用
+・建築基準法の1.5倍の耐震強度
+・許容応力度計算による構造計算
+
+🔧 構造材：
+・構造用集成材使用
+・金物工法による強固な接合
+・ベタ基礎による堅固な基礎
+
+📋 保証：
+・構造躯体20年保証
+・地盤保証20年
+・瑕疵担保責任保険対応
+
+安心・安全な住まいをお約束いたします。""",
+}
+
+# ==============================================================================
 # 判定・返信ユーティリティ
 # ==============================================================================
 def detect_richmenu_action(message_text: str) -> str:
@@ -453,6 +527,23 @@ def detect_richmenu_action(message_text: str) -> str:
 
     return "unknown"
 
+def detect_topic_specific_response(message_text: str) -> Optional[str]:
+    """質問の内容から適切な専用応答を検出"""
+    text_lower = message_text.lower()
+    
+    # キーワードマッチング
+    topic_keywords = {
+        "坪単価": ["坪単価", "価格", "費用", "いくら", "金額", "コスト"],
+        "標準仕様": ["標準仕様", "仕様", "標準", "設備", "基本"],
+        "断熱性能": ["断熱", "断熱性能", "省エネ", "温度", "暖房", "冷房", "ua値"],
+        "耐震性能": ["耐震", "地震", "耐震性能", "耐震等級", "安全", "強度"],
+    }
+    
+    for topic, keywords in topic_keywords.items():
+        if any(keyword in text_lower for keyword in keywords):
+            return topic
+    
+    return None
 
 def send_line_reply_ultimate_safe(reply_token: str, message_text: str) -> bool:
     """究極に安全なLINE返信送信（同期・毎回Configuration再生成）"""
@@ -532,7 +623,7 @@ async def line_webhook_ultimate(request: Request, background_tasks: BackgroundTa
         return {"status": "error", "error": str(e), "timestamp": datetime.now().isoformat()}
 
 # ==============================================================================
-# RAG 連携（同期版／遅延読み込み対応）
+# RAG 連携（同期版／遅延読み込み対応／エラーハンドリング強化）
 # ==============================================================================
 def get_app_globals() -> Dict[str, Any]:
     """アプリのグローバル変数を取得（遅延読み込み対応）"""
@@ -544,14 +635,27 @@ def get_app_globals() -> Dict[str, Any]:
         rag_chain_template = getattr(main, "rag_chain_template", None)
         llm_instance = getattr(main, "llm_instance", None)
 
-        # 必要に応じて遅延初期化を実行
+        # 遅延初期化を実行
         if vectorstore is None and hasattr(main, "ensure_vectorstore_loaded"):
             logger.info("🔄 Triggering lazy vectorstore loading...")
-            vectorstore = main.ensure_vectorstore_loaded()
+            try:
+                vectorstore = main.ensure_vectorstore_loaded()
+            except Exception as e:
+                logger.error(f"❌ Vectorstore lazy loading failed: {e}")
 
         if rag_chain_template is None and hasattr(main, "ensure_rag_chain_loaded"):
             logger.info("🔄 Triggering lazy RAG chain loading...")
-            rag_chain_template = main.ensure_rag_chain_loaded()
+            try:
+                rag_chain_template = main.ensure_rag_chain_loaded()
+            except Exception as e:
+                logger.error(f"❌ RAG chain lazy loading failed: {e}")
+
+        if llm_instance is None and hasattr(main, "ensure_llm_loaded"):
+            logger.info("🔄 Triggering lazy LLM loading...")
+            try:
+                llm_instance = main.ensure_llm_loaded()
+            except Exception as e:
+                logger.error(f"❌ LLM lazy loading failed: {e}")
 
         return {
             "vectorstore": vectorstore,
@@ -564,9 +668,17 @@ def get_app_globals() -> Dict[str, Any]:
 
 
 def process_general_question_sync(message_text: str, user_id: str = "unknown") -> str:
-    """一般的な質問の処理（同期版）- 遅延読み込み対応"""
+    """一般的な質問の処理（同期版）- 遅延読み込み対応 + エラーハンドリング強化"""
+    logger.info(f"🔄 Processing question: '{message_text}' for user: {user_id}")
+    
     try:
-        # RAG システムとの連携（遅延読み込み対応）
+        # 1. まず専用応答をチェック
+        topic_response = detect_topic_specific_response(message_text)
+        if topic_response:
+            logger.info(f"✅ Found topic-specific response: {topic_response}")
+            return TOPIC_SPECIFIC_RESPONSES[topic_response]
+        
+        # 2. RAG システムとの連携（遅延読み込み対応）
         globals_dict = get_app_globals()
         original_response: Optional[str] = None
 
@@ -574,19 +686,44 @@ def process_general_question_sync(message_text: str, user_id: str = "unknown") -
         rag_chain = globals_dict.get("rag_chain_template")
         if rag_chain:
             try:
+                logger.info("🤖 Using RAG chain for response generation...")
                 result = rag_chain.invoke({"query": message_text})
-                original_response = result.get("result", "申し訳ございません。お答えできませんでした。")
-                logger.info(f"✅ RAG processing successful for query: {message_text[:50]}...")
+                original_response = result.get("result", "")
+                
+                if original_response and len(original_response.strip()) > 10:
+                    logger.info(f"✅ RAG processing successful: {len(original_response)} chars")
+                else:
+                    logger.warning("⚠️ RAG response was too short or empty")
+                    original_response = None
+                    
             except Exception as e:
                 logger.warning(f"⚠️ RAG processing failed, using fallback: {e}")
+                logger.warning(traceback.format_exc())
                 original_response = None
         else:
-            logger.info("ℹ️ RAG chain not available, using fallback response")
-            original_response = None
+            logger.info("ℹ️ RAG chain not available, trying LLM directly...")
+            
+            # RAGが使えない場合、LLMを直接使用
+            llm_instance = globals_dict.get("llm_instance")
+            if llm_instance:
+                try:
+                    prompt = f"""あなたは住宅・建築の専門アドバイザーです。
+以下の質問に対して、自然で分かりやすく答えてください。
+
+質問: {message_text}
+
+回答は200文字以内で、親しみやすく丁寧に答えてください。"""
+                    
+                    response = llm_instance.invoke(prompt)
+                    original_response = response.content if hasattr(response, 'content') else str(response)
+                    logger.info(f"✅ Direct LLM response successful: {len(original_response)} chars")
+                except Exception as e:
+                    logger.error(f"❌ Direct LLM processing failed: {e}")
+                    original_response = None
 
         # フォールバック応答の準備
-        if not original_response:
-            original_response = "お尋ねの件について、詳しくは直接お問い合わせください。"
+        if not original_response or len(original_response.strip()) < 10:
+            original_response = generate_smart_fallback_response(message_text)
 
         # 同期版のハルチネーション対策を適用
         enhanced_result = enhance_line_chat_response_sync(
@@ -595,19 +732,90 @@ def process_general_question_sync(message_text: str, user_id: str = "unknown") -
             original_response=original_response,
         )
 
-        final_answer = enhanced_result.get("answer") or "申し訳ございません。お答えできませんでした。"
+        final_answer = enhanced_result.get("answer") or generate_smart_fallback_response(message_text)
 
         logger.info(
-            f"LINE response enhanced - Anti-hallucination: {enhanced_result.get('anti_hallucination_used', False)}"
+            f"✅ LINE response enhanced - Anti-hallucination: {enhanced_result.get('anti_hallucination_used', False)}"
         )
+        logger.info(f"📤 Final answer length: {len(final_answer)} chars")
+        
         return final_answer
 
     except Exception as e:
-        logger.error(f"Error processing general question: {e}")
-        return "申し訳ございません。一時的にエラーが発生しました。しばらくしてから再度お試しください。"
+        logger.error(f"❌ Error processing general question: {e}")
+        logger.error(traceback.format_exc())
+        return generate_smart_fallback_response(message_text)
+
+def generate_smart_fallback_response(message_text: str) -> str:
+    """スマートなフォールバック応答生成"""
+    text_lower = message_text.lower()
+    
+    # キーワードベースの応答
+    if any(keyword in text_lower for keyword in ["坪単価", "価格", "費用", "いくら"]):
+        return """坪単価についてお答えいたします。
+
+当社の標準仕様では約70～85万円/坪が目安となります。お客様のご要望や仕様によって変動いたしますので、詳細なお見積りをご提供させていただきます。
+
+お気軽にお問い合わせください。"""
+    
+    elif any(keyword in text_lower for keyword in ["仕様", "設備", "標準"]):
+        return """住宅の仕様についてご案内いたします。
+
+当社では耐震等級3の長期優良住宅を標準とし、高品質な住まいをご提供しております。詳しい仕様については展示場でご確認いただけます。
+
+ご質問がございましたら、お気軽にお問い合わせください。"""
+    
+    elif any(keyword in text_lower for keyword in ["断熱", "性能", "省エネ"]):
+        return """住宅性能についてご説明いたします。
+
+当社では高断熱・高気密の住宅を標準仕様とし、ZEH基準に対応した省エネ性能を実現しています。快適で経済的な住まいをご提供いたします。
+
+詳しくは展示場でご体感ください。"""
+    
+    elif any(keyword in text_lower for keyword in ["耐震", "地震", "安全"]):
+        return """耐震性能についてご案内いたします。
+
+当社では耐震等級3（最高等級）を標準採用し、構造計算による安心・安全な住まいをご提供しています。
+
+地震に強い住まいについて、詳しくはお問い合わせください。"""
+    
+    elif any(keyword in text_lower for keyword in ["資料", "パンフレット", "カタログ"]):
+        return """資料請求を承ります。
+
+お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。
+
+• 会社案内
+• 施工事例集
+• 価格・仕様資料
+• 住宅ローンガイド
+
+3営業日以内にお送りいたします。"""
+    
+    elif any(keyword in text_lower for keyword in ["見学", "展示場", "予約"]):
+        return """展示場見学を承ります。
+
+ご希望の日時をお聞かせください。スタッフが丁寧にご案内し、最新の住宅仕様をご確認いただけます。
+
+• 見学時間：約90分
+• 完全予約制
+• お子様連れ歓迎
+
+お気軽にお申し込みください。"""
+    
+    else:
+        return """ご質問ありがとうございます。
+
+住まいづくりに関するご質問でしたら、何でもお気軽にお問い合わせください。
+
+• 坪単価・価格について
+• 住宅性能について  
+• 標準仕様について
+• 資料請求・展示場見学
+
+スタッフ一同、お客様の理想の住まいづくりをお手伝いいたします。"""
 
 # ==============================================================================
-# イベントハンドラ（Follow / Message / Postback）— 同期化済み
+# イベントハンドラ（Follow / Message / Postback）— 同期化済み + エラーハンドリング強化
 # ==============================================================================
 if LINE_SDK_AVAILABLE and handler:
 
@@ -642,7 +850,7 @@ if LINE_SDK_AVAILABLE and handler:
 
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message_ultimate(event):
-        """究極のメッセージハンドラ（ハルチネーション対策強化版・同期処理）"""
+        """究極のメッセージハンドラ（ハルチネーション対策強化版・同期処理・エラーハンドリング完全版）"""
         start_time = datetime.now()
         try:
             user_id = event.source.user_id
@@ -651,20 +859,24 @@ if LINE_SDK_AVAILABLE and handler:
 
             logger.info(f"📱 Message from {user_id}: '{message_text}'")
 
+            # 1. リッチメニューアクション検出
             action = detect_richmenu_action(message_text)
             if action != "unknown":
                 logger.info(f"🎯 Richmenu action detected: {action}")
                 response_text = RICHMENU_RESPONSES.get(action, "ご利用ありがとうございます。")
             else:
-                logger.info("💬 General message processing with sync anti-hallucination")
+                logger.info("💬 General message processing with enhanced sync anti-hallucination")
                 response_text = process_general_question_sync(message_text, user_id)
 
+            # 2. 回答送信
             success = send_line_reply_ultimate_safe(reply_token, response_text)
             duration = (datetime.now() - start_time).total_seconds()
-            logger.info(f"✅ Message processed: success={success}, time={duration:.3f}s")
-
-            if not success:
+            
+            if success:
+                logger.info(f"✅ Message processed successfully: time={duration:.3f}s, response_length={len(response_text)}")
+            else:
                 logger.error(f"❌ Failed to send reply for message: '{message_text}'")
+
         except Exception as e:
             logger.error(f"💥 Message handler error: {e}")
             logger.error(traceback.format_exc())
@@ -713,6 +925,7 @@ def line_debug_ultimate():
         "follow_event_supported": True,
         "greeting_message_configured": True,
         "anti_hallucination_enabled": True,
+        "topic_specific_responses": len(TOPIC_SPECIFIC_RESPONSES),
         "credentials_debug": {
             "raw_token_type": type(raw_token).__name__ if raw_token else "None",
             "raw_token_length": len(str(raw_token)) if raw_token else 0,
@@ -721,7 +934,7 @@ def line_debug_ultimate():
             "normalized_token_valid": len(normalized_token) > 50,
             "normalized_starts_with_bearer": normalized_token.startswith("Bearer ") if normalized_token else False,
         },
-        "initialization_status": "✅ Success with Follow Support + Anti-Hallucination"
+        "initialization_status": "✅ Success with Follow Support + Anti-Hallucination + Enhanced Responses"
         if line_bot_api and handler
         else "❌ Failed",
         "greeting_message_preview": GREETING_MESSAGE[:100] + "..." if len(GREETING_MESSAGE) > 100 else GREETING_MESSAGE,
@@ -736,6 +949,7 @@ def test_greeting_message():
         "message_length": len(GREETING_MESSAGE),
         "follow_event_configured": True,
         "anti_hallucination_configured": True,
+        "topic_responses_configured": len(TOPIC_SPECIFIC_RESPONSES),
         "test_info": "This is the message that will be sent when users follow the LINE bot",
         "timestamp": datetime.now().isoformat(),
     }

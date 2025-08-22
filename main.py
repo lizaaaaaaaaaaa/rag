@@ -1,4 +1,4 @@
-# main.py — Enhanced RAG System (Unified & Hardened with Anti-Hallucination)
+# main.py — Enhanced RAG System (Unified & Hardened with Anti-Hallucination) - 起動高速化版
 import os
 import sys
 import importlib
@@ -140,103 +140,49 @@ async def performance_monitoring(request: Request, call_next):
     return response
 
 # ------------------------------------------------------------------------------
-# 起動時処理（最適化：高速起動 + 遅延初期化）
+# 起動時処理（最適化：超高速起動 + 完全遅延初期化）
 # ------------------------------------------------------------------------------
 @app.on_event("startup")
-async def optimized_startup():
+async def ultra_fast_startup():
+    """超高速起動モード - Cloud Runヘルスチェック最適化"""
     global vectorstore, rag_chain_template, llm_instance
 
-    logger.info("🚀 Fast Startup Mode - Enhanced RAG System")
+    logger.info("⚡ Ultra Fast Startup Mode - Cloud Run Optimized")
     logger.info("=" * 50)
 
-    # 本番環境では起動を高速化
+    # Cloud Run本番環境では起動を極限まで高速化
     ENV = os.getenv("ENV", "development")
-    FAST_STARTUP = ENV == "production" or os.getenv("FAST_STARTUP", "false").lower() == "true"
-
-    if FAST_STARTUP:
-        logger.info("⚡ Fast startup mode enabled - deferring heavy initialization")
+    
+    if ENV == "production":
+        logger.info("🚀 Production mode: Deferring ALL heavy initialization")
         try:
-            # 最低限のヘルスチェック用設定（遅延読み込み）
+            # 必要最小限の設定のみ（ヘルスチェック対応）
             llm_instance = None
             vectorstore = None
             rag_chain_template = None
 
-            logger.info("✅ Fast startup completed - heavy initialization deferred")
-            logger.info("🎯 Startup time optimized for Cloud Run health checks")
+            logger.info("✅ Ultra fast startup completed in minimal time")
+            logger.info("🎯 All heavy components will be lazy-loaded on first access")
             return
         except Exception as e:
-            logger.error(f"❌ Fast startup failed: {e}")
-            # フォールバックとして通常の初期化を実行
+            logger.error(f"❌ Ultra fast startup failed: {e}")
 
-    # 通常の起動処理（開発環境またはフォールバック）
-    logger.info("🔧 Full initialization mode")
+    # 開発環境のみ一部の初期化を実行
+    logger.info("🔧 Development mode: Limited initialization")
 
-    # 1) LLM 初期化（軽量版）
-    try:
-        logger.info("🧠 Initializing LLM...")
-        if os.getenv("SKIP_LLM_INIT", "false").lower() == "true":
-            logger.info("⚠️ LLM initialization skipped")
-            llm_instance = None
-        else:
-            from llm.llm_runner import load_llm  # プロジェクト内ユーティリティ想定
-            llm, tokenizer, max_tokens = load_llm()
-            llm_instance = llm
-            logger.info("✅ LLM initialized")
-    except Exception as e:
-        logger.warning(f"⚠️ LLM initialization skipped: {e}")
-        llm_instance = None
+    # 必要最小限のみ
+    llm_instance = None
+    vectorstore = None
+    rag_chain_template = None
 
-    # 2) ベクトルストア初期化（軽量版）
-    try:
-        logger.info("🔍 Loading vectorstore...")
-        if os.getenv("SKIP_VECTORSTORE_INIT", "false").lower() == "true":
-            logger.info("⚠️ Vectorstore initialization skipped")
-            vectorstore = None
-        else:
-            from rag.ingested_text import load_vectorstore  # プロジェクト内ユーティリティ想定
-            vectorstore = load_vectorstore()
-            logger.info("✅ Vectorstore loaded")
-    except Exception as e:
-        logger.warning(f"⚠️ Vectorstore initialization skipped: {e}")
-        vectorstore = None
-
-    # 3) RAG チェーン初期化（軽量版）
-    try:
-        if vectorstore and llm_instance:
-            logger.info("⛓️ Building RAG chain...")
-            if ULTRA_FAST_MODE:
-                from rag.fast_rag_chain import get_ultra_fast_rag_chain
-                rag_chain_template = get_ultra_fast_rag_chain(
-                    vectorstore=vectorstore, return_source=True
-                )
-            else:
-                from rag.ingested_text import get_rag_chain
-                rag_chain_template = get_rag_chain(
-                    vectorstore=vectorstore, return_source=True
-                )
-            logger.info("✅ RAG chain created")
-        else:
-            logger.warning("⚠️ RAG chain not created - missing components")
-            rag_chain_template = None
-    except Exception as e:
-        logger.warning(f"⚠️ RAG chain creation skipped: {e}")
-        rag_chain_template = None
-
-    # システム状態
-    components_loaded = sum([
-        llm_instance is not None,
-        vectorstore is not None,
-        rag_chain_template is not None
-    ])
-    logger.info(f"📊 Components loaded: {components_loaded}/3")
-    logger.info("🎉 Startup completed - System ready")
+    logger.info("✅ Limited startup completed")
     logger.info("=" * 50)
 
 # ------------------------------------------------------------------------------
-# 遅延初期化ヘルパー
+# 遅延初期化ヘルパー（エラーハンドリング強化）
 # ------------------------------------------------------------------------------
 def ensure_llm_loaded():
-    """LLMが未初期化の場合に初期化"""
+    """LLMが未初期化の場合に初期化（エラー耐性強化）"""
     global llm_instance
     if llm_instance is None:
         try:
@@ -247,10 +193,11 @@ def ensure_llm_loaded():
             logger.info("✅ LLM lazy loaded successfully")
         except Exception as e:
             logger.error(f"❌ LLM lazy loading failed: {e}")
+            llm_instance = None
     return llm_instance
 
 def ensure_vectorstore_loaded():
-    """ベクトルストアが未初期化の場合に初期化"""
+    """ベクトルストアが未初期化の場合に初期化（エラー耐性強化）"""
     global vectorstore
     if vectorstore is None:
         try:
@@ -260,10 +207,11 @@ def ensure_vectorstore_loaded():
             logger.info("✅ Vectorstore lazy loaded successfully")
         except Exception as e:
             logger.error(f"❌ Vectorstore lazy loading failed: {e}")
+            vectorstore = None
     return vectorstore
 
 def ensure_rag_chain_loaded():
-    """RAGチェーンが未初期化の場合に初期化"""
+    """RAGチェーンが未初期化の場合に初期化（エラー耐性強化）"""
     global rag_chain_template
     if rag_chain_template is None:
         llm = ensure_llm_loaded()
@@ -280,6 +228,7 @@ def ensure_rag_chain_loaded():
                 logger.info("✅ RAG chain lazy loaded successfully")
             except Exception as e:
                 logger.error(f"❌ RAG chain lazy loading failed: {e}")
+                rag_chain_template = None
     return rag_chain_template
 
 # ------------------------------------------------------------------------------
@@ -434,56 +383,12 @@ def get_performance_report():
     except Exception as e:
         return {"error": str(e)}
 
-@app.get("/healthz")
-def integrated_health_check():
-    """統合ヘルスチェック（ハルチネーション対策強化版）"""
-    try:
-        health_data = {
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "service": "enhanced-rag-api",
-            "version": "3.1.0",
-            "features": {
-                "ultra_fast_mode": ULTRA_FAST_MODE,
-                "anti_hallucination": ANTI_HALLUCINATION_MODE,
-                "auto_update": ENABLE_AUTO_UPDATE,
-            },
-        }
-
-        warnings = []
-        if llm_instance is None:
-            warnings.append("LLM instance not loaded")
-        if vectorstore is None:
-            warnings.append("Vectorstore not loaded")
-        if rag_chain_template is None:
-            warnings.append("RAG chain not initialized")
-
-        # ハルチネーション対策の健全性チェック
-        if ANTI_HALLUCINATION_MODE:
-            google_api_key = os.environ.get("GOOGLE_SEARCH_API_KEY")
-            google_cx = os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
-            if not google_api_key or not google_cx:
-                warnings.append("Anti-hallucination: Google Search API credentials missing")
-
-        if warnings:
-            health_data["status"] = "degraded"
-            health_data["warnings"] = warnings
-
-        return health_data
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat(),
-        }
-
 # ------------------------------------------------------------------------------
-# Cloud Run 向けの軽量ヘルスチェック（起動直後でも成功）
+# 軽量ヘルスチェックエンドポイント（Cloud Run最適化）
 # ------------------------------------------------------------------------------
 @app.get("/healthz/ready")
 def health_check_ready():
-    """Cloud Run用のレディネスチェック（軽量・依存なし）"""
+    """Cloud Run用のレディネスチェック（超軽量・依存なし）"""
     return {
         "status": "ready",
         "timestamp": datetime.now().isoformat(),
@@ -493,11 +398,54 @@ def health_check_ready():
 
 @app.get("/healthz/live")
 def health_check_live():
-    """Cloud Run用のライブネスチェック（軽量・依存なし）"""
+    """Cloud Run用のライブネスチェック（超軽量・依存なし）"""
     return {
         "status": "alive",
         "timestamp": datetime.now().isoformat(),
     }
+
+@app.get("/healthz")
+def ultra_lightweight_health_check():
+    """超軽量ヘルスチェック（Cloud Runスタートアップ最適化）"""
+    try:
+        # 最小限のチェックのみ - 重い処理は一切行わない
+        health_data = {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "service": "enhanced-rag-api",
+            "version": "3.1.0",
+            "startup_mode": "ultra_fast",
+            "features": {
+                "ultra_fast_mode": ULTRA_FAST_MODE,
+                "anti_hallucination": ANTI_HALLUCINATION_MODE,
+                "auto_update": ENABLE_AUTO_UPDATE,
+            },
+        }
+
+        # 軽量なコンポーネント状態チェック（遅延読み込み呼び出しはしない）
+        components_status = {
+            "llm_loaded": llm_instance is not None,
+            "vectorstore_loaded": vectorstore is not None,
+            "rag_chain_loaded": rag_chain_template is not None,
+            "lazy_loading_available": True,
+        }
+        
+        health_data["components"] = components_status
+
+        # 重要：全てのコンポーネントが未読み込みでも healthy とする（遅延読み込み前提）
+        if not any(components_status.values()):
+            health_data["note"] = "Components will be lazy-loaded on first access"
+
+        return health_data
+    except Exception as e:
+        logger.error(f"Lightweight health check failed: {e}")
+        # エラーでも最小限の情報は返す
+        return {
+            "status": "minimal",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+            "service": "rag-api",
+        }
 
 # ------------------------------------------------------------------------------
 # 自動更新（手動トリガー）
