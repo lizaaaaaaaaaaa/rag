@@ -290,14 +290,17 @@ class ChatRequest(BaseModel):
 # グローバルインスタンス
 rag_generator = RAGIntegratedResponseGenerator()
 
-# ヘルスチェックエンドポイント
+# ヘルスチェックエンドポイント（改良版）
 @app.get("/healthz")
 async def health_check():
+    """高速ヘルスチェック（RAG初期化状態に関わらず常に成功）"""
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "service": "rag-api",
-        "rag_initialized": is_initialized
+        "version": "1.0.0",
+        "rag_initialized": is_initialized,
+        "uptime": time.time()  # 起動時間の目安
     }
 
 @app.get("/")
@@ -370,14 +373,11 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             }
         )
 
-# アプリケーション起動時の処理（修正版）
+# アプリケーション起動時の処理（高速起動対応版）
 @app.on_event("startup")
 async def startup_event():
-    """アプリケーション起動時の処理"""
+    """アプリケーション起動時の処理（遅延初期化対応）"""
     logger.info("🚀 Starting RAG API application...")
-    
-    # RAGシステムの初期化
-    await initialize_rag_system()
     
     # LINEボットルーターの追加（修正：prefixを削除）
     try:
@@ -395,6 +395,20 @@ async def startup_event():
         logger.info("✅ Upload router added")
     except Exception as e:
         logger.error(f"❌ Failed to add upload router: {e}")
+    
+    # RAGシステムの初期化を遅延実行（バックグラウンド）
+    asyncio.create_task(delayed_rag_initialization())
+
+async def delayed_rag_initialization():
+    """遅延RAG初期化（ヘルスチェック後に実行）"""
+    try:
+        # 3秒待機してからRAG初期化開始
+        await asyncio.sleep(3)
+        logger.info("🔄 Starting delayed RAG initialization...")
+        await initialize_rag_system()
+        logger.info("🎉 Delayed RAG initialization completed")
+    except Exception as e:
+        logger.error(f"❌ Delayed RAG initialization failed: {e}")
 
 # システム状態エンドポイント
 @app.get("/system-status")
