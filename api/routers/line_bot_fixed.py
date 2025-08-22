@@ -1,4 +1,4 @@
-# api/routers/line_bot_fixed.py - 友達追加挨拶メッセージ対応版（ハルチネーション対策・同期化 + 遅延読み込み + RAG修復版）
+# api/routers/line_bot_fixed.py - LINE Bot webhook ルート修正版
 
 import logging
 import os
@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request, BackgroundTasks
 logger = logging.getLogger(__name__)
 
 # ==============================================================================
-# ハルチネーション対策（同期）: 外部統合が使えればそれを使用し、ダメならローカル実装にフォールバック
+# ハルチネーション対策（同期）
 # ==============================================================================
 try:
     from integration.anti_hallucination_integration import (
@@ -32,41 +32,16 @@ except Exception as _imp_err:
     logger.warning(f"⚠️ External sync anti-hallucination unavailable: {_imp_err}")
 
     class SyncAntiHallucinationIntegration:
-        """同期版のハルチネーション対策統合クラス（イベントループエラー対策）"""
-
         def __init__(self):
-            # 補助金や最新情報など、時事的・可変情報の検出キーワード
             self.subsidy_keywords = [
-                "補助金",
-                "助成金",
-                "支援金",
-                "給付金",
-                "控除",
-                "減税",
-                "ZEH",
-                "省エネ",
-                "断熱",
-                "耐震",
-                "リフォーム",
-                "改修",
-                "住宅ローン",
-                "フラット35",
-                "こどもエコ",
-                "子育て世帯",
-                "若年夫婦",
-                "新婚",
-                "長期優良",
-                "認定住宅",
-                "2024",
-                "2025",
-                "令和6",
-                "令和7",
-                "最新",
-                "現在",
+                "補助金", "助成金", "支援金", "給付金", "控除", "減税",
+                "ZEH", "省エネ", "断熱", "耐震", "リフォーム", "改修",
+                "住宅ローン", "フラット35", "こどもエコ", "子育て世帯",
+                "若年夫婦", "新婚", "長期優良", "認定住宅",
+                "2024", "2025", "令和6", "令和7", "最新", "現在",
             ]
 
         def should_use_anti_hallucination(self, query: str) -> bool:
-            """ハルチネーション対策を使用すべきかの判定"""
             q = query.lower()
             has_subsidy_keyword = any(k in q for k in self.subsidy_keywords)
             needs_current_info = any(k in q for k in ["最新", "現在", "今", "2024", "2025"])
@@ -79,7 +54,6 @@ except Exception as _imp_err:
             user_context: Optional[Dict] = None,
             original_rag_response: Optional[str] = None,
         ) -> Dict[str, Any]:
-            """ハルチネーション対策付きの統合処理（同期版フォールバック）"""
             logger.info(
                 f"🛡️ Sync anti-hallucination (fallback): platform={platform}, query={query[:50]}..."
             )
@@ -90,7 +64,6 @@ except Exception as _imp_err:
                     elif "エラー" in original_rag_response or "申し訳" in original_rag_response:
                         answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
                     else:
-                        # 時事性の注意喚起を付与
                         answer = original_rag_response + "\n\n※最新情報については公式サイトでご確認ください。"
                 else:
                     answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
@@ -129,7 +102,6 @@ except Exception as _imp_err:
                 user_context={"user_id": user_id, "platform": "line"},
                 original_rag_response=original_response,
             )
-        # そのまま返す（RAGのみ）
         return {
             "answer": original_response or "申し訳ございません。お答えできませんでした。",
             "confidence_level": 0.8,
@@ -162,7 +134,6 @@ except ImportError as e:
     logger.error(f"❌ LINE Bot SDK not available: {e}")
     LINE_SDK_AVAILABLE = False
 
-    # ダミー（ローカル/依存欠如時フォールバック）
     class WebhookHandler:
         def __init__(self, *args, **kwargs) -> None: ...
         def add(self, *args, **kwargs):
@@ -171,8 +142,8 @@ except ImportError as e:
             return decorator
         def handle(self, *args, **kwargs) -> None: ...
 
-# ルーター
-router = APIRouter(prefix="/line", tags=["line"])
+# ★★★ 修正箇所：プレフィックスを削除 ★★★
+router = APIRouter(tags=["line"])  # prefix="/line" を削除
 
 # ==============================================================================
 # 認証情報の安全取得＆正規化
@@ -236,7 +207,6 @@ def normalize_line_token_ultimate(token: Any) -> str:
 
     token_str = str(token)
 
-    # 改行・タブの完全除去
     if any(c in token_str for c in ["\r", "\n", "\t"]):
         logger.warning("⚠️ Token contains newline characters - removing")
         token_str = token_str.replace("\r", "").replace("\n", "").replace("\t", "")
@@ -278,9 +248,7 @@ def normalize_line_token_ultimate(token: Any) -> str:
 
     return token_str
 
-# ==============================================================================
 # LINE Bot 初期化
-# ==============================================================================
 LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = get_line_credentials_safe()
 
 line_bot_api = None
@@ -303,7 +271,6 @@ if LINE_SDK_AVAILABLE:
             configuration = Configuration(access_token=normalized_token)
             handler = WebhookHandler(normalized_secret)
 
-            # MessagingApi を一度生成しておく（動作確認）
             with ApiClient(configuration) as api_client:
                 line_bot_api = MessagingApi(api_client)
 
@@ -318,9 +285,7 @@ if LINE_SDK_AVAILABLE:
 else:
     logger.warning("⚠️ LINE Bot SDK not available")
 
-# ==============================================================================
-# 応答テンプレート（改善版）
-# ==============================================================================
+# 応答テンプレート
 GREETING_MESSAGE = """こんにちは！キノエデザインです。
 この度は友だち追加ありがとうございます✨
 
@@ -374,7 +339,7 @@ https://kinoe-design.com
 ・価格・仕様資料
 ・住宅ローンガイド
 
-3営業日以内にお送りいたします！""",
+3営業日以内にお送いいたします！""",
     "展示場来場予約": """📍 展示場来場予約を承ります
 
 以下をメッセージでお送りください：
@@ -424,12 +389,9 @@ https://kinoe-design.com
 ・住宅性能について
 
 営業時間内でしたら迅速にお返事します。
-お気軽にお声かけください！""",
+お気軽にお声かけください！"""
 }
 
-# ==============================================================================
-# 質問別の専用応答テンプレート（新規追加）
-# ==============================================================================
 TOPIC_SPECIFIC_RESPONSES: Dict[str, str] = {
     "坪単価": """坪単価についてご案内いたします。
 
@@ -501,9 +463,6 @@ TOPIC_SPECIFIC_RESPONSES: Dict[str, str] = {
 安心・安全な住まいをお約束いたします。""",
 }
 
-# ==============================================================================
-# 判定・返信ユーティリティ
-# ==============================================================================
 def detect_richmenu_action(message_text: str) -> str:
     """リッチメニューアクションを検出"""
     text_clean = message_text.lower().replace(" ", "").replace("　", "")
@@ -531,7 +490,6 @@ def detect_topic_specific_response(message_text: str) -> Optional[str]:
     """質問の内容から適切な専用応答を検出"""
     text_lower = message_text.lower()
     
-    # キーワードマッチング
     topic_keywords = {
         "坪単価": ["坪単価", "価格", "費用", "いくら", "金額", "コスト"],
         "標準仕様": ["標準仕様", "仕様", "標準", "設備", "基本"],
@@ -546,7 +504,7 @@ def detect_topic_specific_response(message_text: str) -> Optional[str]:
     return None
 
 def send_line_reply_ultimate_safe(reply_token: str, message_text: str) -> bool:
-    """究極に安全なLINE返信送信（同期・毎回Configuration再生成）"""
+    """究極に安全なLINE返信送信"""
     if not line_bot_api:
         logger.error("❌ LINE Bot API not initialized")
         return False
@@ -559,9 +517,6 @@ def send_line_reply_ultimate_safe(reply_token: str, message_text: str) -> bool:
 
         logger.info(
             f"📤 Sending LINE reply: token_len={len(current_token)}, message_len={len(message_text)}"
-        )
-        logger.info(
-            f"🔍 Token debug: type={type(current_token)}, has_newlines={any(c in current_token for c in [chr(13), chr(10)])}"
         )
 
         configuration = Configuration(access_token=current_token)
@@ -581,12 +536,10 @@ def send_line_reply_ultimate_safe(reply_token: str, message_text: str) -> bool:
         logger.error(f"🔍 Error details: {traceback.format_exc()}")
         return False
 
-# ==============================================================================
 # Webhook エンドポイント
-# ==============================================================================
 @router.post("/webhook")
 async def line_webhook_ultimate(request: Request, background_tasks: BackgroundTasks):
-    """究極に安全なLINE Webhook（友達追加対応・同期ハンドラ前提）"""
+    """究極に安全なLINE Webhook"""
     logger.info("🚀 LINE Webhook called (Ultimate Safe Version with Follow Support)")
 
     if not line_bot_api or not handler:
@@ -609,7 +562,6 @@ async def line_webhook_ultimate(request: Request, background_tasks: BackgroundTa
             body_text = body.decode("utf-8")
             logger.info(f"📄 Processing webhook body: {body_text[:200]}...")
 
-            # イベント処理（同期ハンドラ群が処理）
             handler.handle(body_text, signature)
 
             logger.info("✅ Webhook processed successfully")
@@ -622,20 +574,15 @@ async def line_webhook_ultimate(request: Request, background_tasks: BackgroundTa
         logger.error(traceback.format_exc())
         return {"status": "error", "error": str(e), "timestamp": datetime.now().isoformat()}
 
-# ==============================================================================
-# RAG 連携（同期版／遅延読み込み対応／エラーハンドリング強化）
-# ==============================================================================
 def get_app_globals() -> Dict[str, Any]:
     """アプリのグローバル変数を取得（遅延読み込み対応）"""
     try:
         import main
 
-        # 現状の参照を取得
         vectorstore = getattr(main, "vectorstore", None)
         rag_chain_template = getattr(main, "rag_chain_template", None)
         llm_instance = getattr(main, "llm_instance", None)
 
-        # 遅延初期化を実行
         if vectorstore is None and hasattr(main, "ensure_vectorstore_loaded"):
             logger.info("🔄 Triggering lazy vectorstore loading...")
             try:
@@ -666,23 +613,19 @@ def get_app_globals() -> Dict[str, Any]:
         logger.error(f"Failed to get app globals with lazy loading: {e}")
         return {}
 
-
 def process_general_question_sync(message_text: str, user_id: str = "unknown") -> str:
-    """一般的な質問の処理（同期版）- 遅延読み込み対応 + エラーハンドリング強化"""
+    """一般的な質問の処理（同期版）"""
     logger.info(f"🔄 Processing question: '{message_text}' for user: {user_id}")
     
     try:
-        # 1. まず専用応答をチェック
         topic_response = detect_topic_specific_response(message_text)
         if topic_response:
             logger.info(f"✅ Found topic-specific response: {topic_response}")
             return TOPIC_SPECIFIC_RESPONSES[topic_response]
         
-        # 2. RAG システムとの連携（遅延読み込み対応）
         globals_dict = get_app_globals()
         original_response: Optional[str] = None
 
-        # RAGチェーンが利用可能な場合のみ実行
         rag_chain = globals_dict.get("rag_chain_template")
         if rag_chain:
             try:
@@ -698,12 +641,10 @@ def process_general_question_sync(message_text: str, user_id: str = "unknown") -
                     
             except Exception as e:
                 logger.warning(f"⚠️ RAG processing failed, using fallback: {e}")
-                logger.warning(traceback.format_exc())
                 original_response = None
         else:
             logger.info("ℹ️ RAG chain not available, trying LLM directly...")
             
-            # RAGが使えない場合、LLMを直接使用
             llm_instance = globals_dict.get("llm_instance")
             if llm_instance:
                 try:
@@ -721,11 +662,9 @@ def process_general_question_sync(message_text: str, user_id: str = "unknown") -
                     logger.error(f"❌ Direct LLM processing failed: {e}")
                     original_response = None
 
-        # フォールバック応答の準備
         if not original_response or len(original_response.strip()) < 10:
             original_response = generate_smart_fallback_response(message_text)
 
-        # 同期版のハルチネーション対策を適用
         enhanced_result = enhance_line_chat_response_sync(
             query=message_text,
             user_id=user_id,
@@ -750,7 +689,6 @@ def generate_smart_fallback_response(message_text: str) -> str:
     """スマートなフォールバック応答生成"""
     text_lower = message_text.lower()
     
-    # キーワードベースの応答
     if any(keyword in text_lower for keyword in ["坪単価", "価格", "費用", "いくら"]):
         return """坪単価についてお答えいたします。
 
@@ -814,14 +752,12 @@ def generate_smart_fallback_response(message_text: str) -> str:
 
 スタッフ一同、お客様の理想の住まいづくりをお手伝いいたします。"""
 
-# ==============================================================================
-# イベントハンドラ（Follow / Message / Postback）— 同期化済み + エラーハンドリング強化
-# ==============================================================================
+# イベントハンドラ
 if LINE_SDK_AVAILABLE and handler:
 
     @handler.add(FollowEvent)
     def handle_follow_event(event):
-        """友達追加時のハンドラー（挨拶メッセージ送信）"""
+        """友達追加時のハンドラー"""
         start_time = datetime.now()
         try:
             user_id = event.source.user_id
@@ -850,7 +786,7 @@ if LINE_SDK_AVAILABLE and handler:
 
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_text_message_ultimate(event):
-        """究極のメッセージハンドラ（ハルチネーション対策強化版・同期処理・エラーハンドリング完全版）"""
+        """究極のメッセージハンドラ"""
         start_time = datetime.now()
         try:
             user_id = event.source.user_id
@@ -859,7 +795,6 @@ if LINE_SDK_AVAILABLE and handler:
 
             logger.info(f"📱 Message from {user_id}: '{message_text}'")
 
-            # 1. リッチメニューアクション検出
             action = detect_richmenu_action(message_text)
             if action != "unknown":
                 logger.info(f"🎯 Richmenu action detected: {action}")
@@ -868,7 +803,6 @@ if LINE_SDK_AVAILABLE and handler:
                 logger.info("💬 General message processing with enhanced sync anti-hallucination")
                 response_text = process_general_question_sync(message_text, user_id)
 
-            # 2. 回答送信
             success = send_line_reply_ultimate_safe(reply_token, response_text)
             duration = (datetime.now() - start_time).total_seconds()
             
@@ -888,7 +822,7 @@ if LINE_SDK_AVAILABLE and handler:
 
     @handler.add(PostbackEvent)
     def handle_postback_ultimate(event):
-        """究極のPostbackハンドラ（修正版）"""
+        """究極のPostbackハンドラ"""
         try:
             user_id = event.source.user_id
             postback_data = event.postback.data or ""
@@ -909,9 +843,7 @@ if LINE_SDK_AVAILABLE and handler:
         except Exception as e:
             logger.error(f"💥 Postback handler error: {e}")
 
-# ==============================================================================
-# デバッグ系エンドポイント
-# ==============================================================================
+# デバッグエンドポイント
 @router.get("/debug-ultimate")
 def line_debug_ultimate():
     """LINE Bot デバッグ情報（完全版）"""
@@ -926,6 +858,7 @@ def line_debug_ultimate():
         "greeting_message_configured": True,
         "anti_hallucination_enabled": True,
         "topic_specific_responses": len(TOPIC_SPECIFIC_RESPONSES),
+        "webhook_path": "/webhook",  # ★修正後のパス情報を明記
         "credentials_debug": {
             "raw_token_type": type(raw_token).__name__ if raw_token else "None",
             "raw_token_length": len(str(raw_token)) if raw_token else 0,
