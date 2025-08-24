@@ -1,5 +1,6 @@
 # api/routers/line_bot_ultra_fast.py
 # reply失効対策・プラットフォーム分離対応版 ＋ 文章途切れ対策（LINE特化・完全修正版）
+# リッチメニュー専用応答・LLM/OpenAI API使用最小化版
 
 import logging
 import os
@@ -11,6 +12,7 @@ import time
 import hashlib
 from datetime import datetime
 from typing import Dict, Optional, Any, List
+import concurrent.futures
 
 from fastapi import APIRouter, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -41,29 +43,40 @@ except ImportError as e:
 router = APIRouter(tags=["line-ultra-fast"])
 
 # ==============================================================================
-# LINE専用テンプレート応答システム
+# LINE専用超高速応答システム（LLM/OpenAI API最小化版）
 # ==============================================================================
 class LineUltraFastResponder:
     def __init__(self):
         self.line_templates = self._load_line_templates()
         self.greeting_message = self._load_greeting_message()
-        self.performance_stats = {"requests": 0, "template_hits": 0, "greeting_sent": 0, "push_fallbacks": 0}
+        self.ai_consultation_active_users = set()  # AI相談モード中のユーザー
+        self.performance_stats = {
+            "requests": 0, 
+            "template_hits": 0, 
+            "greeting_sent": 0, 
+            "push_fallbacks": 0,
+            "ai_consultation_started": 0,
+            "llm_calls_avoided": 0
+        }
         
     def _load_line_templates(self) -> Dict[str, str]:
-        """LINE専用テンプレート（絵文字・改行最適化）"""
+        """LINE専用テンプレート（完全事前定義・LLM不使用）"""
         return {
-            "AI相談": """🤖 AI住まい相談を開始します！
+            "AI相談": """🤖 AI住まい相談を開始しました！
 
-キノエデザインの住まいAIコンシェルジュです。
 住まいに関するご質問をお気軽にどうぞ！
 
-💡 例えば：
+💡 **よくあるご質問**
 ・坪単価について教えて
 ・標準仕様はどんな感じ？
 ・耐震性能について知りたい
 ・断熱性能はどのくらい？
+・補助金について教えて
+・資料請求したい
+・展示場の見学予約
 
-何でもお聞きください😊""",
+何でもお聞きください😊
+専門スタッフがお答えいたします。""",
 
             "坪単価": """💰 坪単価についてご案内いたします
 
@@ -78,115 +91,191 @@ class LineUltraFastResponder:
 ・標準設備一式
 
 お客様のご要望により変動いたします。
-詳細なお見積りをご希望でしたら、お気軽にお問い合わせください。""",
+詳細なお見積りは無料で承ります！
+
+📞 **お問い合わせ**
+展示場見学または資料請求をご希望でしたら、
+「展示場予約」「資料請求」とメッセージください。""",
 
             "標準仕様": """🏗️ 標準仕様についてご説明いたします
 
-**構造・性能**
+**🏠 構造・性能**
 ・耐震等級3（最高等級）
 ・長期優良住宅認定対応
 ・省エネ等級4以上
 ・高断熱・高気密仕様
 
-**設備仕様**
+**🔧 設備仕様**
 ・システムキッチン
 ・ユニットバス
 ・洗面化粧台
 ・トイレ（温水洗浄便座付）
 
-より詳しい仕様書をご希望の場合は、資料請求または展示場見学をお申し込みください。""",
+**📋 詳細確認方法**
+より詳しい仕様書をご希望の場合：
+「資料請求」→ 詳細仕様書をお送りします
+「展示場予約」→ 実際の住宅をご確認いただけます
+
+どちらをご希望か教えてください😊""",
 
             "断熱性能": """🌡️ 断熱性能についてご案内いたします
 
-**断熱等級**
+**📊 断熱等級**
 ・断熱等級4以上（ZEH基準対応）
 ・UA値：0.6以下（地域区分6）
 ・C値：1.0以下（気密性能）
 
-**使用断熱材**
+**🧱 使用断熱材**
 ・外壁：高性能グラスウール
 ・屋根：吹付断熱材
 ・基礎：押出法ポリスチレンフォーム
 
-**快適性**
+**✨ 快適性のメリット**
 ・夏涼しく、冬暖かい
-・光熱費の削減効果
-・結露抑制
+・光熱費の大幅削減
+・結露の抑制
+・一年中快適な室温
 
-詳しくは展示場でご体感いただけます。""",
+**🏠 体感してみませんか？**
+展示場で実際の断熱性能を体感していただけます。
+「展示場予約」とメッセージください！""",
 
             "耐震性能": """🏗️ 耐震性能についてご案内いたします
 
-**耐震等級**
+**🛡️ 耐震等級**
 ・耐震等級3（最高等級）を標準採用
 ・建築基準法の1.5倍の耐震強度
 ・許容応力度計算による構造計算
 
-**構造材**
+**🔩 構造材の特徴**
 ・構造用集成材使用
 ・金物工法による強固な接合
 ・ベタ基礎による堅固な基礎
 
-**保証**
+**📝 充実の保証**
 ・構造躯体20年保証
 ・地盤保証20年
 ・瑕疵担保責任保険対応
 
-安心・安全な住まいをお約束いたします。""",
+**🏆 安心のポイント**
+大地震にも耐えうる最高水準の耐震性能で、
+ご家族の安全を守ります。
 
-            "補助金": """💰 住宅購入時の補助金制度についてご案内します
+構造の詳細は展示場でご確認いただけます。
+「展示場予約」でご見学ください！""",
 
-**主な補助金制度**
-🏠 ZEH補助金：高性能住宅への補助
-🌱 こどもエコすまい支援事業：子育て世帯への支援
-🏦 住宅ローン減税：所得税の控除制度
-📋 地域独自の補助金：自治体による支援
+            "補助金": """💰 住宅補助金制度についてご案内します
 
-※制度は年度ごとに変更される可能性があります。最新情報については公式サイトでご確認いただくか、スタッフまでお問い合わせください。""",
+**🏠 主な補助金制度**
+
+**🌱 ZEH補助金**
+・高性能住宅への補助
+・定額55万円～（条件により異なる）
+
+**👶 こどもエコすまい支援事業**  
+・子育て世帯・若年夫婦世帯対象
+・最大100万円の補助
+
+**🏦 住宅ローン減税**
+・所得税の控除制度
+・13年間の減税メリット
+・年間最大35万円の控除
+
+**🏘️ 地域独自の補助金**
+・自治体による支援制度
+・地域により内容が異なります
+
+**⚠️ 重要なお知らせ**
+制度は年度ごとに変更される可能性があります。
+
+**📞 最新情報の確認**
+詳しい補助金情報は専門スタッフがご案内します。
+「資料請求」で最新の補助金ガイドをお送りします！""",
 
             "資料請求": """📋 資料請求を承ります
 
-**必要情報をお送りください**
+**📝 必要情報をお送りください**
+以下の情報をメッセージでお送りください：
+
 1️⃣ お名前（フルネーム）
 2️⃣ ご住所（〒郵便番号から）
 3️⃣ お電話番号
 4️⃣ ご希望資料の種類
 
-**お送りする資料**
+**📮 お送りする資料**
 ・会社案内・施工事例集
 ・間取りプラン集
 ・価格・仕様資料
 ・住宅ローンガイド
+・最新補助金情報
 
-3営業日以内にお送りいたします！""",
+**⏰ お届け予定**
+3営業日以内にお送りいたします！
+
+**例）送信内容**
+田中太郎
+〒123-4567 東京都○○区△△1-2-3
+090-1234-5678
+すべての資料希望
+
+このような形でお送りください😊""",
 
             "展示場予約": """📍 展示場見学を承ります
 
-**予約情報をお送りください**
+**📅 予約情報をお送りください**
+以下をメッセージでお送りください：
+
 ・ご希望日時（第1・第2希望）
 ・お名前・お電話番号
 ・参加人数（大人・お子様）
 ・ご質問・ご要望
 
-🕒 見学時間：約90分
-🏠 展示場：最新の住宅仕様をご確認
+**🕒 見学について**
+・見学時間：約90分
+・完全予約制
+・専門スタッフがご案内
+・お子様連れ大歓迎
+
+**🏠 展示場の特徴**
+・最新の住宅仕様をご確認
+・実際の住み心地を体感
+・間取りプランのご相談
+・資金計画のご相談
+
+**例）送信内容**
+1月15日 10:00～ / 1月16日 14:00～
+田中太郎 090-1234-5678
+大人2名、子供1名
+キッチンを詳しく見たい
 
 スタッフ一同、心よりお待ちしております！""",
 
             "資金計画": """💰 資金計画についてサポートします
 
-**ご相談内容**
+**📊 ご相談内容**
 ・住宅ローンの種類・金利比較
 ・月々の返済計画
 ・頭金・諸費用の計算
 ・住宅ローン控除について
+・最新の金利情報
 
-**お聞かせください**
+**💡 お聞かせください**
 ・ご年収・自己資金
 ・ご希望借入額・返済期間
 ・家族構成・将来計画
+・現在の家賃
 
-最適なプランをご提案いたします！""",
+**🎯 専門サポート**
+・住宅ローンアドバイザーが対応
+・複数の金融機関と提携
+・最適なローン商品をご提案
+・事前審査のサポート
+
+**📞 個別相談のご案内**
+詳しい資金計画は個別相談で承ります。
+「展示場予約」で専門スタッフがお答えします。
+
+または「資料請求」で住宅ローンガイドをお送りします！""",
 
             "AI住まいサイト": """🌐 AI住まいサイトのご案内
 
@@ -194,50 +283,118 @@ class LineUltraFastResponder:
 
 🏠 **サイト内容**
 ・施工事例・間取りプラン
-・住宅性能・標準仕様
+・住宅性能・標準仕様  
 ・価格・坪単価情報
-・お客様の声
+・お客様の声・実例
+・最新のイベント情報
 
-📱 **サイトURL**
+**📱 サイトURL**
 https://kinoe-design.com
 
-詳しい住まい情報をご確認いただけます！""",
+**🔍 おすすめコンテンツ**
+・施工事例ギャラリー
+・間取りシミュレーション
+・住宅性能について
+・資金計画シミュレーション
+
+サイトでより詳しい情報をご確認いただけます！
+
+**📞 サイトで気になることがあれば**
+こちらのLINEでお気軽にご質問ください😊""",
 
             "チャット相談": """💬 スタッフとのご相談
 
-**対応時間**
+**⏰ 対応時間**
 平日・土日：9:00-18:00
 定休日：水曜日
 
-**ご相談方法**
-・このLINEでの直接相談
+**📱 ご相談方法**
+・このLINEでの直接相談 ← 今ここ！
 ・お電話での相談
 ・展示場での対面相談
 
-**ご相談内容**
+**🏠 ご相談内容例**
 ・住まいづくり全般
-・土地探し・資金計画
+・土地探し・資金計画  
 ・間取り・デザイン
 ・住宅性能について
+・契約・手続きについて
 
-営業時間内でしたら迅速にお返事します。
-お気軽にお声かけください！"""
+**⚡ 返信について**
+・営業時間内：迅速にお返事
+・営業時間外：翌営業日にご返信
+・緊急時：お電話でお問い合わせください
+
+**🎯 専門スタッフ対応**
+住まいづくりの専門知識を持ったスタッフが
+親身になってお答えします。
+
+何でもお気軽にお声かけください！😊""",
+
+            # 追加の応答テンプレート
+            "土地探し": """🏗️ 土地探しについてご案内します
+
+**🔍 土地選びのポイント**
+・立地条件（交通・生活利便性）
+・土地の形状・面積
+・建築制限・用途地域
+・地盤の状況
+・予算バランス
+
+**🏠 当社のサポート**
+・土地探しから建築まで一貫対応
+・建築会社の視点での土地評価
+・資金計画込みでのご提案
+・地盤調査・改良工事対応
+
+**📞 土地探しご相談**
+「展示場予約」で専門スタッフがご相談を承ります。
+ご希望エリアや条件をお聞かせください！""",
+
+            "間取り": """🏠 間取りについてご案内します
+
+**📐 間取りプランニング**
+・ライフスタイルに合わせた設計
+・家族構成を考慮した間取り
+・将来の変化に対応した可変性
+・収納計画・家事動線の最適化
+
+**🎨 設計の特徴**
+・自然光を活かした明るい空間
+・風通しの良い快適な環境
+・プライバシーに配慮した配置
+・バリアフリー対応
+
+**📋 間取り相談の流れ**
+1️⃣ ご家族構成・ライフスタイルヒアリング
+2️⃣ 土地条件の確認
+3️⃣ 間取りプラン作成
+4️⃣ プレゼンテーション・修正
+
+**🏠 実際の間取りをご覧ください**
+「展示場予約」で実際の間取りをご確認いただけます！""",
         }
-    
+        
     def _load_greeting_message(self) -> str:
         """友だち追加時の挨拶メッセージ"""
         return """こんにちは！キノエデザインです。
 この度は友だち追加ありがとうございます✨
 
-目的のボタンをタップ👇
+**🎯 目的のボタンをタップ👇**
 🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画 / 🌐サイト / 💬チャット
 
-AIは24時間、担当者は当日〜翌営業日に返信します。
+**⚡ 応答について**
+・AIは24時間対応
+・スタッフは営業日に対応
+・営業時間：9:00-18:00（水曜定休）
 
-取扱い(プライバシーポリシー)：〔https://preview.studio.site/live/EjOQljz1WJ/privacy-policy〕"""
+**🔒 プライバシー**
+取扱い：〔https://preview.studio.site/live/EjOQljz1WJ/privacy-policy〕
+
+住まいのことなら何でもお気軽にご相談ください😊"""
 
     # ---------------------------
-    # 文章完全性の確保（★新規・LINE特化）
+    # 文章完全性の確保（★強化版）
     # ---------------------------
     def ensure_line_response_complete(self, text: str, query: str = "") -> str:
         """LINE用文章完全性確保（強化版）"""
@@ -248,6 +405,8 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
         
         # 文末チェックと補完（LINE特化）
         if not text.endswith(('。', '！', '？', '.', '!', '?')):
+            logger.info(f"🔧 Fixing LINE response: '{text[-30:]}'")
+            
             # 特定の途切れパターンの補完（LINE用）
             if text.endswith('や'):  # 「土地探しや」のケース
                 text += "建築準備を進めることが大切です✨"
@@ -279,142 +438,333 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
                     text += '。詳しくはお問い合わせください😊'
                 else:
                     text = self._emergency_response()
+            
+            logger.info(f"✅ Fixed LINE response: '{text[-30:]}'")
         
         return text
-    
+
     def process_ultra_fast(self, message_text: str, user_id: str = "unknown") -> str:
-        """超高速処理（文章完全性強化版）"""
+        """超高速処理（文章完全性強化版・LLM回避優先）"""
         start_time = time.time()
         self.performance_stats["requests"] += 1
         
         try:
-            # リッチメニューアクション検出
+            # 1. リッチメニューアクション検出（最優先・LLM不使用）
             action = self._detect_richmenu_action(message_text)
             if action != "unknown":
                 self.performance_stats["template_hits"] += 1
+                self.performance_stats["llm_calls_avoided"] += 1
+                
+                # AI相談の場合は専用処理
+                if action == "AI相談":
+                    self.ai_consultation_active_users.add(user_id)
+                    self.performance_stats["ai_consultation_started"] += 1
+                    logger.info(f"🤖 AI consultation activated for user: {user_id}")
+                
                 response = self.line_templates.get(action, "ご利用ありがとうございます。")
                 
                 # 🔧 リッチメニュー応答も完全性チェック
                 complete_response = self.ensure_line_response_complete(response, message_text)
                 
-                logger.info(f"🎯 LINE Template match: {action} in {(time.time() - start_time)*1000:.1f}ms")
-                logger.info(f"✅ Template complete: {complete_response.endswith(('。', '！', '？', '.', '!', '?'))}")
+                processing_time = (time.time() - start_time) * 1000
+                logger.info(f"🎯 LINE Richmenu response: {action} in {processing_time:.1f}ms")
                 return complete_response
-            
-            # 一般質問の高速処理
+
+            # 2. AI相談モード中のユーザーの質問処理
+            if user_id in self.ai_consultation_active_users:
+                logger.info(f"🤖 Processing AI consultation for user: {user_id}")
+                return self._process_ai_consultation_question(message_text, user_id)
+
+            # 3. 一般質問の高速テンプレート処理（LLM回避）
             template_response = self._match_question_template(message_text)
             if template_response:
                 self.performance_stats["template_hits"] += 1
+                self.performance_stats["llm_calls_avoided"] += 1
                 
                 # 🔧 質問テンプレート応答も完全性チェック
                 complete_template = self.ensure_line_response_complete(template_response, message_text)
                 
-                logger.info(f"🎯 LINE Question match in {(time.time() - start_time)*1000:.1f}ms")
-                logger.info(f"✅ Question template complete: {complete_template.endswith(('。', '！', '？', '.', '!', '?'))}")
+                processing_time = (time.time() - start_time) * 1000
+                logger.info(f"🎯 LINE Question template in {processing_time:.1f}ms")
                 return complete_template
             
-            # インテリジェントフォールバック
+            # 4. インテリジェントフォールバック（LLM回避）
             fallback_response = self._generate_line_fallback(message_text)
+            self.performance_stats["llm_calls_avoided"] += 1
             
             # 🔧 フォールバック応答も完全性チェック
             complete_fallback = self.ensure_line_response_complete(fallback_response, message_text)
             
-            logger.info(f"🔄 LINE Fallback in {(time.time() - start_time)*1000:.1f}ms")
-            logger.info(f"✅ Fallback complete: {complete_fallback.endswith(('。', '！', '？', '.', '!', '?'))}")
+            processing_time = (time.time() - start_time) * 1000
+            logger.info(f"🔄 LINE Fallback in {processing_time:.1f}ms")
             return complete_fallback
             
         except Exception as e:
             logger.error(f"❌ LINE processing error: {e}")
             emergency = self._emergency_response()
             return self.ensure_line_response_complete(emergency, message_text)
+
+    def _process_ai_consultation_question(self, message_text: str, user_id: str) -> str:
+        """AI相談モード中の質問処理（LLM最小使用版）"""
+        # まずテンプレートで回答できるか確認
+        template_response = self._match_question_template(message_text)
+        if template_response:
+            self.performance_stats["llm_calls_avoided"] += 1
+            return self.ensure_line_response_complete(template_response + "\n\n他にもご質問がございましたらお気軽にどうぞ😊", message_text)
+        
+        # 特定キーワードによる事前定義回答
+        predefined_response = self._get_predefined_ai_response(message_text)
+        if predefined_response:
+            self.performance_stats["llm_calls_avoided"] += 1
+            return self.ensure_line_response_complete(predefined_response, message_text)
+        
+        # 最終手段：スタッフへの誘導（LLM使用回避）
+        self.performance_stats["llm_calls_avoided"] += 1
+        return """ご質問ありがとうございます😊
+
+より詳しい情報をお答えするため、専門スタッフがご対応いたします。
+
+**📞 すぐに相談したい場合**
+「展示場予約」で直接ご相談いただけます
+
+**📄 詳しい資料が欲しい場合**
+「資料請求」で専門資料をお送りします
+
+**💬 このLINEで相談継続**
+営業時間内（9:00-18:00）でしたらスタッフが直接お答えします
+
+どちらがよろしいでしょうか？"""
+
+    def _get_predefined_ai_response(self, message_text: str) -> Optional[str]:
+        """事前定義AI応答の取得"""
+        text_lower = message_text.lower()
+        
+        predefined_responses = {
+            "挨拶": {
+                "keywords": ["こんにちは", "こんばんは", "おはよう", "はじめまして"],
+                "response": """こんにちは😊
+AI住まい相談をご利用いただきありがとうございます！
+
+住まいに関することでしたら何でもお気軽にご質問ください。
+
+💡 **人気の質問**
+・坪単価について
+・住宅の性能について
+・資料請求・展示場見学
+・補助金制度について
+
+どのようなことを知りたいですか？"""
+            },
+            
+            "お礼": {
+                "keywords": ["ありがとう", "感謝", "助かり"],
+                "response": """どういたしまして😊
+
+他にもご質問がございましたら、お気軽にお聞かせください。
+
+**📞 より詳しい相談をご希望の場合**
+・「展示場予約」→専門スタッフが直接対応
+・「資料請求」→詳細資料をお送りします
+
+住まいづくりを全力でサポートいたします✨"""
+            },
+            
+            "家づくり開始": {
+                "keywords": ["家を建てたい", "マイホーム", "新築したい", "住宅建築"],
+                "response": """🏠 家づくりを始められるのですね！
+
+**✨ 家づくりのステップ**
+1️⃣ 資金計画・予算確認
+2️⃣ 土地探し
+3️⃣ 住宅会社選び
+4️⃣ 間取り・仕様打合せ
+5️⃣ 契約・着工
+
+**🎯 まずはこちらから**
+・「資金計画」→ 予算の相談
+・「展示場予約」→ 実際の住宅を見学
+・「資料請求」→ 基本情報の収集
+
+どこから始めますか？😊"""
+            },
+            
+            "比較検討": {
+                "keywords": ["他社比較", "検討中", "迷って", "決められない"],
+                "response": """🤔 検討段階ですね！
+
+**🔍 比較のポイント**
+・住宅性能（耐震・断熱など）
+・アフターサービス・保証
+・価格・コストパフォーマンス
+・施工実績・信頼性
+・スタッフの対応
+
+**💡 当社の特徴を知りたい場合**
+「展示場予約」で実際に体感してください！
+
+他社との違いを分かりやすくご説明します😊
+比較検討のポイントもお教えします！"""
+            }
+        }
+        
+        for category, data in predefined_responses.items():
+            if any(keyword in text_lower for keyword in data["keywords"]):
+                return data["response"]
+        
+        return None
     
     def _detect_richmenu_action(self, message: str) -> str:
         """リッチメニューアクション検出（拡張版）"""
         text_clean = message.lower().replace(" ", "").replace("　", "")
         
-        richmenu_actions = {
-            "AI相談": ["ai相談", "ai住まい相談", "相談開始"],
-            "坪単価": ["坪単価", "価格", "費用", "いくら", "金額"],
-            "標準仕様": ["標準仕様", "仕様", "設備", "標準"],
-            "断熱性能": ["断熱", "断熱性能", "省エネ", "温度"],
-            "耐震性能": ["耐震", "地震", "安全", "強度"],
-            "補助金": ["補助金", "助成金", "支援金", "補助制度"],
-            "資料請求": ["資料請求", "資料", "パンフレット", "カタログ"],
-            "展示場予約": ["展示場予約", "展示場", "見学", "予約"],
-            "資金計画": ["資金計画", "ローン", "住宅ローン", "お金"],
-            "AI住まいサイト": ["ai住まいサイト", "サイト", "ホームページ"],
-            "チャット相談": ["チャット相談", "チャット", "スタッフ", "担当者"]
+        # より正確なマッチングパターン
+        richmenu_patterns = {
+            "AI相談": ["ai相談", "ai住まい相談", "相談開始", "aiチャット"],
+            "坪単価": ["坪単価", "価格", "費用", "いくら", "金額", "値段", "コスト"],
+            "標準仕様": ["標準仕様", "仕様", "設備", "標準", "基本仕様"],
+            "断熱性能": ["断熱", "断熱性能", "省エネ", "温度", "暖房", "冷房"],
+            "耐震性能": ["耐震", "地震", "安全", "強度", "耐震性"],
+            "補助金": ["補助金", "助成金", "支援金", "補助制度", "支援制度"],
+            "資料請求": ["資料請求", "資料", "パンフレット", "カタログ", "送って"],
+            "展示場予約": ["展示場予約", "展示場", "見学", "予約", "来場"],
+            "資金計画": ["資金計画", "ローン", "住宅ローン", "お金", "返済"],
+            "AI住まいサイト": ["ai住まいサイト", "サイト", "ホームページ", "ウェブ"],
+            "チャット相談": ["チャット相談", "チャット", "スタッフ", "担当者"],
+            "土地探し": ["土地探し", "土地", "敷地", "分譲地"],
+            "間取り": ["間取り", "プラン", "設計", "レイアウト"]
         }
         
-        for action, keywords in richmenu_actions.items():
-            if any(keyword in text_clean for keyword in keywords):
-                return action
+        for action, patterns in richmenu_patterns.items():
+            # 完全一致または部分一致
+            if any(pattern in text_clean for pattern in patterns):
+                # より正確な判定のため、文脈も考慮
+                if len(message.strip()) <= 10 and any(pattern == text_clean for pattern in patterns):
+                    # 短いメッセージで完全一致の場合
+                    return action
+                elif any(pattern in text_clean for pattern in patterns):
+                    # 部分一致の場合
+                    return action
         
         return "unknown"
     
     def _match_question_template(self, query: str) -> Optional[str]:
-        """一般質問のテンプレートマッチング"""
+        """一般質問のテンプレートマッチング（拡張版）"""
         query_lower = query.lower()
         
-        # より詳細なマッチング
-        if any(word in query_lower for word in ["坪単価", "価格", "費用", "コスト", "いくら"]):
-            return self.line_templates["坪単価"]
-        elif any(word in query_lower for word in ["仕様", "設備", "標準", "基本"]):
-            return self.line_templates["標準仕様"]
-        elif any(word in query_lower for word in ["断熱", "省エネ", "温度", "光熱費"]):
-            return self.line_templates["断熱性能"]
-        elif any(word in query_lower for word in ["耐震", "地震", "安全", "強度"]):
-            return self.line_templates["耐震性能"]
-        elif any(word in query_lower for word in ["補助金", "助成金", "支援金"]):
-            return self.line_templates["補助金"]
-        elif any(word in query_lower for word in ["資料", "パンフレット", "カタログ"]):
-            return self.line_templates["資料請求"]
-        elif any(word in query_lower for word in ["見学", "展示場", "予約"]):
-            return self.line_templates["展示場予約"]
+        # より詳細なマッチング辞書
+        question_templates = {
+            "坪単価": {
+                "keywords": ["坪単価", "価格", "費用", "コスト", "いくら", "値段", "金額", "料金"],
+                "template": "坪単価"
+            },
+            "標準仕様": {
+                "keywords": ["仕様", "設備", "標準", "基本", "何が", "ついて", "含ま"],
+                "template": "標準仕様"
+            },
+            "断熱性能": {
+                "keywords": ["断熱", "省エネ", "温度", "光熱費", "暖房", "冷房", "快適"],
+                "template": "断熱性能"
+            },
+            "耐震性能": {
+                "keywords": ["耐震", "地震", "安全", "強度", "構造", "震災"],
+                "template": "耐震性能"
+            },
+            "補助金": {
+                "keywords": ["補助金", "助成金", "支援金", "補助", "支援", "制度"],
+                "template": "補助金"
+            },
+            "資料請求": {
+                "keywords": ["資料", "パンフレット", "カタログ", "送って", "郵送"],
+                "template": "資料請求"
+            },
+            "展示場予約": {
+                "keywords": ["見学", "展示場", "予約", "来場", "訪問"],
+                "template": "展示場予約"
+            },
+            "資金計画": {
+                "keywords": ["ローン", "資金", "借入", "返済", "金利", "融資"],
+                "template": "資金計画"
+            },
+            "土地探し": {
+                "keywords": ["土地", "敷地", "分譲", "宅地", "建築地"],
+                "template": "土地探し"
+            },
+            "間取り": {
+                "keywords": ["間取り", "プラン", "設計", "レイアウト", "配置"],
+                "template": "間取り"
+            }
+        }
+        
+        for template_name, data in question_templates.items():
+            if any(keyword in query_lower for keyword in data["keywords"]):
+                return self.line_templates.get(data["template"])
         
         return None
     
     def _generate_line_fallback(self, query: str) -> str:
-        """LINE専用フォールバック（完全性強化版）"""
+        """LINE専用フォールバック（完全性強化版・LLM不使用）"""
         q_lower = query.lower()
         
-        if any(word in q_lower for word in ["家を建てる", "マイホーム", "新築"]):
+        # より具体的なフォールバック応答
+        if any(word in q_lower for word in ["家を建てる", "マイホーム", "新築", "建築"]):
             return """🏗️ 家づくりについてお答えいたします
 
 家づくりは人生で最も大きな買い物の一つです✨
 
-**まずはこちらから始めませんか？**
-1️⃣ 資料請求で情報収集
-2️⃣ 展示場見学で実際の住まいを体感
-3️⃣ 資金計画で予算を明確化
+**📋 家づくりの流れ**
+1️⃣ 資金計画・予算確認
+2️⃣ 土地探し・土地選定
+3️⃣ 住宅会社選び
+4️⃣ 間取り・仕様決定
+5️⃣ 契約・着工・完成
 
-お客様のご希望をお聞かせいただければ、最適なプランをご提案いたします。何からお聞きになりたいでしょうか。"""
+**🎯 まずはここから始めませんか？**
+・「資料請求」→ 基本情報の収集
+・「展示場予約」→ 実際の住まいを体感
+・「資金計画」→ 予算の明確化
+
+お客様のご希望をお聞かせください😊"""
         
-        elif any(word in q_lower for word in ["補助金", "助成金", "支援"]):
-            return self.line_templates["補助金"]  # 既に完全な文章
+        elif any(word in q_lower for word in ["補助金", "助成", "支援"]):
+            return self.line_templates["補助金"]
         
         elif any(word in q_lower for word in ["こんにちは", "はじめまして", "よろしく"]):
             return """こんにちは！キノエデザインです✨
 
 住まいづくりのことでしたら何でもお気軽にご相談ください😊
 
-下記メニューからお選びいただけます👇
-🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画
+**🎯 人気のご相談内容**
+💰 坪単価・価格について
+🏠 住宅性能・仕様について  
+📋 資料請求・展示場見学
+💴 資金計画・住宅ローン
 
-お気軽にお声かけください。"""
+**📞 お問い合わせ方法**
+下記メニューからお選びいただくか、
+直接ご質問をメッセージください！
+
+どのようなことを知りたいですか？"""
         
         else:
             return """ご質問ありがとうございます✨
 
 住まいづくりについて、どのようなことをお知りになりたいでしょうか？
 
-**よくあるご質問**
+**🎯 よくあるご質問**
 💰 坪単価や費用について
 🏠 住宅性能や仕様について
-📋 資料請求・展示場見学
-💴 資金計画・住宅ローン
+📋 資料請求・展示場見学について
+💴 資金計画・住宅ローンについて
+🌐 補助金制度について
 
-具体的にお聞かせいただければ、詳しくご案内いたします。お気軽にお問い合わせください😊"""
+**📱 お答え方法**
+具体的にお聞かせいただければ、
+詳しくご案内いたします。
+
+または下記メニューをご利用ください：
+🤖AI相談 / 📍展示場予約 / 📄資料請求
+
+お気軽にお問い合わせください😊"""
     
     def _emergency_response(self) -> str:
         """緊急時応答（完全性保証版）"""
@@ -425,23 +775,29 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
 📞 **お電話でのお問い合わせ**
 営業時間：9:00-18:00（水曜定休）
 
-ご不便をおかけして申し訳ございません。"""
+ご不便をおかけして申し訳ございません。
+復旧次第、正常にご利用いただけます。"""
     
     def get_performance_stats(self) -> Dict:
-        """パフォーマンス統計"""
+        """パフォーマンス統計（LLM回避重視）"""
         total = self.performance_stats["requests"]
         template_rate = (self.performance_stats["template_hits"] / total * 100) if total > 0 else 0
+        llm_avoidance_rate = (self.performance_stats["llm_calls_avoided"] / total * 100) if total > 0 else 0
         
         return {
             "total_requests": total,
             "template_hit_rate": template_rate,
+            "llm_calls_avoided": self.performance_stats["llm_calls_avoided"],
+            "llm_avoidance_rate": llm_avoidance_rate,
+            "ai_consultation_started": self.performance_stats["ai_consultation_started"],
             "greeting_sent": self.performance_stats["greeting_sent"],
             "push_fallbacks_used": self.performance_stats["push_fallbacks"],
-            "available_templates": len(self.line_templates)
+            "available_templates": len(self.line_templates),
+            "active_ai_consultations": len(self.ai_consultation_active_users)
         }
 
 # ==============================================================================
-# LINE Bot設定と初期化（reply失効対策付き・修正版）
+# LINE Bot設定と初期化（修正版）
 # ==============================================================================
 def get_line_credentials_safe():
     """LINE認証情報を安全に取得"""
@@ -564,7 +920,7 @@ def send_line_message_safe(reply_token: str, user_id: str, message: str) -> bool
                 else:
                     logger.error(f"❌ Reply API error (not token expiry): {reply_error}")
                     return False
-            except Exception as general_error:  # 追加: 一般的なエラーのキャッチ
+            except Exception as general_error:
                 logger.error(f"❌ Reply API general error: {general_error}")
                 # 一般エラーでもPush APIフォールバックを試行
                 try:
@@ -622,7 +978,7 @@ async def ultra_fast_webhook(request: Request, background_tasks: BackgroundTasks
         return {"status": "error", "error": str(e)}
 
 # ==============================================================================
-# イベントハンドラ（reply失効対策・AI相談対応＋文章完全性チェック付き）
+# イベントハンドラ（修正版・LLM最小化）
 # ==============================================================================
 if LINE_SDK_AVAILABLE and handler:
     
@@ -649,7 +1005,7 @@ if LINE_SDK_AVAILABLE and handler:
     
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_message_ultra_fast(event):
-        """超高速メッセージハンドラ（文章完全性強化版・reply失効対策付き）"""
+        """超高速メッセージハンドラ（LLM最小化版）"""
         start_time = time.time()
         
         try:
@@ -659,26 +1015,16 @@ if LINE_SDK_AVAILABLE and handler:
             
             logger.info(f"📱 LINE Ultra fast processing: '{message_text[:30]}...' from user: {user_id}")
             
-            # 特別処理：AI相談ボタン押下の場合
-            if "AI相談" in message_text or "ai相談" in message_text.lower():
-                logger.info("🤖 AI相談 button detected - sending greeting")
-                ai_greeting = ultra_responder.line_templates["AI相談"]
-                # 🔧 AI相談応答も完全性チェック
-                complete_ai_greeting = ultra_responder.ensure_line_response_complete(ai_greeting, message_text)
-                success = send_line_message_safe(reply_token, user_id, complete_ai_greeting)
-            else:
-                # 通常の超高速応答生成（完全性チェック込み）
-                response_text = ultra_responder.process_ultra_fast(message_text, user_id)
-                success = send_line_message_safe(reply_token, user_id, response_text)
+            # 超高速応答生成（LLM回避優先）
+            response_text = ultra_responder.process_ultra_fast(message_text, user_id)
+            success = send_line_message_safe(reply_token, user_id, response_text)
             
             duration = (time.time() - start_time) * 1000
             if success:
-                logger.info(f"✅ LINE Ultra fast complete response: {duration:.1f}ms")
+                logger.info(f"✅ LINE Ultra fast complete response: {duration:.1f}ms (LLM avoided)")
                 # 応答の完全性をログ出力
-                if 'response_text' in locals():
-                    logger.info(f"🔚 Response completeness: {response_text.endswith(('。', '！', '？', '.', '!', '?'))}")
-                elif 'complete_ai_greeting' in locals():
-                    logger.info(f"🔚 AI greeting completeness: {complete_ai_greeting.endswith(('。', '！', '？', '.', '!', '?'))}")
+                is_complete = response_text.endswith(('。', '！', '？', '.', '!', '?'))
+                logger.info(f"🔚 Response completeness: {is_complete}")
             else:
                 logger.error(f"❌ LINE response failed after {duration:.1f}ms")
             
@@ -714,7 +1060,7 @@ if LINE_SDK_AVAILABLE and handler:
             else:
                 response_text = "メニューからお選びください。"
             
-            # Postbackはテンプレ直返しでも念のため完全性チェック
+            # Postbackも完全性チェック
             response_text = ultra_responder.ensure_line_response_complete(response_text, postback_data)
             success = send_line_message_safe(reply_token, user_id, response_text)
             logger.info(f"✅ Postback processed successfully: success={success}")
@@ -724,46 +1070,52 @@ if LINE_SDK_AVAILABLE and handler:
             logger.error(traceback.format_exc())
 
 # ==============================================================================
-# 監視・デバッグエンドポイント
+# 監視・デバッグエンドポイント（拡張版）
 # ==============================================================================
 @router.get("/performance")
 def get_line_performance():
-    """LINE専用パフォーマンス統計"""
+    """LINE専用パフォーマンス統計（LLM回避重視）"""
     stats = ultra_responder.get_performance_stats()
     
     return {
         "line_ultra_fast_stats": stats,
+        "llm_optimization": {
+            "llm_calls_avoided": stats["llm_calls_avoided"],
+            "llm_avoidance_rate": f"{stats['llm_avoidance_rate']:.1f}%",
+            "target_avoidance_rate": "> 90%",
+            "achieved": stats["llm_avoidance_rate"] > 90
+        },
         "system_info": {
             "line_sdk_available": LINE_SDK_AVAILABLE,
             "line_bot_configured": line_bot_api is not None,
             "reply_fallback_enabled": True,
             "push_api_enabled": True,
             "ai_consultation_optimized": True,
-            "api_exception_fixed": True,  # 追加
-            "import_error_fixed": True,  # 追加
+            "api_exception_fixed": True,
+            "import_error_fixed": True,
         },
         "performance_targets": {
             "response_time": "< 200ms",
             "template_hit_rate": "> 80%",
+            "llm_avoidance_rate": "> 90%",
             "reply_success_rate": "> 95%"
         },
         "features": [
             "Reply Token Expiry Protection",
             "Push API Automatic Fallback", 
-            "AI相談 Button Optimized",
+            "AI相談 Specialized Mode",
             "LINE-Specific Template Responses",
             "Ultra Fast Processing",
-            "補助金テンプレート追加",  # 追加
-            "ApiException Error Handling",  # 追加
-            "Sentence Completeness Guard (LINE)",  # 追加
+            "LLM/OpenAI API Minimization",
+            "Predefined Response Priority",
+            "Sentence Completeness Guard (LINE)",
         ],
-        "fixes_applied": [  # 追加
-            "LineBotApiError → ApiException 修正",
-            "インポートエラー解決",
-            "送信エラー処理改善",
-            "補助金テンプレート追加",
-            "文章途切れ自動補完の追加（LINE特化）"
-        ],
+        "ai_consultation": {
+            "active_users": len(ultra_responder.ai_consultation_active_users),
+            "total_started": stats["ai_consultation_started"],
+            "predefined_responses": True,
+            "llm_bypass_enabled": True
+        },
         "timestamp": datetime.now().isoformat()
     }
 
@@ -781,12 +1133,20 @@ def line_debug_info():
         "normalized_token_length": len(normalize_line_token(LINE_CHANNEL_ACCESS_TOKEN)) if LINE_CHANNEL_ACCESS_TOKEN else 0,
         "api_exception_handling": "Fixed - using ApiException instead of LineBotApiError",
         "import_status": "✅ All imports successful" if LINE_SDK_AVAILABLE else "❌ SDK import failed",
+        "llm_optimization": {
+            "enabled": True,
+            "predefined_responses": len(ultra_responder.line_templates),
+            "ai_consultation_mode": True,
+            "active_ai_users": len(ultra_responder.ai_consultation_active_users)
+        },
         "fixes_applied": [
             "ApiException import fixed",
             "LineBotApiError references removed", 
             "Error handling improved",
             "Push API fallback enhanced",
-            "Sentence completeness guard (LINE) enabled"
+            "Sentence completeness guard (LINE) enabled",
+            "LLM calls minimization implemented",
+            "AI consultation specialized mode added"
         ],
         "timestamp": datetime.now().isoformat()
     }
@@ -794,16 +1154,25 @@ def line_debug_info():
 @router.post("/clear-cache")
 def clear_line_cache():
     """LINEキャッシュクリア"""
-    ultra_responder.performance_stats = {"requests": 0, "template_hits": 0, "greeting_sent": 0, "push_fallbacks": 0}
+    ultra_responder.performance_stats = {
+        "requests": 0, 
+        "template_hits": 0, 
+        "greeting_sent": 0, 
+        "push_fallbacks": 0,
+        "ai_consultation_started": 0,
+        "llm_calls_avoided": 0
+    }
+    ultra_responder.ai_consultation_active_users.clear()
     
     return {
         "status": "line_cache_cleared",
-        "features_reset": ["performance_stats"],
+        "features_reset": ["performance_stats", "ai_consultation_users"],
         "fixes_confirmed": [
             "ApiException handling active",
             "Import errors resolved",
             "Template responses updated",
-            "Sentence completeness guard reset"
+            "Sentence completeness guard reset",
+            "LLM avoidance system reset"
         ],
         "timestamp": datetime.now().isoformat()
     }
@@ -818,10 +1187,54 @@ def get_line_templates():
         "subsidy_template_added": "補助金" in ultra_responder.line_templates,
         "greeting_configured": bool(ultra_responder.greeting_message),
         "platform": "line_optimized",
+        "llm_minimization": {
+            "enabled": True,
+            "predefined_responses": len(ultra_responder.line_templates),
+            "ai_consultation_mode": True,
+            "emergency_responses": True
+        },
         "fixes_applied": [
             "補助金テンプレート追加",
             "ApiException エラー処理修正",
-            "Sentence completeness guard (LINE) 追加"
+            "Sentence completeness guard (LINE) 追加",
+            "LLM/OpenAI API 使用最小化",
+            "事前定義応答システム強化"
         ],
         "timestamp": datetime.now().isoformat()
     }
+
+@router.get("/ai-consultation-status")
+def get_ai_consultation_status():
+    """AI相談モードの状態確認"""
+    return {
+        "ai_consultation_active": True,
+        "active_users": len(ultra_responder.ai_consultation_active_users),
+        "active_user_list": list(ultra_responder.ai_consultation_active_users),
+        "total_consultations_started": ultra_responder.performance_stats["ai_consultation_started"],
+        "llm_calls_avoided": ultra_responder.performance_stats["llm_calls_avoided"],
+        "predefined_responses_available": len([k for k in ultra_responder.line_templates.keys() if k != "AI相談"]),
+        "features": [
+            "Predefined Response Priority",
+            "LLM/OpenAI API Minimization", 
+            "Staff Escalation Ready",
+            "Template-based Answers"
+        ],
+        "timestamp": datetime.now().isoformat()
+    }
+
+@router.post("/reset-ai-consultation/{user_id}")
+def reset_ai_consultation(user_id: str):
+    """特定ユーザーのAI相談モードをリセット"""
+    if user_id in ultra_responder.ai_consultation_active_users:
+        ultra_responder.ai_consultation_active_users.remove(user_id)
+        return {
+            "status": "reset_successful",
+            "user_id": user_id,
+            "remaining_active_users": len(ultra_responder.ai_consultation_active_users)
+        }
+    else:
+        return {
+            "status": "user_not_in_consultation",
+            "user_id": user_id,
+            "active_users": len(ultra_responder.ai_consultation_active_users)
+        }
