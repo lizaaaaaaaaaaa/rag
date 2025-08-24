@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI住まい相談 - Web版</title>
+    <title>AI住まい相談 - RAG対応版</title>
     <style>
         body {
             background: #e5edf5;
@@ -36,12 +36,12 @@
             letter-spacing: 2px;
             position: relative;
         }
-        .speed-indicator {
+        .rag-indicator {
             position: absolute;
             right: 16px;
             top: 50%;
             transform: translateY(-50%);
-            font-size: 0.8rem;
+            font-size: 0.7rem;
             background: rgba(255,255,255,0.2);
             padding: 2px 6px;
             border-radius: 8px;
@@ -113,26 +113,28 @@
             margin-top: 4px;
             text-align: right;
         }
-        .quick-reply-buttons {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            margin-top: 8px;
+        .rag-source {
+            border-left: 3px solid #4caf50;
         }
-        .quick-reply-btn {
-            background: #f0f7f2;
-            border: 1px solid #10c041;
-            color: #10c041;
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-size: 0.8rem;
-            cursor: pointer;
-            transition: all 0.2s;
+        .search-verified {
+            border-left: 3px solid #2196f3;
         }
-        .quick-reply-btn:hover {
-            background: #10c041;
-            color: #fff;
+        .chatgpt-source {
+            border-left: 3px solid #ff9800;
         }
+        .template-source {
+            border-left: 3px solid #9c27b0;
+        }
+        .confidence-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-left: 4px;
+        }
+        .confidence-high { background-color: #4caf50; }
+        .confidence-medium { background-color: #ff9800; }
+        .confidence-low { background-color: #f44336; }
         .chat-input-container {
             background: #fafbfc;
             padding: 12px;
@@ -209,12 +211,6 @@
             margin: 6px 0;
             font-size: 0.92rem;
         }
-        .fast-response {
-            border-left: 3px solid #4caf50;
-        }
-        .web-optimized {
-            border-left: 3px solid #2196f3;
-        }
         /* モバイルレスポンシブ */
         @media (max-width: 480px) {
             .chat-container { height: 100vh; max-width: 100vw; border-radius: 0;}
@@ -228,32 +224,33 @@
         <div class="chat-header">
             AI住まい相談
             <span class="platform-indicator">Web</span>
-            <span class="speed-indicator">⚡超高速</span>
+            <span class="rag-indicator">🧠RAG対応</span>
         </div>
         <div class="chat-messages" id="chatMessages">
-            <!-- 初期メッセージはシンプルな案内のみ -->
             <div class="welcome-message" id="welcomeMessage">
-                家づくりについて何でもお聞きください。<br>
-                お気軽にご質問をどうぞ。
+                <strong>🏠 AI住まい相談へようこそ！</strong><br><br>
+                住宅に関するご質問をお気軽にどうぞ。<br>
+                社内資料とWeb検索を活用して、正確な情報をお答えします。<br><br>
+                <small>例：坪単価について教えて、耐震性能はどのくらい？など</small>
             </div>
         </div>
         <div class="typing-indicator" id="typingIndicator" style="display:none;">
             <span class="dot"></span>
             <span class="dot"></span>
             <span class="dot"></span>
-            <span>考え中...</span>
+            <span>資料を検索中...</span>
         </div>
         <div class="chat-input-container">
             <div class="chat-input-wrapper">
-                <textarea class="chat-input" id="chatInput" placeholder="メッセージを入力..." rows="1"></textarea>
+                <textarea class="chat-input" id="chatInput" placeholder="住宅についてお聞きください..." rows="1"></textarea>
                 <button class="send-button" id="sendButton" type="button">➤</button>
             </div>
         </div>
     </div>
     <script>
-        class WebOptimizedChatUI {
+        class RAGEnabledChatUI {
             constructor() {
-                // Web専用エンドポイント（プラットフォーム分離対応）
+                // RAG対応エンドポイント
                 this.API_URL = 'https://rag-api-190389115361.asia-northeast1.run.app/chat';
                 this.PLATFORM = 'web';
 
@@ -265,12 +262,10 @@
 
                 this.initializeEventListeners();
                 this.adjustTextareaHeight();
-                // 初期挨拶は表示しない（ユーザーの質問に即座に応答するため）
-                // this.showInitialGreeting(); // 削除
                 
-                // パフォーマンス監視（Web専用）
+                // RAGパフォーマンス監視
                 this.responseMetrics = [];
-                this.webOptimizedMode = true;
+                this.ragEnabled = true;
                 this.hasFirstMessage = false;
             }
 
@@ -304,27 +299,28 @@
                 this.chatInput.value = '';
                 this.adjustTextareaHeight();
                 this.setLoading(true);
+                this.updateTypingText("資料を検索中...");
 
                 const startTime = performance.now();
 
                 try {
-                    const response = await this.callWebOptimizedAPI(message);
+                    const response = await this.callRAGAPI(message);
                     const responseTime = performance.now() - startTime;
                     
-                    this.recordPerformance(responseTime, response.platform, response.source);
+                    this.recordPerformance(responseTime, response);
                     this.addAIMessage(response.answer, response, responseTime);
                     
                 } catch (error) {
-                    console.error('Web API Error:', error);
+                    console.error('RAG API Error:', error);
                     this.showError('エラーが発生しました。時間を置いて再度お試しください。');
                 } finally {
                     this.setLoading(false);
                 }
             }
 
-            async callWebOptimizedAPI(question) {
+            async callRAGAPI(question) {
                 /**
-                 * Web専用API呼び出し（プラットフォーム分離対応）
+                 * RAG対応API呼び出し
                  */
                 try {
                     const response = await fetch(this.API_URL, {
@@ -333,7 +329,7 @@
                         body: JSON.stringify({ 
                             question, 
                             username: `web-user-${Date.now()}`,
-                            platform: 'web'  // プラットフォーム明示
+                            platform: 'web'
                         })
                     });
                     
@@ -347,86 +343,29 @@
                         source: data.performance?.source || 'unknown',
                         platform: data.performance?.platform || 'web',
                         processing_time: data.performance?.processing_time || 0,
-                        template_based: data.performance?.template_based || false,
-                        rag_enabled: data.performance?.rag_enabled || false
+                        confidence: data.performance?.confidence || 0.8,
+                        search_used: data.performance?.search_used || false,
+                        source_docs_count: data.performance?.source_docs_count || 0
                     };
                     
                 } catch (error) {
-                    console.error('Web API call failed:', error);
-                    
-                    // フォールバック：ローカル応答（Web専用）
-                    return this.getWebLocalResponse(question);
+                    console.error('RAG API call failed:', error);
+                    throw error;
                 }
             }
 
-            getWebLocalResponse(question) {
-                /**
-                 * Web専用ローカル応答（プラットフォーム分離対応）
-                 */
-                const q = question.toLowerCase();
-                
-                if (q.includes('坪単価') || q.includes('価格') || q.includes('費用')) {
-                    return {
-                        answer: '坪単価についてご案内いたします。標準仕様では約70〜85万円/坪が目安となります。詳細なお見積りをご提供いたしますので、お気軽にお問い合わせください。',
-                        source: 'web_local_template',
-                        platform: 'web',
-                        processing_time: 0,
-                        template_based: true
-                    };
-                } else if (q.includes('仕様') || q.includes('設備')) {
-                    return {
-                        answer: '標準仕様についてご説明いたします。耐震等級3の長期優良住宅を基準とし、高品質な住まいをご提供しております。詳細は展示場でご確認いただけます。',
-                        source: 'web_local_template',
-                        platform: 'web',
-                        processing_time: 0,
-                        template_based: true
-                    };
-                } else if (q.includes('断熱') || q.includes('性能')) {
-                    return {
-                        answer: '断熱性能については、高品質な断熱材を使用し、快適な住環境を実現しています。ZEH基準に対応した省エネ性能で、一年中快適にお過ごしいただけます。',
-                        source: 'web_local_template',
-                        platform: 'web',
-                        processing_time: 0,
-                        template_based: true
-                    };
-                } else if (q.includes('補助金') || q.includes('助成金')) {
-                    return {
-                        answer: '住宅購入時の補助金制度についてご案内します。ZEH補助金、こどもエコすまい支援事業、住宅ローン減税など様々な制度があります。制度は年度により変更されますので、最新情報はスタッフまでお問い合わせください。',
-                        source: 'web_local_template',
-                        platform: 'web',
-                        processing_time: 0,
-                        template_based: true
-                    };
-                } else if (q.includes('資料') || q.includes('パンフレット')) {
-                    return {
-                        answer: '資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。3営業日以内にお送りいたします。',
-                        source: 'web_local_template',
-                        platform: 'web',
-                        processing_time: 0,
-                        template_based: true
-                    };
-                } else {
-                    return {
-                        answer: 'お尋ねの内容について詳しくご案内いたします。住宅に関することでしたら何でもお気軽にお問い合わせください。',
-                        source: 'web_local_fallback',
-                        platform: 'web',
-                        processing_time: 0,
-                        template_based: true
-                    };
-                }
-            }
-
-            recordPerformance(responseTime, platform, source) {
+            recordPerformance(responseTime, response) {
                 this.responseMetrics.push({
                     timestamp: Date.now(),
                     responseTime,
-                    platform,
-                    source
+                    source: response.source,
+                    confidence: response.confidence,
+                    searchUsed: response.search_used
                 });
                 
-                // 遅い応答の監視
-                if (responseTime > 3000) {
-                    console.warn('Slow response detected:', responseTime + 'ms');
+                // 長時間応答の監視
+                if (responseTime > 10000) {
+                    console.warn('Very slow RAG response:', responseTime + 'ms');
                 }
                 
                 // メトリクス履歴のクリーンアップ
@@ -447,19 +386,25 @@
                 const messageDiv = document.createElement('div');
                 messageDiv.className = 'message ai';
                 
-                const isFast = responseTime < 1000;
-                const isWebOptimized = metadata.platform === 'web';
-                const fastClass = isFast ? 'fast-response' : '';
-                const webClass = isWebOptimized ? 'web-optimized' : '';
+                // ソース別のスタイリング
+                const sourceClass = this.getSourceClass(metadata.source);
+                const confidenceClass = this.getConfidenceClass(metadata.confidence || 0.8);
                 
-                const responseInfo = responseTime > 0 ? 
+                // 信頼性指標
+                const confidenceIndicator = `<span class="confidence-indicator ${confidenceClass}"></span>`;
+                
+                // 応答情報（デバッグモード時のみ表示）
+                const showDebug = window.location.search.includes('debug=true');
+                const responseInfo = showDebug && responseTime > 0 ? 
                     `<div class="response-info">
-                        ${responseTime < 1000 ? '⚡' : '🔄'} ${responseTime.toFixed(0)}ms | 
-                        ${metadata.platform || 'web'} | ${metadata.source || 'unknown'}
+                        ${this.getSourceIcon(metadata.source)} ${responseTime.toFixed(0)}ms | 
+                        信頼度: ${(metadata.confidence * 100).toFixed(0)}% ${confidenceIndicator} |
+                        検索: ${metadata.search_used ? '✓' : '✗'} |
+                        文書: ${metadata.source_docs_count || 0}件
                      </div>` : '';
                 
                 messageDiv.innerHTML = `
-                    <div class="message-content ${fastClass} ${webClass}">
+                    <div class="message-content ${sourceClass}">
                         ${this.formatMessage(message)}
                         ${responseInfo}
                     </div>
@@ -467,6 +412,33 @@
                 
                 this.chatMessages.appendChild(messageDiv);
                 this.scrollToBottom();
+            }
+
+            getSourceClass(source) {
+                switch(source) {
+                    case 'rag_verified': return 'search-verified';
+                    case 'rag': return 'rag-source';
+                    case 'chatgpt': return 'chatgpt-source';
+                    case 'template': return 'template-source';
+                    default: return '';
+                }
+            }
+
+            getConfidenceClass(confidence) {
+                if (confidence >= 0.8) return 'confidence-high';
+                if (confidence >= 0.6) return 'confidence-medium';
+                return 'confidence-low';
+            }
+
+            getSourceIcon(source) {
+                switch(source) {
+                    case 'rag_verified': return '🔍✓';
+                    case 'rag': return '📚';
+                    case 'chatgpt': return '🤖';
+                    case 'template': return '📋';
+                    case 'cache': return '⚡';
+                    default: return '🔄';
+                }
             }
 
             formatMessage(message) {
@@ -486,34 +458,42 @@
                 if (isLoading) this.scrollToBottom();
             }
 
+            updateTypingText(text) {
+                const typingText = this.typingIndicator.querySelector('span:last-child');
+                if (typingText) {
+                    typingText.textContent = text;
+                }
+            }
+
             showError(message) {
                 const errorDiv = document.createElement('div');
                 errorDiv.className = 'error-message';
                 errorDiv.textContent = message;
                 this.chatMessages.appendChild(errorDiv);
                 this.scrollToBottom();
-                setTimeout(() => errorDiv.remove(), 4000);
+                setTimeout(() => errorDiv.remove(), 5000);
             }
 
             scrollToBottom() {
                 this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
             }
 
-            // パフォーマンス統計表示（デバッグ用）
-            showPerformanceStats() {
+            // RAGパフォーマンス統計表示（デバッグ用）
+            showRAGPerformanceStats() {
                 if (this.responseMetrics.length === 0) return;
                 
                 const avgResponseTime = this.responseMetrics.reduce((sum, m) => sum + m.responseTime, 0) / this.responseMetrics.length;
-                const fastResponses = this.responseMetrics.filter(m => m.responseTime < 1000).length;
-                const fastPercentage = (fastResponses / this.responseMetrics.length * 100).toFixed(1);
-                const webPlatformRequests = this.responseMetrics.filter(m => m.platform === 'web').length;
+                const ragResponses = this.responseMetrics.filter(m => m.source === 'rag' || m.source === 'rag_verified').length;
+                const searchUsedCount = this.responseMetrics.filter(m => m.searchUsed).length;
+                const avgConfidence = this.responseMetrics.reduce((sum, m) => sum + m.confidence, 0) / this.responseMetrics.length;
                 
-                console.log(`Web Performance Stats:
-                - Platform: Web (${webPlatformRequests}/${this.responseMetrics.length} requests)
+                console.log(`RAG Performance Stats:
+                - Platform: Web (RAG Enabled)
                 - Average Response Time: ${avgResponseTime.toFixed(0)}ms
-                - Fast Responses (<1s): ${fastPercentage}%
-                - Total Queries: ${this.responseMetrics.length}
-                - Web Optimized Mode: ${this.webOptimizedMode}`);
+                - RAG Responses: ${ragResponses}/${this.responseMetrics.length}
+                - Search Verifications: ${searchUsedCount}/${this.responseMetrics.length}
+                - Average Confidence: ${(avgConfidence * 100).toFixed(1)}%
+                - Total Queries: ${this.responseMetrics.length}`);
             }
         }
 
@@ -521,12 +501,12 @@
         let chatUI;
         
         document.addEventListener('DOMContentLoaded', () => {
-            chatUI = new WebOptimizedChatUI();
+            chatUI = new RAGEnabledChatUI();
             
             // パフォーマンス統計の定期表示（開発時のみ）
             if (window.location.hostname === 'localhost' || window.location.search.includes('debug=true')) {
-                setInterval(() => chatUI.showPerformanceStats(), 30000);
-                console.log('🌐 Web Optimized Chat UI initialized with platform separation');
+                setInterval(() => chatUI.showRAGPerformanceStats(), 30000);
+                console.log('🧠 RAG Enabled Chat UI initialized');
             }
         });
     </script>
