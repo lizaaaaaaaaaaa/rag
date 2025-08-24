@@ -1,4 +1,5 @@
-# api/routers/line_bot_ultra_fast.py - reply失効対策・プラットフォーム分離対応版（修正版）
+# api/routers/line_bot_ultra_fast.py
+# reply失効対策・プラットフォーム分離対応版 ＋ 文章途切れ対策（LINE特化・完全修正版）
 
 import logging
 import os
@@ -234,9 +235,55 @@ https://kinoe-design.com
 AIは24時間、担当者は当日〜翌営業日に返信します。
 
 取扱い(プライバシーポリシー)：〔https://preview.studio.site/live/EjOQljz1WJ/privacy-policy〕"""
+
+    # ---------------------------
+    # 文章完全性の確保（★新規・LINE特化）
+    # ---------------------------
+    def ensure_line_response_complete(self, text: str, query: str = "") -> str:
+        """LINE用文章完全性確保（強化版）"""
+        if not text or len(text.strip()) < 5:
+            return self._emergency_response()
+        
+        text = text.strip()
+        
+        # 文末チェックと補完（LINE特化）
+        if not text.endswith(('。', '！', '？', '.', '!', '?')):
+            # 特定の途切れパターンの補完（LINE用）
+            if text.endswith('や'):  # 「土地探しや」のケース
+                text += "建築準備を進めることが大切です✨"
+            elif text.endswith('重要'):  # 「重要」のケース
+                text += 'です😊お気軽にご相談ください。'
+            elif text.endswith('必要'):
+                text += 'です。'
+            elif text.endswith('について'):
+                text += 'は詳しくご案内いたします💡'
+            elif text.endswith('選定') or text.endswith('検討'):
+                text += 'も重要なポイントです。'
+            elif text.endswith('ます') or text.endswith('です'):
+                text += '。'
+            elif text.endswith('た') or text.endswith('る'):
+                text += '。'
+            elif text.endswith('、'):
+                text = text[:-1] + '。'
+            elif text.endswith('は') or text.endswith('が'):
+                text += '重要です✨'
+            elif text.endswith('ので') or text.endswith('ため'):
+                text += '、お気軽にご相談ください😊'
+            elif text.endswith('準備') or text.endswith('計画'):
+                text += 'を進めましょう。'
+            else:
+                # 長さによる補完（LINE用）
+                if len(text) > 30:
+                    text += '。'
+                elif len(text) > 15:
+                    text += '。詳しくはお問い合わせください😊'
+                else:
+                    text = self._emergency_response()
+        
+        return text
     
     def process_ultra_fast(self, message_text: str, user_id: str = "unknown") -> str:
-        """超高速処理（LINE専用）"""
+        """超高速処理（文章完全性強化版）"""
         start_time = time.time()
         self.performance_stats["requests"] += 1
         
@@ -246,24 +293,40 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
             if action != "unknown":
                 self.performance_stats["template_hits"] += 1
                 response = self.line_templates.get(action, "ご利用ありがとうございます。")
+                
+                # 🔧 リッチメニュー応答も完全性チェック
+                complete_response = self.ensure_line_response_complete(response, message_text)
+                
                 logger.info(f"🎯 LINE Template match: {action} in {(time.time() - start_time)*1000:.1f}ms")
-                return response
+                logger.info(f"✅ Template complete: {complete_response.endswith(('。', '！', '？', '.', '!', '?'))}")
+                return complete_response
             
             # 一般質問の高速処理
             template_response = self._match_question_template(message_text)
             if template_response:
                 self.performance_stats["template_hits"] += 1
+                
+                # 🔧 質問テンプレート応答も完全性チェック
+                complete_template = self.ensure_line_response_complete(template_response, message_text)
+                
                 logger.info(f"🎯 LINE Question match in {(time.time() - start_time)*1000:.1f}ms")
-                return template_response
+                logger.info(f"✅ Question template complete: {complete_template.endswith(('。', '！', '？', '.', '!', '?'))}")
+                return complete_template
             
             # インテリジェントフォールバック
             fallback_response = self._generate_line_fallback(message_text)
+            
+            # 🔧 フォールバック応答も完全性チェック
+            complete_fallback = self.ensure_line_response_complete(fallback_response, message_text)
+            
             logger.info(f"🔄 LINE Fallback in {(time.time() - start_time)*1000:.1f}ms")
-            return fallback_response
+            logger.info(f"✅ Fallback complete: {complete_fallback.endswith(('。', '！', '？', '.', '!', '?'))}")
+            return complete_fallback
             
         except Exception as e:
             logger.error(f"❌ LINE processing error: {e}")
-            return self._emergency_response()
+            emergency = self._emergency_response()
+            return self.ensure_line_response_complete(emergency, message_text)
     
     def _detect_richmenu_action(self, message: str) -> str:
         """リッチメニューアクション検出（拡張版）"""
@@ -275,7 +338,7 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
             "標準仕様": ["標準仕様", "仕様", "設備", "標準"],
             "断熱性能": ["断熱", "断熱性能", "省エネ", "温度"],
             "耐震性能": ["耐震", "地震", "安全", "強度"],
-            "補助金": ["補助金", "助成金", "支援金", "補助制度"],  # 追加
+            "補助金": ["補助金", "助成金", "支援金", "補助制度"],
             "資料請求": ["資料請求", "資料", "パンフレット", "カタログ"],
             "展示場予約": ["展示場予約", "展示場", "見学", "予約"],
             "資金計画": ["資金計画", "ローン", "住宅ローン", "お金"],
@@ -302,7 +365,7 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
             return self.line_templates["断熱性能"]
         elif any(word in query_lower for word in ["耐震", "地震", "安全", "強度"]):
             return self.line_templates["耐震性能"]
-        elif any(word in query_lower for word in ["補助金", "助成金", "支援金"]):  # 追加
+        elif any(word in query_lower for word in ["補助金", "助成金", "支援金"]):
             return self.line_templates["補助金"]
         elif any(word in query_lower for word in ["資料", "パンフレット", "カタログ"]):
             return self.line_templates["資料請求"]
@@ -312,7 +375,7 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
         return None
     
     def _generate_line_fallback(self, query: str) -> str:
-        """LINE専用フォールバック"""
+        """LINE専用フォールバック（完全性強化版）"""
         q_lower = query.lower()
         
         if any(word in q_lower for word in ["家を建てる", "マイホーム", "新築"]):
@@ -325,10 +388,10 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
 2️⃣ 展示場見学で実際の住まいを体感
 3️⃣ 資金計画で予算を明確化
 
-お客様のご希望をお聞かせいただければ、最適なプランをご提案いたします。何からお聞きになりたいでしょうか？"""
+お客様のご希望をお聞かせいただければ、最適なプランをご提案いたします。何からお聞きになりたいでしょうか。"""
         
         elif any(word in q_lower for word in ["補助金", "助成金", "支援"]):
-            return self.line_templates["補助金"]  # 補助金テンプレートを直接使用
+            return self.line_templates["補助金"]  # 既に完全な文章
         
         elif any(word in q_lower for word in ["こんにちは", "はじめまして", "よろしく"]):
             return """こんにちは！キノエデザインです✨
@@ -336,7 +399,9 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
 住まいづくりのことでしたら何でもお気軽にご相談ください😊
 
 下記メニューからお選びいただけます👇
-🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画"""
+🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画
+
+お気軽にお声かけください。"""
         
         else:
             return """ご質問ありがとうございます✨
@@ -352,7 +417,7 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
 具体的にお聞かせいただければ、詳しくご案内いたします。お気軽にお問い合わせください😊"""
     
     def _emergency_response(self) -> str:
-        """緊急時応答"""
+        """緊急時応答（完全性保証版）"""
         return """申し訳ございません。一時的にシステムの不具合が発生しております。
 
 しばらくしてから再度お試しいただくか、下記までお電話でお問い合わせください。
@@ -480,7 +545,7 @@ def send_line_message_safe(reply_token: str, user_id: str, message: str) -> bool
                 
             except ApiException as reply_error:  # 修正: LineBotApiError → ApiException
                 # Reply失効時はPush APIにフォールバック
-                if "Invalid reply token" in str(reply_error) or reply_error.status == 400:
+                if "Invalid reply token" in str(reply_error) or getattr(reply_error, "status", None) == 400:
                     logger.warning(f"⚠️ Reply token expired, using Push API fallback for user: {user_id}")
                     ultra_responder.performance_stats["push_fallbacks"] += 1
                     
@@ -557,7 +622,7 @@ async def ultra_fast_webhook(request: Request, background_tasks: BackgroundTasks
         return {"status": "error", "error": str(e)}
 
 # ==============================================================================
-# イベントハンドラ（reply失効対策・AI相談対応付き）
+# イベントハンドラ（reply失効対策・AI相談対応＋文章完全性チェック付き）
 # ==============================================================================
 if LINE_SDK_AVAILABLE and handler:
     
@@ -584,7 +649,7 @@ if LINE_SDK_AVAILABLE and handler:
     
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_message_ultra_fast(event):
-        """超高速メッセージハンドラ（AI相談対応・reply失効対策付き・修正版）"""
+        """超高速メッセージハンドラ（文章完全性強化版・reply失効対策付き）"""
         start_time = time.time()
         
         try:
@@ -594,19 +659,26 @@ if LINE_SDK_AVAILABLE and handler:
             
             logger.info(f"📱 LINE Ultra fast processing: '{message_text[:30]}...' from user: {user_id}")
             
-            # 特別処理：AI相談ボタン押下の場合は必ず挨拶文を返す
+            # 特別処理：AI相談ボタン押下の場合
             if "AI相談" in message_text or "ai相談" in message_text.lower():
                 logger.info("🤖 AI相談 button detected - sending greeting")
                 ai_greeting = ultra_responder.line_templates["AI相談"]
-                success = send_line_message_safe(reply_token, user_id, ai_greeting)
+                # 🔧 AI相談応答も完全性チェック
+                complete_ai_greeting = ultra_responder.ensure_line_response_complete(ai_greeting, message_text)
+                success = send_line_message_safe(reply_token, user_id, complete_ai_greeting)
             else:
-                # 通常の超高速応答生成
+                # 通常の超高速応答生成（完全性チェック込み）
                 response_text = ultra_responder.process_ultra_fast(message_text, user_id)
                 success = send_line_message_safe(reply_token, user_id, response_text)
             
             duration = (time.time() - start_time) * 1000
             if success:
-                logger.info(f"✅ LINE Ultra fast response: {duration:.1f}ms")
+                logger.info(f"✅ LINE Ultra fast complete response: {duration:.1f}ms")
+                # 応答の完全性をログ出力
+                if 'response_text' in locals():
+                    logger.info(f"🔚 Response completeness: {response_text.endswith(('。', '！', '？', '.', '!', '?'))}")
+                elif 'complete_ai_greeting' in locals():
+                    logger.info(f"🔚 AI greeting completeness: {complete_ai_greeting.endswith(('。', '！', '？', '.', '!', '?'))}")
             else:
                 logger.error(f"❌ LINE response failed after {duration:.1f}ms")
             
@@ -614,7 +686,7 @@ if LINE_SDK_AVAILABLE and handler:
             logger.error(f"❌ Ultra fast message error: {e}")
             logger.error(traceback.format_exc())
             try:
-                emergency = ultra_responder._emergency_response()
+                emergency = ultra_responder._emergency_response()  # 完全性保証済み
                 send_line_message_safe(event.reply_token, event.source.user_id, emergency)
             except Exception as final_error:
                 logger.error(f"❌ Emergency response failed: {final_error}")
@@ -642,6 +714,8 @@ if LINE_SDK_AVAILABLE and handler:
             else:
                 response_text = "メニューからお選びください。"
             
+            # Postbackはテンプレ直返しでも念のため完全性チェック
+            response_text = ultra_responder.ensure_line_response_complete(response_text, postback_data)
             success = send_line_message_safe(reply_token, user_id, response_text)
             logger.info(f"✅ Postback processed successfully: success={success}")
             
@@ -681,12 +755,14 @@ def get_line_performance():
             "Ultra Fast Processing",
             "補助金テンプレート追加",  # 追加
             "ApiException Error Handling",  # 追加
+            "Sentence Completeness Guard (LINE)",  # 追加
         ],
         "fixes_applied": [  # 追加
             "LineBotApiError → ApiException 修正",
             "インポートエラー解決",
             "送信エラー処理改善",
-            "補助金テンプレート追加"
+            "補助金テンプレート追加",
+            "文章途切れ自動補完の追加（LINE特化）"
         ],
         "timestamp": datetime.now().isoformat()
     }
@@ -709,7 +785,8 @@ def line_debug_info():
             "ApiException import fixed",
             "LineBotApiError references removed", 
             "Error handling improved",
-            "Push API fallback enhanced"
+            "Push API fallback enhanced",
+            "Sentence completeness guard (LINE) enabled"
         ],
         "timestamp": datetime.now().isoformat()
     }
@@ -725,7 +802,8 @@ def clear_line_cache():
         "fixes_confirmed": [
             "ApiException handling active",
             "Import errors resolved",
-            "Template responses updated"
+            "Template responses updated",
+            "Sentence completeness guard reset"
         ],
         "timestamp": datetime.now().isoformat()
     }
@@ -737,12 +815,13 @@ def get_line_templates():
         "line_templates": list(ultra_responder.line_templates.keys()),
         "count": len(ultra_responder.line_templates),
         "ai_consultation_template": "AI相談" in ultra_responder.line_templates,
-        "subsidy_template_added": "補助金" in ultra_responder.line_templates,  # 追加
+        "subsidy_template_added": "補助金" in ultra_responder.line_templates,
         "greeting_configured": bool(ultra_responder.greeting_message),
         "platform": "line_optimized",
         "fixes_applied": [
             "補助金テンプレート追加",
-            "ApiException エラー処理修正"
+            "ApiException エラー処理修正",
+            "Sentence completeness guard (LINE) 追加"
         ],
         "timestamp": datetime.now().isoformat()
     }

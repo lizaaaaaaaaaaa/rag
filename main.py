@@ -1,4 +1,4 @@
-# main.py - RAG機能有効化版（PDF + Google検索 + ChatGPT統合）- LINE Bot RAG統合修正版
+# main.py - RAG機能有効化版（PDF + Google検索 + ChatGPT統合）- 文章途切れ対策版
 
 import logging
 import os
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="RAG API - Full RAG Edition with PDF + Search + ChatGPT",
     description="AI Chat API with PDF-based RAG, Google Search Anti-Hallucination, and ChatGPT Integration",
-    version="3.0.0"
+    version="3.1.0"
 )
 
 # CORS設定
@@ -181,7 +181,7 @@ def load_llm_instance():
             model_name=os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo"),
             temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.1")),
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            max_tokens=int(os.getenv("MAX_NEW_TOKENS", "256"))
+            max_tokens=int(os.getenv("MAX_NEW_TOKENS", "400"))  # 文章完全性のため増加
         )
         
         logger.info("🤖 LLM instance created successfully")
@@ -200,21 +200,24 @@ def create_rag_chain(vectorstore, llm):
         if not vectorstore or not llm:
             return None
         
-        # カスタムプロンプトテンプレート
-        prompt_template = """あなたは住宅・建築の専門アドバイザーです。以下の情報を基に、正確で分かりやすい回答をしてください。
+        # カスタムプロンプトテンプレート（文章完全性重視）
+        prompt_template = """あなたは住宅・建築の専門アドバイザーです。以下の情報を基に、完全で自然な文章で回答してください。
 
 コンテキスト情報:
 {context}
 
 質問: {question}
 
-回答する際の注意点:
-1. コンテキスト情報を基に正確に回答してください
-2. 情報が不足している場合は「詳細は資料をご確認ください」と答えてください
-3. 自然で分かりやすい日本語で回答してください
-4. 300字以内で簡潔に回答してください
+【重要な回答ルール】
+1. 必ず最後まで完結した文章で回答する
+2. 文章の途中で切れないようにする
+3. コンテキスト情報を基に正確に回答する
+4. 情報が不足している場合は「詳細は資料をご確認ください」と答える
+5. 自然で分かりやすい日本語で回答する
+6. 350字以内で簡潔にまとめる
+7. 文末は必ず句点（。）で終わる
 
-回答:"""
+完全な回答:"""
         
         PROMPT = PromptTemplate(
             template=prompt_template,
@@ -294,7 +297,7 @@ class GoogleSearchIntegration:
             
             # LLMで検証・統合
             if llm_instance:
-                verification_prompt = f"""以下の情報を比較検証して、最終回答を生成してください。
+                verification_prompt = f"""以下の情報を比較検証して、完全な文章で最終回答を生成してください。
 
 【元の回答】
 {rag_answer}
@@ -306,9 +309,11 @@ class GoogleSearchIntegration:
 1. 元の回答と検索結果を比較してください
 2. 矛盾がある場合は最新情報を優先してください
 3. 補強できる情報があれば追加してください
-4. 自然で分かりやすい日本語で300字以内で回答してください
+4. 必ず完結した文章で回答してください
+5. 文末は必ず句点（。）で終わってください
+6. 自然で分かりやすい日本語で350字以内で回答してください
 
-【最終回答】"""
+【完全な最終回答】"""
                 
                 verified_response = llm_instance.invoke(verification_prompt)
                 verified_answer = verified_response.content if hasattr(verified_response, 'content') else str(verified_response)
@@ -378,7 +383,8 @@ class PlatformSeparatedCache:
             "source": response.get("source", "unknown"),
             "platform": platform,
             "confidence": response.get("confidence", 0.8),
-            "search_used": response.get("search_used", False)
+            "search_used": response.get("search_used", False),
+            "sentence_complete": response.get("sentence_complete", False)
         }
         self.access_times[key] = time.time()
         logger.info(f"💾 {platform.upper()} Cache SET for: {query[:30]}...")
@@ -415,7 +421,7 @@ class PlatformSeparatedCache:
         }
 
 # ==============================================================================
-# プラットフォーム分離応答生成クラス（RAG統合版）
+# プラットフォーム分離応答生成クラス（文章完全性強化版）
 # ==============================================================================
 class PlatformSeparatedResponseGenerator:
     def __init__(self):
@@ -426,8 +432,72 @@ class PlatformSeparatedResponseGenerator:
         self.performance_metrics = {
             "web_requests": 0, "line_requests": 0, 
             "template_hits": 0, "rag_hits": 0, "fallback_hits": 0,
-            "search_verifications": 0, "chatgpt_calls": 0
+            "search_verifications": 0, "chatgpt_calls": 0,
+            "incomplete_responses_fixed": 0
         }
+    
+    def ensure_complete_response(self, text: str, query: str = "") -> str:
+        """文章の完全性を確保（強化版）"""
+        if not text or len(text.strip()) < 5:
+            return self._generate_fallback_for_incomplete(query)
+        
+        text = text.strip()
+        
+        # 文末チェックと補完
+        if not text.endswith(('。', '！', '？', '.', '!', '?')):
+            self.performance_metrics["incomplete_responses_fixed"] += 1
+            
+            # 特定パターンの補完
+            if text.endswith('や'):  # 「土地探しや」
+                if "土地" in text:
+                    text += "建築に関する準備を進めることをお勧めします。"
+                else:
+                    text += "詳細についてはお問い合わせください。"
+            elif text.endswith('重要'):  # 「重要」
+                text += 'です。詳しくはお気軽にご相談ください。'
+            elif text.endswith('必要'):  # 「必要」
+                text += 'です。'
+            elif text.endswith('ます') or text.endswith('です'):
+                text += '。'
+            elif text.endswith('た') or text.endswith('る'):
+                text += '。'
+            elif text.endswith('、'):
+                text = text[:-1] + '。'
+            elif text.endswith('は') or text.endswith('が'):
+                text += '重要なポイントです。'
+            elif text.endswith('ので') or text.endswith('ため'):
+                text += '、お気軽にご相談ください。'
+            elif text.endswith('など'):
+                text += 'があります。詳細はお問い合わせください。'
+            elif text.endswith('から'):
+                text += '、ご検討ください。'
+            elif text.endswith('して'):
+                text += 'います。'
+            elif text.endswith('また'):
+                text += '、詳細についてはお問い合わせください。'
+            else:
+                # 一般的な補完
+                if len(text) > 20:
+                    text += '。'
+                else:
+                    text += '。詳細はお問い合わせください。'
+            
+            logger.info(f"🔧 Fixed incomplete sentence: ...{text[-30:]}")
+        
+        return text
+    
+    def _generate_fallback_for_incomplete(self, query: str) -> str:
+        """不完全な回答用フォールバック"""
+        if "坪単価" in query or "価格" in query:
+            return "坪単価については、お客様のご希望される仕様によって変動いたします。詳細なお見積りをご提供いたしますので、お気軽にお問い合わせください。"
+        elif "建てる" in query or "家" in query:
+            return "家づくりについて詳しくご案内いたします。お客様のご要望をお聞かせいただければ、最適なプランをご提案いたします。"
+        elif "土地" in query:
+            return "土地探しから建築まで、トータルでサポートいたします。お客様のご希望条件をお聞かせください。"
+        elif "ローン" in query or "資金" in query:
+            return "住宅ローンや資金計画について、専門スタッフがご相談を承ります。お気軽にお問い合わせください。"
+        else:
+            return "ご質問について詳しくお答えいたします。お気軽にお問い合わせください。"
        
     def _load_web_templates(self) -> Dict[str, str]:
         """Web専用テンプレート（基本的な挨拶やメニュー表示用）"""
@@ -495,7 +565,7 @@ class PlatformSeparatedResponseGenerator:
         }
    
     async def generate_platform_response(self, query: str, platform: str = "web", user: str = "unknown") -> Dict[str, Any]:
-        """プラットフォーム分離応答生成（RAG統合版）"""
+        """プラットフォーム分離応答生成（文章完全性強化版）"""
         start_time = time.time()
         self.performance_metrics[f"{platform}_requests"] += 1
         
@@ -510,7 +580,8 @@ class PlatformSeparatedResponseGenerator:
                     "platform": platform,
                     "status": "ok",
                     "confidence": cached_response.get("confidence", 0.8),
-                    "search_used": cached_response.get("search_used", False)
+                    "search_used": cached_response.get("search_used", False),
+                    "sentence_complete": cached_response.get("sentence_complete", True)
                 }
             
             # 2. 基本的なメニュー表示用テンプレートマッチング（挨拶、メニューのみ）
@@ -526,7 +597,8 @@ class PlatformSeparatedResponseGenerator:
                     "platform": platform,
                     "status": "ok",
                     "confidence": 1.0,
-                    "search_used": False
+                    "search_used": False,
+                    "sentence_complete": True
                 }
                 self.cache.set(query, result, platform)
                 return result
@@ -541,26 +613,35 @@ class PlatformSeparatedResponseGenerator:
                     rag_answer = rag_result.get("result", "")
                     source_docs = rag_result.get("source_documents", [])
                     
-                    if rag_answer and len(rag_answer.strip()) > 20:
+                    if rag_answer and len(rag_answer.strip()) > 10:
                         self.performance_metrics["rag_hits"] += 1
                         
+                        # 🔧 文章完全性チェック強化
+                        complete_rag_answer = self.ensure_complete_response(rag_answer, query)
+                        
                         # 4. Google検索でハルシネーション対策
-                        verification_result = await self.google_search.search_and_verify(query, rag_answer)
+                        verification_result = await self.google_search.search_and_verify(query, complete_rag_answer)
                         final_answer = verification_result["verified_answer"]
+                        
+                        # 🔧 最終回答も完全性チェック
+                        final_complete_answer = self.ensure_complete_response(final_answer, query)
                         
                         if verification_result["search_used"]:
                             self.performance_metrics["search_verifications"] += 1
                         
                         result = {
-                            "answer": final_answer,
+                            "answer": final_complete_answer,
                             "processing_time": time.time() - start_time,
                             "source": "rag_verified" if verification_result["search_used"] else "rag",
                             "platform": platform,
                             "status": "ok",
                             "confidence": verification_result["confidence"],
                             "search_used": verification_result["search_used"],
-                            "source_docs_count": len(source_docs)
+                            "source_docs_count": len(source_docs),
+                            "sentence_complete": final_complete_answer.endswith(('。', '！', '？', '.', '!', '?'))
                         }
+                        
+                        logger.info(f"✅ Complete response generated: ends with '{final_complete_answer[-5:]}'")
                         
                         self.cache.set(query, result, platform)
                         return result
@@ -573,33 +654,43 @@ class PlatformSeparatedResponseGenerator:
                 try:
                     logger.info(f"🤖 ChatGPT fallback for: {query[:50]}...")
                     
+                    # 🔧 完全性重視プロンプト
                     chatgpt_prompt = f"""あなたは住宅・建築の専門アドバイザーです。
-以下の質問に対して、住宅に関する一般的な知識を基に回答してください。
+以下の質問に対して、完全で自然な文章で回答してください。
 
 質問: {query}
 
-回答する際の注意点:
-1. 住宅・建築に関連する内容で回答してください
-2. 具体的な数値や価格は「詳細はお問い合わせください」と答えてください
-3. 自然で分かりやすい日本語で回答してください
-4. 250字以内で簡潔に回答してください
+【重要な指示】
+1. 必ず最後まで完結した文章で回答する
+2. 文章の途中で切れないようにする
+3. 住宅・建築に関連する内容で回答する
+4. 具体的な数値や価格は「詳細はお問い合わせください」とする
+5. 自然で分かりやすい日本語で回答する
+6. 350文字以内で簡潔にまとめる
+7. 文末は必ず句点（。）で終わる
 
-回答:"""
+完全な回答:"""
                     
                     chatgpt_response = llm_instance.invoke(chatgpt_prompt)
                     chatgpt_answer = chatgpt_response.content if hasattr(chatgpt_response, 'content') else str(chatgpt_response)
                     
+                    # 🔧 ChatGPTの回答も完全性チェック
+                    complete_chatgpt_answer = self.ensure_complete_response(chatgpt_answer, query)
+                    
                     self.performance_metrics["chatgpt_calls"] += 1
                     
                     result = {
-                        "answer": chatgpt_answer,
+                        "answer": complete_chatgpt_answer,
                         "processing_time": time.time() - start_time,
                         "source": "chatgpt",
                         "platform": platform,
                         "status": "ok",
-                        "confidence": 0.7,
-                        "search_used": False
+                        "confidence": 0.8,
+                        "search_used": False,
+                        "sentence_complete": complete_chatgpt_answer.endswith(('。', '！', '？', '.', '!', '?'))
                     }
+                    
+                    logger.info(f"✅ Complete ChatGPT response: ends with '{complete_chatgpt_answer[-5:]}'")
                     
                     self.cache.set(query, result, platform)
                     return result
@@ -610,14 +701,19 @@ class PlatformSeparatedResponseGenerator:
             # 6. 最終フォールバック
             self.performance_metrics["fallback_hits"] += 1
             fallback_response = self._generate_platform_fallback(query, platform)
+            
+            # 🔧 フォールバック応答も完全性チェック
+            complete_fallback = self.ensure_complete_response(fallback_response, query)
+            
             result = {
-                "answer": fallback_response,
+                "answer": complete_fallback,
                 "processing_time": time.time() - start_time,
                 "source": "fallback",
                 "platform": platform,
                 "status": "ok",
-                "confidence": 0.5,
-                "search_used": False
+                "confidence": 0.6,
+                "search_used": False,
+                "sentence_complete": complete_fallback.endswith(('。', '！', '？', '.', '!', '?'))
             }
             
             self.cache.set(query, result, platform)
@@ -625,14 +721,18 @@ class PlatformSeparatedResponseGenerator:
             
         except Exception as e:
             logger.error(f"Platform response generation error: {e}")
+            emergency_response = self._generate_platform_fallback(query, platform)
+            complete_emergency = self.ensure_complete_response(emergency_response, query)
+            
             return {
-                "answer": self._generate_platform_fallback(query, platform),
+                "answer": complete_emergency,
                 "processing_time": time.time() - start_time,
                 "source": "error",
                 "platform": platform,
                 "status": "error",
                 "confidence": 0.3,
-                "search_used": False
+                "search_used": False,
+                "sentence_complete": complete_emergency.endswith(('。', '！', '？', '.', '!', '?'))
             }
    
     def _match_simple_template(self, query: str, templates: Dict[str, str]) -> Optional[str]:
@@ -641,8 +741,8 @@ class PlatformSeparatedResponseGenerator:
         
         # 非常に限定的なキーワードのみテンプレート応答
         simple_keywords = {
-            "AI相談": ["ai相談を開始します", "ai住まい相談を開始します", "相談を開始"],
-            "資料請求": ["資料請求をお願いします", "パンフレット請求をお願いします", "カタログ請求をお願いします"],
+            "AI相談": ["ai相談を開始", "ai住まい相談を開始", "相談を開始"],
+            "資料請求": ["資料請求をお願い", "パンフレット請求", "カタログ請求"],
         }
         
         for template_key, keywords in simple_keywords.items():
@@ -657,17 +757,19 @@ class PlatformSeparatedResponseGenerator:
         if platform == "line":
             return """ご質問ありがとうございます✨
 
-申し訳ございませんが、一時的にシステムの準備中です。
-詳しくはスタッフまでお問い合わせください。
+お尋ねの内容について、より正確な情報をお答えするため、詳しい資料をご確認いただくか、スタッフまでお問い合わせください。
 
-📞 営業時間：9:00-18:00（水曜定休）"""
+📞 営業時間：9:00-18:00（水曜定休）
+
+お気軽にご連絡ください。"""
         else:  # web
             return """ご質問ありがとうございます。
 
-申し訳ございませんが、一時的にシステムの準備中です。
-詳しくはスタッフまでお問い合わせください。
+お尋ねの内容について、より正確な情報をお答えするため、詳しい資料をご確認いただくか、スタッフまでお問い合わせください。
 
-営業時間：9:00-18:00（水曜定休日）"""
+営業時間：9:00-18:00（水曜定休日）
+
+お気軽にご連絡ください。"""
 
 # ==============================================================================
 # リクエストモデル
@@ -728,7 +830,8 @@ async def rag_integrated_chat_endpoint(req: ChatRequest, request: Request):
         logger.info(f"✅ RAG Response ({platform}): {total_time:.3f}s, "
                    f"source={response.get('source')}, "
                    f"confidence={response.get('confidence', 0):.2f}, "
-                   f"search_used={response.get('search_used', False)}")
+                   f"search_used={response.get('search_used', False)}, "
+                   f"complete={response.get('sentence_complete', False)}")
         
         return {
             "answer": response["answer"],
@@ -742,7 +845,8 @@ async def rag_integrated_chat_endpoint(req: ChatRequest, request: Request):
                 "rag_enabled": True,
                 "confidence": response.get("confidence", 0.8),
                 "search_used": response.get("search_used", False),
-                "source_docs_count": response.get("source_docs_count", 0)
+                "source_docs_count": response.get("source_docs_count", 0),
+                "sentence_complete": response.get("sentence_complete", False)
             }
         }
         
@@ -757,10 +861,13 @@ async def rag_integrated_chat_endpoint(req: ChatRequest, request: Request):
             req.question if hasattr(req, 'question') else "", platform
         )
         
+        # エラー時も文章完全性を確保
+        complete_fallback = platform_generator.ensure_complete_response(fallback_answer, req.question)
+        
         return JSONResponse(
             status_code=200,
             content={
-                "answer": fallback_answer,
+                "answer": complete_fallback,
                 "sources": [],
                 "status": "fallback",
                 "error_id": error_id,
@@ -768,7 +875,8 @@ async def rag_integrated_chat_endpoint(req: ChatRequest, request: Request):
                     "total_time": total_time,
                     "platform": platform,
                     "rag_enabled": True,
-                    "confidence": 0.3
+                    "confidence": 0.3,
+                    "sentence_complete": complete_fallback.endswith(('。', '！', '？', '.', '!', '?'))
                 }
             }
         )
@@ -785,22 +893,23 @@ async def health_check():
         "status": "healthy",
         "uptime": uptime,
         "timestamp": datetime.now().isoformat(),
-        "message": "RAG API with PDF + Search + ChatGPT",
+        "message": "RAG API with PDF + Search + ChatGPT (Sentence Completion Enhanced)",
         "rag_initialized": is_initialized,
         "rag_disabled": DISABLE_RAG_INIT,
         "pdf_rag_enabled": ENABLE_PDF_RAG,
         "google_search_enabled": ENABLE_GOOGLE_SEARCH,
         "chatgpt_fallback_enabled": ENABLE_CHATGPT_FALLBACK,
         "vectorstore_ready": vectorstore is not None,
-        "llm_ready": llm_instance is not None
+        "llm_ready": llm_instance is not None,
+        "sentence_completion_enabled": True
     }
 
 @app.get("/")
 async def root():
     """ルートエンドポイント"""
     return {
-        "message": "RAG API - Full RAG Edition",
-        "version": "3.0.0",
+        "message": "RAG API - Full RAG Edition with Sentence Completion",
+        "version": "3.1.0",
         "timestamp": datetime.now().isoformat(),
         "features": [
             "PDF-based RAG from Cloud Storage",
@@ -808,7 +917,8 @@ async def root():
             "ChatGPT API Integration",
             "Platform Separated Responses",
             "Smart Caching System",
-            "LINE Bot RAG Integration"
+            "LINE Bot RAG Integration",
+            "Sentence Completion Enhancement"
         ],
         "rag_status": "enabled" if not DISABLE_RAG_INIT else "disabled",
         "uptime": time.time() - startup_time,
@@ -842,9 +952,10 @@ async def get_system_status():
             "force_template_mode": FORCE_TEMPLATE_MODE,
             "enable_pdf_rag": ENABLE_PDF_RAG,
             "enable_google_search": ENABLE_GOOGLE_SEARCH,
-            "enable_chatgpt_fallback": ENABLE_CHATGPT_FALLBACK
+            "enable_chatgpt_fallback": ENABLE_CHATGPT_FALLBACK,
+            "sentence_completion_enabled": True
         },
-        "version": "3.0.0",
+        "version": "3.1.0",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -855,16 +966,17 @@ async def get_system_status():
 async def line_debug_status():
     """LINEボットのデバッグ情報"""
     return {
-        "line_bot_status": "RAG Integrated",
-        "router_used": "line_bot_fixed.py",
+        "line_bot_status": "RAG Integrated with Sentence Completion",
+        "router_used": "line_bot_rag_integrated.py",
         "rag_integration": {
             "enabled": True,
             "vectorstore_ready": vectorstore is not None,
             "llm_ready": llm_instance is not None,
-            "rag_chain_ready": rag_chain_template is not None
+            "rag_chain_ready": rag_chain_template is not None,
+            "sentence_completion_enabled": True
         },
         "timestamp": datetime.now().isoformat(),
-        "message": "LINE Bot is now using RAG for intelligent responses"
+        "message": "LINE Bot is now using RAG with sentence completion for intelligent responses"
     }
 
 # ==============================================================================
@@ -873,7 +985,7 @@ async def line_debug_status():
 @app.on_event("startup")
 async def startup_event():
     """アプリケーション起動時の処理"""
-    logger.info("🚀 Starting RAG API with PDF + Search + ChatGPT...")
+    logger.info("🚀 Starting RAG API with PDF + Search + ChatGPT + Sentence Completion...")
     
     # RAG初期化（バックグラウンドで実行）
     if not DISABLE_RAG_INIT:
@@ -881,20 +993,20 @@ async def startup_event():
     else:
         logger.warning("⚠️ RAG initialization disabled (DISABLE_RAG_INIT=True)")
     
-    # LINE専用ルーター（RAG統合版に変更）
+    # LINE専用ルーター（RAG統合版）
     try:
-        from api.routers.line_bot_fixed import router as line_fixed_router
-        app.include_router(line_fixed_router, prefix="/line", tags=["line-rag-integrated"])
+        from api.routers.line_bot_rag_integrated import router as line_rag_router
+        app.include_router(line_rag_router, prefix="/line", tags=["line-rag-integrated"])
         logger.info("✅ LINE RAG Integrated router added")
     except Exception as e:
         logger.error(f"❌ Failed to add LINE RAG router: {e}")
-        # フォールバックとして ultra fast を使用
+        # フォールバック
         try:
-            from api.routers.line_bot_ultra_fast import router as ultra_line_router
-            app.include_router(ultra_line_router, prefix="/line", tags=["line-ultra-fast"])
-            logger.warning("⚠️ Fallback to LINE Ultra Fast router")
+            from api.routers.chat_ultra_fast import router as ultra_fast_router
+            app.include_router(ultra_fast_router, prefix="/chat-ultra", tags=["chat-ultra-fast"])
+            logger.warning("⚠️ Added chat ultra fast router as fallback")
         except Exception as e2:
-            logger.error(f"❌ Failed to add fallback LINE router: {e2}")
+            logger.error(f"❌ Failed to add fallback router: {e2}")
     
     # その他のルーター
     try:
@@ -904,7 +1016,7 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️ Upload router not added: {e}")
     
-    logger.info("🎉 RAG API startup completed with LINE RAG integration")
+    logger.info("🎉 RAG API startup completed with sentence completion enhancement")
     logger.info(f"⚡ Startup time: {time.time() - startup_time:.2f} seconds")
 
 @app.post("/clear-cache")
@@ -929,6 +1041,24 @@ async def reload_rag_components():
     return {
         "status": "rag_reloaded",
         "initialized": is_initialized,
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/sentence-completion-stats")
+def get_sentence_completion_stats():
+    """文章完全性統計"""
+    return {
+        "incomplete_responses_fixed": platform_generator.performance_metrics.get("incomplete_responses_fixed", 0),
+        "total_requests": sum([
+            platform_generator.performance_metrics.get("web_requests", 0),
+            platform_generator.performance_metrics.get("line_requests", 0)
+        ]),
+        "features": [
+            "Automatic sentence completion",
+            "Pattern-based completion",
+            "Fallback generation for incomplete responses",
+            "End-of-sentence validation"
+        ],
         "timestamp": datetime.now().isoformat()
     }
 

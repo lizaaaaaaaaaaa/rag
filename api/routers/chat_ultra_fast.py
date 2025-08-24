@@ -1,4 +1,4 @@
-# api/routers/chat_ultra_fast.py - Web/LINE分離・テンプレート独立化版（完全修正版）
+# api/routers/chat_ultra_fast.py - Web/LINE分離・テンプレート独立化版 + 文章途切れ対策（完全修正版）
 
 import logging
 import os
@@ -329,8 +329,61 @@ ZEH補助金：
 何でもお聞きください😊"""
         }
 
+    # ---------------------------
+    # 文章完全性の確保（★新規）
+    # ---------------------------
+    def ensure_response_completeness(self, text: str, platform: str, query: str = "") -> str:
+        """プラットフォーム別文章完全性確保"""
+        if not text or len(text.strip()) < 5:
+            return self._generate_platform_fallback(query, platform)
+        
+        text = text.strip()
+        
+        # 文末チェックと補完
+        if not text.endswith(('。', '！', '？', '.', '!', '?')):
+            # 特定の途切れパターンの補完
+            if text.endswith('や'):  # 「土地探しや」のケース
+                if platform == "line":
+                    text += "建築準備を進めることが大切です✨"
+                else:
+                    text += "建築準備を進めることをお勧めします。"
+            elif text.endswith('重要'):  # 「重要」のケース
+                if platform == "line":
+                    text += 'です😊詳しくはお気軽にご相談ください。'
+                else:
+                    text += 'です。詳しくはお気軽にご相談ください。'
+            elif text.endswith('必要'):
+                text += 'です。'
+            elif text.endswith('について'):
+                text += 'は、詳細をご案内いたします。'
+            elif text.endswith('選定') or text.endswith('検討'):
+                text += 'も重要なポイントです。'
+            elif text.endswith('ます') or text.endswith('です'):
+                text += '。'
+            elif text.endswith('た') or text.endswith('る'):
+                text += '。'
+            elif text.endswith('、'):
+                text = text[:-1] + '。'
+            elif text.endswith('は') or text.endswith('が'):
+                text += '重要です。'
+            elif text.endswith('ので') or text.endswith('ため'):
+                text += '、お気軽にご相談ください。'
+            else:
+                # プラットフォーム別の一般補完
+                if len(text) > 20:
+                    text += '。'
+                elif len(text) > 10:
+                    if platform == "line":
+                        text += '。詳しくはお問い合わせください😊'
+                    else:
+                        text += '。詳しくはお問い合わせください。'
+                else:
+                    text = self._generate_platform_fallback(query, platform)
+        
+        return text
+
     async def generate_separated_response(self, query: str, platform: str = "web", user: str = "unknown") -> Dict[str, Any]:
-        """プラットフォーム分離応答生成（ハルシネーション対策強化版）"""
+        """プラットフォーム分離応答生成（文章完全性強化版）"""
         start_time = time.time()
         self.performance_metrics[f"{platform}_requests"] += 1
 
@@ -338,8 +391,12 @@ ZEH補助金：
             # 1) プラットフォーム別キャッシュチェック
             cached_response = self.cache.get(query, platform)
             if cached_response:
+                # 🔧 キャッシュ応答も完全性チェック
+                complete_cached = self.ensure_response_completeness(
+                    cached_response["answer"], platform, query
+                )
                 return {
-                    "answer": cached_response["answer"],
+                    "answer": complete_cached,
                     "processing_time": time.time() - start_time,
                     "source": "cache",
                     "platform": platform,
@@ -347,6 +404,7 @@ ZEH補助金：
                     "anti_hallucination_used": cached_response.get("meta", {}).get(
                         "anti_hallucination_used", False
                     ),
+                    "sentence_complete": complete_cached.endswith(('。', '！', '？', '.', '!', '?'))
                 }
 
             # 2) プラットフォーム別テンプレートマッチング
@@ -356,47 +414,60 @@ ZEH補助金：
             if template_response:
                 self.performance_metrics[f"{platform}_template_hits"] += 1
                 
+                # 🔧 テンプレート応答の完全性チェック
+                complete_template = self.ensure_response_completeness(
+                    template_response, platform, query
+                )
+                
                 # ハルシネーション対策の適用（テンプレート応答にも適用）
                 if ANTI_HALLUCINATION_AVAILABLE:
                     try:
                         enhanced_result = await enhance_web_chat_response(
                             query=query,
-                            original_response=template_response,
+                            original_response=complete_template,
                             user_context={"username": user, "platform": platform}
                         )
                         
+                        # 🔧 強化結果も完全性チェック
+                        final_enhanced = self.ensure_response_completeness(
+                            enhanced_result["answer"], platform, query
+                        )
+                        
                         result = {
-                            "answer": enhanced_result["answer"],
+                            "answer": final_enhanced,
                             "processing_time": time.time() - start_time,
                             "source": "template_enhanced",
                             "platform": platform,
                             "status": "ok",
                             "anti_hallucination_used": enhanced_result.get("anti_hallucination_used", False),
                             "verification": enhanced_result.get("verification_note"),
-                            "confidence": enhanced_result.get("confidence_level")
+                            "confidence": enhanced_result.get("confidence_level"),
+                            "sentence_complete": final_enhanced.endswith(('。', '！', '？', '.', '!', '?'))
                         }
                         
                         self.performance_metrics["anti_hallucination_used"] += 1
                         
                     except Exception as enhance_error:
                         logger.warning(f"Template enhancement error: {enhance_error}")
-                        # エラー時は元のテンプレート応答を使用
+                        # エラー時は完全性チェック済みテンプレート応答を使用
                         result = {
-                            "answer": template_response,
+                            "answer": complete_template,
                             "processing_time": time.time() - start_time,
                             "source": "template",
                             "platform": platform,
                             "status": "ok",
                             "anti_hallucination_used": False,
+                            "sentence_complete": complete_template.endswith(('。', '！', '？', '.', '!', '?'))
                         }
                 else:
                     result = {
-                        "answer": template_response,
+                        "answer": complete_template,
                         "processing_time": time.time() - start_time,
                         "source": "template",
                         "platform": platform,
                         "status": "ok",
                         "anti_hallucination_used": False,
+                        "sentence_complete": complete_template.endswith(('。', '！', '？', '.', '!', '?'))
                     }
                 
                 self.cache.set(query, result, platform)
@@ -405,23 +476,34 @@ ZEH補助金：
             # 3) プラットフォーム別フォールバック（ハルシネーション対策付き）
             fallback_response = self._generate_platform_fallback(query, platform)
             
+            # 🔧 フォールバック応答の完全性チェック
+            complete_fallback = self.ensure_response_completeness(
+                fallback_response, platform, query
+            )
+            
             # ハルシネーション対策をフォールバックにも適用
             if ANTI_HALLUCINATION_AVAILABLE:
                 try:
                     enhanced_result = await enhance_web_chat_response(
                         query=query,
-                        original_response=fallback_response,
+                        original_response=complete_fallback,
                         user_context={"username": user, "platform": platform}
                     )
                     
+                    # 🔧 最終強化結果も完全性チェック
+                    final_enhanced_fallback = self.ensure_response_completeness(
+                        enhanced_result["answer"], platform, query
+                    )
+                    
                     result = {
-                        "answer": enhanced_result["answer"],
+                        "answer": final_enhanced_fallback,
                         "processing_time": time.time() - start_time,
                         "source": "fallback_enhanced",
                         "platform": platform,
                         "status": "ok",
                         "anti_hallucination_used": enhanced_result.get("anti_hallucination_used", False),
                         "verification": enhanced_result.get("verification_note"),
+                        "sentence_complete": final_enhanced_fallback.endswith(('。', '！', '？', '.', '!', '?'))
                     }
                     
                     self.performance_metrics["anti_hallucination_used"] += 1
@@ -429,21 +511,23 @@ ZEH補助金：
                 except Exception as enhance_error:
                     logger.warning(f"Fallback enhancement error: {enhance_error}")
                     result = {
-                        "answer": fallback_response,
+                        "answer": complete_fallback,
                         "processing_time": time.time() - start_time,
                         "source": "fallback",
                         "platform": platform,
                         "status": "ok",
                         "anti_hallucination_used": False,
+                        "sentence_complete": complete_fallback.endswith(('。', '！', '？', '.', '!', '?'))
                     }
             else:
                 result = {
-                    "answer": fallback_response,
+                    "answer": complete_fallback,
                     "processing_time": time.time() - start_time,
                     "source": "fallback",
                     "platform": platform,
                     "status": "ok",
                     "anti_hallucination_used": False,
+                    "sentence_complete": complete_fallback.endswith(('。', '！', '？', '.', '!', '?'))
                 }
             
             self.cache.set(query, result, platform)
@@ -451,13 +535,19 @@ ZEH補助金：
 
         except Exception as e:
             logger.error(f"Separated response generation error: {e}")
+            emergency_response = self._generate_platform_fallback(query, platform)
+            complete_emergency = self.ensure_response_completeness(
+                emergency_response, platform, query
+            )
+            
             return {
-                "answer": self._generate_platform_fallback(query, platform),
+                "answer": complete_emergency,
                 "processing_time": time.time() - start_time,
                 "source": "error",
                 "platform": platform,
                 "status": "error",
                 "anti_hallucination_used": False,
+                "sentence_complete": complete_emergency.endswith(('。', '！', '？', '.', '!', '?'))
             }
 
     def _match_template(self, query: str, templates: Dict[str, str], platform: str) -> Optional[str]:
@@ -586,7 +676,7 @@ separated_generator = SeparatedResponseGenerator()
 # ============================================================
 @router.post("/", summary="Web/LINE分離 AI チャット（ハルシネーション対策強化版）")
 async def separated_chat_endpoint(req: SeparatedChatRequest, request: Request):
-    """Web/LINE分離チャットエンドポイント（ハルシネーション対策強化版）"""
+    """Web/LINE分離チャットエンドポイント（ハルシネーション対策強化版 + 文章完全性チェック）"""
 
     overall_start = time.time()
     platform = req.platform or "web"
@@ -602,18 +692,20 @@ async def separated_chat_endpoint(req: SeparatedChatRequest, request: Request):
 
         # パフォーマンスログ
         logger.info(
-            "✅ %s response: %.3fs, source=%s, length=%d, anti_hallucination=%s",
+            "✅ %s response: %.3fs, source=%s, length=%d, anti_hallucination=%s, sentence_complete=%s",
             platform.upper(),
             total_time,
             response.get("source"),
             len(response.get("answer", "")),
             response.get("anti_hallucination_used", False),
+            response.get("sentence_complete", True),
         )
 
         return {
             "answer": response["answer"],
             "sources": [],  # ソース情報は非表示
             "status": response["status"],
+            "sentence_complete": response.get("sentence_complete", True),  # ★追加
             "performance": {
                 "total_time": total_time,
                 "processing_time": response.get("processing_time", 0.0),
@@ -636,9 +728,12 @@ async def separated_chat_endpoint(req: SeparatedChatRequest, request: Request):
         logger.error(f"❌ Separated chat error [{error_id}]: {e}")
         logger.error(traceback.format_exc())
 
-        # プラットフォーム別エラー応答
+        # プラットフォーム別エラー応答（完全性チェックを適用）
         fallback_answer = separated_generator._generate_platform_fallback(
             req.question if hasattr(req, "question") else "", platform
+        )
+        fallback_answer = separated_generator.ensure_response_completeness(
+            fallback_answer, platform, req.question if hasattr(req, "question") else ""
         )
 
         return JSONResponse(
@@ -647,6 +742,7 @@ async def separated_chat_endpoint(req: SeparatedChatRequest, request: Request):
                 "answer": fallback_answer,
                 "sources": [],
                 "status": "fallback",
+                "sentence_complete": fallback_answer.endswith(('。', '！', '？', '.', '!', '?')),  # ★追加
                 "error_id": error_id,
                 "performance": {
                     "total_time": total_time,
@@ -680,6 +776,7 @@ def get_separated_performance_stats():
             "ハルシネーション対策強化",
             "補助金テンプレート追加",
             "AI相談誤検知防止（完全修正）",
+            "文章途切れ自動補完（新機能）",
         ],
         "target_metrics": {
             "web_response_time": "< 2.0s",
@@ -728,7 +825,8 @@ def get_separated_templates():
         "fixes_applied": [
             "補助金テンプレート追加",
             "AI相談キーワード完全修正（誤検知防止）",
-            "一般的な質問語句を削除"
+            "一般的な質問語句を削除",
+            "文章途切れ自動補完の追加"
         ],
         "timestamp": datetime.now().isoformat(),
     }
