@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
@@ -63,6 +64,13 @@
             display: flex;
             flex-direction: column;
             gap: 10px;
+        }
+        .welcome-message {
+            text-align: center;
+            color: #666;
+            font-size: 0.95rem;
+            padding: 20px;
+            margin: auto 0;
         }
         .message {
             display: flex;
@@ -223,7 +231,11 @@
             <span class="speed-indicator">⚡超高速</span>
         </div>
         <div class="chat-messages" id="chatMessages">
-            <!-- 初期メッセージはJavaScriptで動的追加 -->
+            <!-- 初期メッセージはシンプルな案内のみ -->
+            <div class="welcome-message" id="welcomeMessage">
+                家づくりについて何でもお聞きください。<br>
+                お気軽にご質問をどうぞ。
+            </div>
         </div>
         <div class="typing-indicator" id="typingIndicator" style="display:none;">
             <span class="dot"></span>
@@ -249,14 +261,17 @@
                 this.chatInput = document.getElementById('chatInput');
                 this.sendButton = document.getElementById('sendButton');
                 this.typingIndicator = document.getElementById('typingIndicator');
+                this.welcomeMessage = document.getElementById('welcomeMessage');
 
                 this.initializeEventListeners();
                 this.adjustTextareaHeight();
-                this.showInitialGreeting();
+                // 初期挨拶は表示しない（ユーザーの質問に即座に応答するため）
+                // this.showInitialGreeting(); // 削除
                 
                 // パフォーマンス監視（Web専用）
                 this.responseMetrics = [];
                 this.webOptimizedMode = true;
+                this.hasFirstMessage = false;
             }
 
             initializeEventListeners() {
@@ -270,53 +285,6 @@
                 this.chatInput.addEventListener('input', () => this.adjustTextareaHeight());
             }
 
-            showInitialGreeting() {
-                /**
-                 * AI相談開始時の挨拶メッセージ（Web専用）
-                 * 問題解決：AI相談を押した後に必ず挨拶文を表示
-                 */
-                const greetingMessage = `🤖 AI住まい相談へようこそ！
-
-住まいづくりに関するご質問をお気軽にどうぞ！
-
-よくあるご質問：
-・坪単価について教えて
-・標準仕様はどんな感じ？
-・耐震性能について知りたい
-・断熱性能はどのくらい？
-
-何でもお聞きください😊`;
-
-                this.addAIMessage(greetingMessage, {source: 'web_greeting', platform: 'web'}, 0);
-                this.addQuickReplyButtons();
-            }
-
-            addQuickReplyButtons() {
-                /**
-                 * Web版クイック返信ボタン
-                 */
-                const quickReplies = [
-                    '坪単価について教えて',
-                    '標準仕様について',
-                    '断熱性能について',
-                    '耐震性能について',
-                    '資料請求したい',
-                    '展示場見学したい'
-                ];
-
-                const buttonsHtml = quickReplies.map(reply => 
-                    `<button class="quick-reply-btn" onclick="chatUI.sendQuickReply('${reply}')">${reply}</button>`
-                ).join('');
-
-                const lastMessage = this.chatMessages.lastElementChild;
-                if (lastMessage) {
-                    const quickReplyDiv = document.createElement('div');
-                    quickReplyDiv.className = 'quick-reply-buttons';
-                    quickReplyDiv.innerHTML = buttonsHtml;
-                    lastMessage.querySelector('.message-content').appendChild(quickReplyDiv);
-                }
-            }
-
             adjustTextareaHeight() {
                 this.chatInput.style.height = 'auto';
                 this.chatInput.style.height = Math.min(this.chatInput.scrollHeight, 120) + 'px';
@@ -325,6 +293,12 @@
             async sendMessage() {
                 const message = this.chatInput.value.trim();
                 if (!message) return;
+                
+                // 初回メッセージ時にウェルカムメッセージを削除
+                if (!this.hasFirstMessage && this.welcomeMessage) {
+                    this.welcomeMessage.remove();
+                    this.hasFirstMessage = true;
+                }
                 
                 this.addUserMessage(message);
                 this.chatInput.value = '';
@@ -351,7 +325,6 @@
             async callWebOptimizedAPI(question) {
                 /**
                  * Web専用API呼び出し（プラットフォーム分離対応）
-                 * 問題解決：WebチャットとLINEチャットの応答分離
                  */
                 try {
                     const response = await fetch(this.API_URL, {
@@ -359,9 +332,9 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ 
                             question, 
-                            username: `web-user-${Date.now()}` 
-                        }),
-                        timeout: 5000 // 5秒タイムアウト
+                            username: `web-user-${Date.now()}`,
+                            platform: 'web'  // プラットフォーム明示
+                        })
                     });
                     
                     if (!response.ok) {
@@ -416,6 +389,14 @@
                         processing_time: 0,
                         template_based: true
                     };
+                } else if (q.includes('補助金') || q.includes('助成金')) {
+                    return {
+                        answer: '住宅購入時の補助金制度についてご案内します。ZEH補助金、こどもエコすまい支援事業、住宅ローン減税など様々な制度があります。制度は年度により変更されますので、最新情報はスタッフまでお問い合わせください。',
+                        source: 'web_local_template',
+                        platform: 'web',
+                        processing_time: 0,
+                        template_based: true
+                    };
                 } else if (q.includes('資料') || q.includes('パンフレット')) {
                     return {
                         answer: '資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。3営業日以内にお送りいたします。',
@@ -433,11 +414,6 @@
                         template_based: true
                     };
                 }
-            }
-
-            sendQuickReply(message) {
-                this.chatInput.value = message;
-                this.sendMessage();
             }
 
             recordPerformance(responseTime, platform, source) {

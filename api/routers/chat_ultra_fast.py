@@ -1,4 +1,4 @@
-# api/routers/chat_ultra_fast.py - Web/LINE分離・テンプレート独立化版（ハルシネーション対策強化）
+# api/routers/chat_ultra_fast.py - Web/LINE分離・テンプレート独立化版（完全修正版）
 
 import logging
 import os
@@ -11,7 +11,7 @@ import concurrent.futures
 from uuid import uuid4
 import traceback
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 
@@ -117,7 +117,7 @@ class SeparatedFastCache:
         }
 
 # ============================================================
-# Web/LINE分離応答生成クラス
+# Web/LINE分離応答生成クラス（完全修正版）
 # ============================================================
 class SeparatedResponseGenerator:
     def __init__(self) -> None:
@@ -131,7 +131,7 @@ class SeparatedResponseGenerator:
         }
 
     def _load_web_templates(self) -> Dict[str, str]:
-        """Web専用テンプレート（シンプル・読みやすい）"""
+        """Web専用テンプレート（補助金テンプレート追加済み）"""
         return {
             "坪単価": """坪単価についてご案内いたします。
 
@@ -201,6 +201,32 @@ class SeparatedResponseGenerator:
 
 安心・安全な住まいをお約束いたします。""",
 
+            "補助金": """住宅購入時の補助金・支援制度についてご案内いたします。
+
+主な補助金制度：
+
+ZEH補助金：
+・高性能住宅への補助
+・省エネ基準を満たす住宅が対象
+・補助額：定額55万円～（条件により異なる）
+
+こどもエコすまい支援事業：
+・子育て世帯・若年夫婦世帯への支援
+・最大100万円の補助金
+・省エネ性能に応じて補助額が変動
+
+住宅ローン減税：
+・所得税の控除制度
+・13年間の減税メリット
+・年間最大35万円の控除（条件により異なる）
+
+地域独自の補助金：
+・自治体による支援制度
+・地域により内容が異なります
+・市町村の窓口でご確認ください
+
+※制度は年度ごとに変更される可能性があります。最新情報については公式サイトでご確認いただくか、スタッフまでお問い合わせください。""",
+
             "資料請求": """資料請求を承ります。
 
 以下の情報をお送りください：
@@ -217,7 +243,7 @@ class SeparatedResponseGenerator:
 
 3営業日以内にお送りいたします。""",
 
-            "AI相談": """🤖 AI住まい相談へようこそ！
+            "AI相談": """AI住まい相談へようこそ！
 
 住まいづくりに関するご質問をお気軽にどうぞ！
 
@@ -226,12 +252,13 @@ class SeparatedResponseGenerator:
 ・標準仕様はどんな感じ？
 ・耐震性能について知りたい
 ・断熱性能はどのくらい？
+・補助金について教えて
 
 何でもお聞きください😊"""
         }
 
     def _load_line_templates(self) -> Dict[str, str]:
-        """LINE専用テンプレート（絵文字・改行最適化）"""
+        """LINE専用テンプレート（絵文字・改行最適化、補助金追加）"""
         return {
             "坪単価": """💰 坪単価についてご案内いたします
 
@@ -264,6 +291,29 @@ class SeparatedResponseGenerator:
 
 より詳しい仕様書をご希望の場合は、資料請求または展示場見学をお申し込みください。""",
 
+            "補助金": """💰 住宅購入時の補助金制度についてご案内します
+
+**主な補助金制度**
+
+🏠 **ZEH補助金**
+高性能住宅への補助
+定額55万円～
+
+🌱 **こどもエコすまい支援事業**
+子育て世帯への支援
+最大100万円
+
+🏦 **住宅ローン減税**
+所得税の控除制度
+13年間の減税メリット
+
+📋 **地域独自の補助金**
+自治体による支援
+地域により異なります
+
+※制度は年度ごとに変更される可能性があります。
+最新情報はスタッフまでお問い合わせください。""",
+
             "AI相談": """🤖 AI住まい相談を開始します！
 
 キノエデザインの住まいAIコンシェルジュです。
@@ -274,6 +324,7 @@ class SeparatedResponseGenerator:
 ・標準仕様はどんな感じ？
 ・耐震性能について知りたい
 ・断熱性能はどのくらい？
+・補助金について教えて
 
 何でもお聞きください😊"""
         }
@@ -410,17 +461,19 @@ class SeparatedResponseGenerator:
             }
 
     def _match_template(self, query: str, templates: Dict[str, str], platform: str) -> Optional[str]:
-        """プラットフォーム別テンプレートマッチング"""
+        """プラットフォーム別テンプレートマッチング（完全修正版）"""
         query_lower = query.lower()
 
-        # より詳細なキーワードマッピング
+        # 修正されたキーワードマッピング（AI相談の誤検知を完全に防ぐ）
         keyword_mapping: Dict[str, List[str]] = {
             "坪単価": ["坪単価", "坪たんか", "価格", "値段", "費用", "コスト", "いくら", "金額", "料金"],
             "標準仕様": ["標準仕様", "仕様", "設備", "標準", "基本", "スタンダード", "何が付く"],
-            "断熱性能": ["断熱", "断熱性能", "省エネ", "温度", "暖房", "冷房", "光熱費", "ua値"],
+            "断熱性能": ["断熱", "断熱性能", "省エネ", "温度", "暖房", "冷房", "光熱費", "ua値", "c値"],
             "耐震性能": ["耐震", "地震", "耐震性能", "安全", "強度", "構造", "震災"],
+            "補助金": ["補助金", "助成金", "支援金", "補助制度", "支援制度", "zeh補助", "こどもエコ"],
             "資料請求": ["資料", "パンフレット", "カタログ", "資料請求", "送って", "郵送"],
-            "AI相談": ["ai相談", "相談", "質問", "聞きたい", "教えて", "知りたい"],
+            # AI相談は明示的な呼びかけのみに制限（一般的な語句を削除）
+            "AI相談": ["ai相談を開始", "aiに相談", "ai住まい相談を開始"],
         }
 
         for template_key, keywords in keyword_mapping.items():
@@ -448,8 +501,6 @@ class SeparatedResponseGenerator:
 
 お客様のご希望をお聞かせいただければ、最適なプランをご提案いたします。何からお聞きになりたいでしょうか？"""
 
-            elif "坪単価" in q_lower or "価格" in q_lower:
-                return "💰 坪単価についてご案内いたします。お客様のご希望される仕様によって異なりますので、詳細なお見積りをご提供いたします。お気軽にお問い合わせください。"
             else:
                 return """ご質問ありがとうございます✨
 
@@ -475,8 +526,6 @@ class SeparatedResponseGenerator:
 
 お客様のご希望をお聞かせいただければ、最適なプランをご提案いたします。"""
 
-            elif "坪単価" in q_lower or "価格" in q_lower:
-                return "坪単価についてご案内いたします。お客様のご希望される仕様によって異なりますので、詳細なお見積りをご提供いたします。お気軽にお問い合わせください。"
             else:
                 return """お尋ねの内容について詳しくご案内いたします。
 
@@ -486,6 +535,7 @@ class SeparatedResponseGenerator:
 ・住宅性能や仕様について
 ・資料請求・展示場見学について
 ・資金計画・住宅ローンについて
+・補助金制度について
 
 具体的にお聞かせいただければ、詳しくご案内いたします。住宅に関することでしたら何でもお気軽にお問い合わせください。"""
 
@@ -628,6 +678,8 @@ def get_separated_performance_stats():
             "プラットフォーム最適化テンプレート",
             "分離キャッシュシステム",
             "ハルシネーション対策強化",
+            "補助金テンプレート追加",
+            "AI相談誤検知防止（完全修正）",
         ],
         "target_metrics": {
             "web_response_time": "< 2.0s",
@@ -673,5 +725,10 @@ def get_separated_templates():
         },
         "platform_separation_enabled": True,
         "anti_hallucination_enabled": ANTI_HALLUCINATION_AVAILABLE,
+        "fixes_applied": [
+            "補助金テンプレート追加",
+            "AI相談キーワード完全修正（誤検知防止）",
+            "一般的な質問語句を削除"
+        ],
         "timestamp": datetime.now().isoformat(),
     }
