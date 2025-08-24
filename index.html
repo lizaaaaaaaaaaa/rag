@@ -2,7 +2,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AIチャット - 高速応答版</title>
+    <title>AI住まい相談 - Web版</title>
     <style>
         body {
             background: #e5edf5;
@@ -44,6 +44,16 @@
             background: rgba(255,255,255,0.2);
             padding: 2px 6px;
             border-radius: 8px;
+        }
+        .platform-indicator {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 0.7rem;
+            background: rgba(255,255,255,0.15);
+            padding: 1px 4px;
+            border-radius: 4px;
         }
         .chat-messages {
             flex: 1;
@@ -194,6 +204,9 @@
         .fast-response {
             border-left: 3px solid #4caf50;
         }
+        .web-optimized {
+            border-left: 3px solid #2196f3;
+        }
         /* モバイルレスポンシブ */
         @media (max-width: 480px) {
             .chat-container { height: 100vh; max-width: 100vw; border-radius: 0;}
@@ -205,21 +218,12 @@
 <body>
     <div class="chat-container">
         <div class="chat-header">
-            AIチャット
-            <span class="speed-indicator">⚡高速</span>
+            AI住まい相談
+            <span class="platform-indicator">Web</span>
+            <span class="speed-indicator">⚡超高速</span>
         </div>
         <div class="chat-messages" id="chatMessages">
-            <div class="message ai">
-                <div class="message-content fast-response">
-                    こんにちは！住まいづくりのことなら何でも聞いてください！
-                    <div class="quick-reply-buttons">
-                        <button class="quick-reply-btn" onclick="chatUI.sendQuickReply('坪単価について教えて')">坪単価</button>
-                        <button class="quick-reply-btn" onclick="chatUI.sendQuickReply('標準仕様について')">標準仕様</button>
-                        <button class="quick-reply-btn" onclick="chatUI.sendQuickReply('断熱性能について')">断熱性能</button>
-                        <button class="quick-reply-btn" onclick="chatUI.sendQuickReply('資料請求したい')">資料請求</button>
-                    </div>
-                </div>
-            </div>
+            <!-- 初期メッセージはJavaScriptで動的追加 -->
         </div>
         <div class="typing-indicator" id="typingIndicator" style="display:none;">
             <span class="dot"></span>
@@ -235,11 +239,11 @@
         </div>
     </div>
     <script>
-        class OptimizedChatUI {
+        class WebOptimizedChatUI {
             constructor() {
-                // 高速化対応: main.pyの超高速エンドポイントを使用
-                this.API_URL = 'https://rag-api-190389115361.asia-northeast1.run.app';
-                this.FALLBACK_API_URL = 'https://rag-api-190389115361.asia-northeast1.run.app/chat-ultra-fast';
+                // Web専用エンドポイント（プラットフォーム分離対応）
+                this.API_URL = 'https://rag-api-190389115361.asia-northeast1.run.app/chat';
+                this.PLATFORM = 'web';
 
                 this.chatMessages = document.getElementById('chatMessages');
                 this.chatInput = document.getElementById('chatInput');
@@ -248,10 +252,11 @@
 
                 this.initializeEventListeners();
                 this.adjustTextareaHeight();
+                this.showInitialGreeting();
                 
-                // パフォーマンス監視
+                // パフォーマンス監視（Web専用）
                 this.responseMetrics = [];
-                this.consecutiveSlowResponses = 0;
+                this.webOptimizedMode = true;
             }
 
             initializeEventListeners() {
@@ -263,6 +268,53 @@
                     }
                 });
                 this.chatInput.addEventListener('input', () => this.adjustTextareaHeight());
+            }
+
+            showInitialGreeting() {
+                /**
+                 * AI相談開始時の挨拶メッセージ（Web専用）
+                 * 問題解決：AI相談を押した後に必ず挨拶文を表示
+                 */
+                const greetingMessage = `🤖 AI住まい相談へようこそ！
+
+住まいづくりに関するご質問をお気軽にどうぞ！
+
+よくあるご質問：
+・坪単価について教えて
+・標準仕様はどんな感じ？
+・耐震性能について知りたい
+・断熱性能はどのくらい？
+
+何でもお聞きください😊`;
+
+                this.addAIMessage(greetingMessage, {source: 'web_greeting', platform: 'web'}, 0);
+                this.addQuickReplyButtons();
+            }
+
+            addQuickReplyButtons() {
+                /**
+                 * Web版クイック返信ボタン
+                 */
+                const quickReplies = [
+                    '坪単価について教えて',
+                    '標準仕様について',
+                    '断熱性能について',
+                    '耐震性能について',
+                    '資料請求したい',
+                    '展示場見学したい'
+                ];
+
+                const buttonsHtml = quickReplies.map(reply => 
+                    `<button class="quick-reply-btn" onclick="chatUI.sendQuickReply('${reply}')">${reply}</button>`
+                ).join('');
+
+                const lastMessage = this.chatMessages.lastElementChild;
+                if (lastMessage) {
+                    const quickReplyDiv = document.createElement('div');
+                    quickReplyDiv.className = 'quick-reply-buttons';
+                    quickReplyDiv.innerHTML = buttonsHtml;
+                    lastMessage.querySelector('.message-content').appendChild(quickReplyDiv);
+                }
             }
 
             adjustTextareaHeight() {
@@ -282,28 +334,34 @@
                 const startTime = performance.now();
 
                 try {
-                    const response = await this.callOptimizedAPI(message);
+                    const response = await this.callWebOptimizedAPI(message);
                     const responseTime = performance.now() - startTime;
                     
-                    this.recordPerformance(responseTime, response.source);
+                    this.recordPerformance(responseTime, response.platform, response.source);
                     this.addAIMessage(response.answer, response, responseTime);
                     
                 } catch (error) {
-                    console.error('API Error:', error);
+                    console.error('Web API Error:', error);
                     this.showError('エラーが発生しました。時間を置いて再度お試しください。');
                 } finally {
                     this.setLoading(false);
                 }
             }
 
-            async callOptimizedAPI(question) {
-                // 1. 超高速版エンドポイント（main.py /chat）を最初に試行
+            async callWebOptimizedAPI(question) {
+                /**
+                 * Web専用API呼び出し（プラットフォーム分離対応）
+                 * 問題解決：WebチャットとLINEチャットの応答分離
+                 */
                 try {
-                    const response = await fetch(`${this.API_URL}/chat`, {
+                    const response = await fetch(this.API_URL, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ question, username: 'web-user-optimized' }),
-                        timeout: 3000 // 3秒タイムアウト
+                        body: JSON.stringify({ 
+                            question, 
+                            username: `web-user-${Date.now()}` 
+                        }),
+                        timeout: 5000 // 5秒タイムアウト
                     });
                     
                     if (!response.ok) {
@@ -314,80 +372,65 @@
                     return {
                         answer: data.answer || 'すみません、回答できませんでした。',
                         source: data.performance?.source || 'unknown',
+                        platform: data.performance?.platform || 'web',
                         processing_time: data.performance?.processing_time || 0,
-                        fast_startup: data.performance?.fast_startup || false
+                        template_based: data.performance?.template_based || false,
+                        rag_enabled: data.performance?.rag_enabled || false
                     };
                     
                 } catch (error) {
-                    console.warn('Primary endpoint failed, trying fallback:', error);
+                    console.error('Web API call failed:', error);
                     
-                    // 2. フォールバック: ultra-fastエンドポイント
-                    try {
-                        const response = await fetch(`${this.FALLBACK_API_URL}`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ question, username: 'web-user-fallback' }),
-                            timeout: 5000
-                        });
-                        
-                        if (!response.ok) {
-                            throw new Error(`Fallback HTTP ${response.status}`);
-                        }
-                        
-                        const data = await response.json();
-                        return {
-                            answer: data.answer || 'すみません、回答できませんでした。',
-                            source: 'fallback-' + (data.performance?.source || 'unknown'),
-                            processing_time: data.performance?.processing_time || 0,
-                            fast_startup: true
-                        };
-                        
-                    } catch (fallbackError) {
-                        console.error('Fallback also failed:', fallbackError);
-                        
-                        // 3. 最終フォールバック: ローカル応答
-                        return this.getLocalResponse(question);
-                    }
+                    // フォールバック：ローカル応答（Web専用）
+                    return this.getWebLocalResponse(question);
                 }
             }
 
-            getLocalResponse(question) {
+            getWebLocalResponse(question) {
+                /**
+                 * Web専用ローカル応答（プラットフォーム分離対応）
+                 */
                 const q = question.toLowerCase();
                 
                 if (q.includes('坪単価') || q.includes('価格') || q.includes('費用')) {
                     return {
                         answer: '坪単価についてご案内いたします。標準仕様では約70〜85万円/坪が目安となります。詳細なお見積りをご提供いたしますので、お気軽にお問い合わせください。',
-                        source: 'local-template',
+                        source: 'web_local_template',
+                        platform: 'web',
                         processing_time: 0,
-                        fast_startup: true
+                        template_based: true
                     };
                 } else if (q.includes('仕様') || q.includes('設備')) {
                     return {
                         answer: '標準仕様についてご説明いたします。耐震等級3の長期優良住宅を基準とし、高品質な住まいをご提供しております。詳細は展示場でご確認いただけます。',
-                        source: 'local-template',
+                        source: 'web_local_template',
+                        platform: 'web',
                         processing_time: 0,
-                        fast_startup: true
+                        template_based: true
                     };
                 } else if (q.includes('断熱') || q.includes('性能')) {
                     return {
                         answer: '断熱性能については、高品質な断熱材を使用し、快適な住環境を実現しています。ZEH基準に対応した省エネ性能で、一年中快適にお過ごしいただけます。',
-                        source: 'local-template',
+                        source: 'web_local_template',
+                        platform: 'web',
                         processing_time: 0,
-                        fast_startup: true
+                        template_based: true
                     };
                 } else if (q.includes('資料') || q.includes('パンフレット')) {
                     return {
                         answer: '資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。3営業日以内にお送りいたします。',
-                        source: 'local-template',
+                        source: 'web_local_template',
+                        platform: 'web',
                         processing_time: 0,
-                        fast_startup: true
+                        template_based: true
                     };
                 } else {
                     return {
                         answer: 'お尋ねの内容について詳しくご案内いたします。住宅に関することでしたら何でもお気軽にお問い合わせください。',
-                        source: 'local-fallback',
+                        source: 'web_local_fallback',
+                        platform: 'web',
                         processing_time: 0,
-                        fast_startup: true
+                        template_based: true
                     };
                 }
             }
@@ -397,21 +440,17 @@
                 this.sendMessage();
             }
 
-            recordPerformance(responseTime, source) {
+            recordPerformance(responseTime, platform, source) {
                 this.responseMetrics.push({
                     timestamp: Date.now(),
                     responseTime,
+                    platform,
                     source
                 });
                 
                 // 遅い応答の監視
-                if (responseTime > 2000) {
-                    this.consecutiveSlowResponses++;
-                    if (this.consecutiveSlowResponses >= 3) {
-                        console.warn('Multiple slow responses detected, consider optimizing');
-                    }
-                } else {
-                    this.consecutiveSlowResponses = 0;
+                if (responseTime > 3000) {
+                    console.warn('Slow response detected:', responseTime + 'ms');
                 }
                 
                 // メトリクス履歴のクリーンアップ
@@ -433,15 +472,18 @@
                 messageDiv.className = 'message ai';
                 
                 const isFast = responseTime < 1000;
+                const isWebOptimized = metadata.platform === 'web';
                 const fastClass = isFast ? 'fast-response' : '';
+                const webClass = isWebOptimized ? 'web-optimized' : '';
                 
                 const responseInfo = responseTime > 0 ? 
                     `<div class="response-info">
-                        ${responseTime < 1000 ? '⚡' : '🔄'} ${responseTime.toFixed(0)}ms | ${metadata.source || 'unknown'}
+                        ${responseTime < 1000 ? '⚡' : '🔄'} ${responseTime.toFixed(0)}ms | 
+                        ${metadata.platform || 'web'} | ${metadata.source || 'unknown'}
                      </div>` : '';
                 
                 messageDiv.innerHTML = `
-                    <div class="message-content ${fastClass}">
+                    <div class="message-content ${fastClass} ${webClass}">
                         ${this.formatMessage(message)}
                         ${responseInfo}
                     </div>
@@ -488,11 +530,14 @@
                 const avgResponseTime = this.responseMetrics.reduce((sum, m) => sum + m.responseTime, 0) / this.responseMetrics.length;
                 const fastResponses = this.responseMetrics.filter(m => m.responseTime < 1000).length;
                 const fastPercentage = (fastResponses / this.responseMetrics.length * 100).toFixed(1);
+                const webPlatformRequests = this.responseMetrics.filter(m => m.platform === 'web').length;
                 
-                console.log(`Performance Stats:
+                console.log(`Web Performance Stats:
+                - Platform: Web (${webPlatformRequests}/${this.responseMetrics.length} requests)
                 - Average Response Time: ${avgResponseTime.toFixed(0)}ms
                 - Fast Responses (<1s): ${fastPercentage}%
-                - Total Queries: ${this.responseMetrics.length}`);
+                - Total Queries: ${this.responseMetrics.length}
+                - Web Optimized Mode: ${this.webOptimizedMode}`);
             }
         }
 
@@ -500,11 +545,12 @@
         let chatUI;
         
         document.addEventListener('DOMContentLoaded', () => {
-            chatUI = new OptimizedChatUI();
+            chatUI = new WebOptimizedChatUI();
             
             // パフォーマンス統計の定期表示（開発時のみ）
-            if (window.location.hostname === 'localhost') {
+            if (window.location.hostname === 'localhost' || window.location.search.includes('debug=true')) {
                 setInterval(() => chatUI.showPerformanceStats(), 30000);
+                console.log('🌐 Web Optimized Chat UI initialized with platform separation');
             }
         });
     </script>

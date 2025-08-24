@@ -1,4 +1,4 @@
-# api/routers/chat_ultra_fast.py - LINEボットと品質統一版（ハルチネーション対策強化）
+# api/routers/chat_ultra_fast.py - Web/LINE分離・テンプレート独立化版（ハルシネーション対策強化）
 
 import logging
 import os
@@ -6,7 +6,7 @@ import asyncio
 import time
 import hashlib
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import concurrent.futures
 from uuid import uuid4
 import traceback
@@ -15,332 +15,545 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 
-# ハルチネーション対策統合機能をインポート
-from integration.anti_hallucination_integration import enhance_web_chat_response
-
+# loggerを先に定義
 logger = logging.getLogger(__name__)
+
+# ハルシネーション対策統合機能をインポート
+try:
+    from integration.anti_hallucination_integration import enhance_web_chat_response
+    ANTI_HALLUCINATION_AVAILABLE = True
+    logger.info("✅ Anti-hallucination integration available")
+except ImportError as e:
+    logger.warning(f"⚠️ Anti-hallucination integration not available: {e}")
+    ANTI_HALLUCINATION_AVAILABLE = False
 
 router = APIRouter()
 
-
 # ============================================================
-# 統一されたキャッシュシステム
+# Web/LINE分離キャッシュシステム
 # ============================================================
-class UnifiedFastCache:
+class SeparatedFastCache:
     def __init__(self, max_size: int = 1000):
-        self.cache: Dict[str, Dict[str, Any]] = {}
+        # プラットフォーム別キャッシュ分離
+        self.web_cache: Dict[str, Dict[str, Any]] = {}
+        self.line_cache: Dict[str, Dict[str, Any]] = {}
         self.access_times: Dict[str, float] = {}
         self.max_size = max_size
-        self.hits = 0
-        self.misses = 0
+        self.stats = {
+            "web_hits": 0, "web_misses": 0,
+            "line_hits": 0, "line_misses": 0
+        }
 
-    def _generate_key(self, query: str) -> str:
-        """クエリからキャッシュキーを生成"""
-        normalized = query.lower().strip()[:200]
+    def _generate_key(self, query: str, platform: str) -> str:
+        """プラットフォーム分離キー生成"""
+        normalized = f"{platform}:{query.lower().strip()[:200]}"
         return hashlib.md5(normalized.encode()).hexdigest()
 
-    def get(self, query: str) -> Optional[Dict[str, Any]]:
-        """キャッシュから回答を取得"""
-        key = self._generate_key(query)
-        if key in self.cache:
+    def get(self, query: str, platform: str = "web") -> Optional[Dict[str, Any]]:
+        """プラットフォーム別キャッシュ取得"""
+        key = self._generate_key(query, platform)
+        cache_dict = self.web_cache if platform == "web" else self.line_cache
+        
+        if key in cache_dict:
             self.access_times[key] = time.time()
-            self.hits += 1
-            logger.info(f"⚡ Cache HIT for: {query[:30]}...")
-            return self.cache[key]
-        self.misses += 1
+            self.stats[f"{platform}_hits"] += 1
+            logger.info(f"⚡ {platform.upper()} Cache HIT for: {query[:30]}...")
+            return cache_dict[key]
+        
+        self.stats[f"{platform}_misses"] += 1
         return None
 
-    def set(self, query: str, response: Dict[str, Any]) -> None:
-        """キャッシュに回答を保存"""
-        if len(self.cache) >= self.max_size:
+    def set(self, query: str, response: Dict[str, Any], platform: str = "web") -> None:
+        """プラットフォーム別キャッシュ保存"""
+        if len(self.web_cache) + len(self.line_cache) >= self.max_size:
             self._evict_oldest()
 
-        key = self._generate_key(query)
-        self.cache[key] = {
+        key = self._generate_key(query, platform)
+        cache_dict = self.web_cache if platform == "web" else self.line_cache
+        
+        cache_dict[key] = {
             "answer": response.get("answer", ""),
             "timestamp": time.time(),
             "query_original": query[:100],
-            "meta": {
-                "source": response.get("source"),
-                "anti_hallucination_used": response.get("anti_hallucination_used", False),
-            },
+            "platform": platform,
+            "source": response.get("source", "unknown"),
+            "meta": response.get("meta", {}),
         }
         self.access_times[key] = time.time()
-        logger.info(f"💾 Cache SET for: {query[:30]}...")
+        logger.info(f"💾 {platform.upper()} Cache SET for: {query[:30]}...")
 
     def _evict_oldest(self) -> None:
         """最も古いエントリを削除"""
         if self.access_times:
             oldest_key = min(self.access_times.keys(), key=lambda k: self.access_times[k])
-            del self.cache[oldest_key]
+            # どちらのキャッシュからも削除を試行
+            self.web_cache.pop(oldest_key, None)
+            self.line_cache.pop(oldest_key, None)
             del self.access_times[oldest_key]
 
     def get_stats(self) -> Dict[str, Any]:
-        """キャッシュ統計を取得"""
-        total = self.hits + self.misses
-        hit_rate = self.hits / total if total > 0 else 0.0
+        """プラットフォーム分離統計を取得"""
+        total_web = self.stats["web_hits"] + self.stats["web_misses"]
+        total_line = self.stats["line_hits"] + self.stats["line_misses"]
+        
         return {
-            "size": len(self.cache),
+            "platform_separation_enabled": True,
+            "cache_sizes": {
+                "web": len(self.web_cache),
+                "line": len(self.line_cache),
+                "total": len(self.web_cache) + len(self.line_cache)
+            },
             "max_size": self.max_size,
-            "hits": self.hits,
-            "misses": self.misses,
-            "hit_rate": hit_rate,
-            "total_requests": total,
+            "web_stats": {
+                "hits": self.stats["web_hits"],
+                "misses": self.stats["web_misses"],
+                "hit_rate": self.stats["web_hits"] / total_web if total_web > 0 else 0.0
+            },
+            "line_stats": {
+                "hits": self.stats["line_hits"],
+                "misses": self.stats["line_misses"],
+                "hit_rate": self.stats["line_hits"] / total_line if total_line > 0 else 0.0
+            }
         }
 
-
 # ============================================================
-# LINEボットと統一された応答生成クラス
+# Web/LINE分離応答生成クラス
 # ============================================================
-class UnifiedResponseGenerator:
+class SeparatedResponseGenerator:
     def __init__(self) -> None:
-        self.cache = UnifiedFastCache(max_size=500)
-        self.response_templates = self._load_unified_templates()
-
-    def _load_unified_templates(self) -> Dict[str, str]:
-        """LINEボットと統一された回答テンプレート"""
-        return {
-            "坪単価": "坪単価についてご案内いたします。標準仕様では約70〜85万円/坪が目安となりますが、お客様のご希望される仕様によって変動いたします。詳細なお見積りをご提供いたしますので、お気軽にお問い合わせください。",
-            "標準仕様": "標準仕様についてご説明いたします。耐震等級3の長期優良住宅を基準とし、高品質な住まいをご提供するため、様々な設備や性能を標準装備としております。詳細は展示場でご確認いただけます。",
-            "断熱性能": "断熱性能については、高品質な断熱材を使用し、快適な住環境を実現しています。ZEH基準に対応した省エネ性能で、一年中快適にお過ごしいただけます。詳細は展示場でご確認いただけます。",
-            "耐震性能": "耐震性能については、耐震等級3を標準とし、地震に強い安心・安全な住まいをご提供しています。構造計算に基づいた確かな技術で建築いたします。",
-            "資料請求": "資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。3営業日以内にお送いいたします。",
-            "見学予約": "展示場見学を承ります。ご希望の日時をお聞かせください。スタッフが丁寧にご案内いたします。最新の住宅仕様をご確認いただけます。",
-            "ZEH": "ZEH（ゼッチ）は、Net Zero Energy Houseの略で、年間の一次エネルギー消費量が正味ゼロとなる住宅です。太陽光発電システムと高断熱性能により、エネルギーを自給自足できる住宅として注目されています。",
-            "長期優良住宅": "長期優良住宅とは、長期にわたり良好な状態で使用するための措置が講じられた優良な住宅です。耐震性、省エネ性、耐久性などの基準をクリアした住宅で、税制優遇なども受けられます。",
+        self.cache = SeparatedFastCache(max_size=500)
+        self.web_templates = self._load_web_templates()
+        self.line_templates = self._load_line_templates()
+        self.performance_metrics = {
+            "web_requests": 0, "line_requests": 0,
+            "web_template_hits": 0, "line_template_hits": 0,
+            "anti_hallucination_used": 0
         }
 
-    async def generate_unified_response(self, query: str, user: str) -> Dict[str, Any]:
-        """LINEボットと統一された高品質レスポンス生成（ハルチネーション対策強化版）"""
+    def _load_web_templates(self) -> Dict[str, str]:
+        """Web専用テンプレート（シンプル・読みやすい）"""
+        return {
+            "坪単価": """坪単価についてご案内いたします。
+
+当社の坪単価目安：
+・標準仕様：約70～85万円/坪
+・高性能仕様：約85～100万円/坪
+
+含まれる内容：
+・耐震等級3の構造
+・長期優良住宅対応
+・高断熱・高気密仕様
+・標準設備一式
+
+お客様のご希望される仕様によって変動いたします。詳細なお見積りをご提供いたしますので、お気軽にお問い合わせください。""",
+
+            "標準仕様": """標準仕様についてご説明いたします。
+
+構造・性能：
+・耐震等級3（最高等級）
+・長期優良住宅認定対応
+・省エネ等級4以上
+・高断熱・高気密仕様
+
+設備仕様：
+・システムキッチン
+・ユニットバス
+・洗面化粧台
+・トイレ（温水洗浄便座付）
+
+より詳しい仕様書については、資料請求または展示場見学でご確認いただけます。""",
+
+            "断熱性能": """断熱性能についてご案内いたします。
+
+断熱等級：
+・断熱等級4以上（ZEH基準対応）
+・UA値：0.6以下（地域区分6）
+・C値：1.0以下（気密性能）
+
+使用断熱材：
+・外壁：高性能グラスウール
+・屋根：吹付断熱材
+・基礎：押出法ポリスチレンフォーム
+
+快適性：
+・夏涼しく、冬暖かい
+・光熱費の削減効果
+・結露抑制
+
+詳しくは展示場でご体感いただけます。""",
+
+            "耐震性能": """耐震性能についてご案内いたします。
+
+耐震等級：
+・耐震等級3（最高等級）を標準採用
+・建築基準法の1.5倍の耐震強度
+・許容応力度計算による構造計算
+
+構造材：
+・構造用集成材使用
+・金物工法による強固な接合
+・ベタ基礎による堅固な基礎
+
+保証：
+・構造躯体20年保証
+・地盤保証20年
+・瑕疵担保責任保険対応
+
+安心・安全な住まいをお約束いたします。""",
+
+            "資料請求": """資料請求を承ります。
+
+以下の情報をお送りください：
+1. お名前（フルネーム）
+2. ご住所（〒郵便番号から）
+3. お電話番号
+4. ご希望資料の種類
+
+お送りする資料：
+・会社案内・施工事例集
+・間取りプラン集
+・価格・仕様資料
+・住宅ローンガイド
+
+3営業日以内にお送りいたします。""",
+
+            "AI相談": """🤖 AI住まい相談へようこそ！
+
+住まいづくりに関するご質問をお気軽にどうぞ！
+
+よくあるご質問：
+・坪単価について教えて
+・標準仕様はどんな感じ？
+・耐震性能について知りたい
+・断熱性能はどのくらい？
+
+何でもお聞きください😊"""
+        }
+
+    def _load_line_templates(self) -> Dict[str, str]:
+        """LINE専用テンプレート（絵文字・改行最適化）"""
+        return {
+            "坪単価": """💰 坪単価についてご案内いたします
+
+🏠 **当社の坪単価目安**
+・標準仕様：約70～85万円/坪
+・高性能仕様：約85～100万円/坪
+
+✨ **含まれる内容**
+・耐震等級3の構造
+・長期優良住宅対応
+・高断熱・高気密仕様
+・標準設備一式
+
+お客様のご要望により変動いたします。
+詳細なお見積りをご希望でしたら、お気軽にお問い合わせください。""",
+
+            "標準仕様": """🏗️ 標準仕様についてご説明いたします
+
+**構造・性能**
+・耐震等級3（最高等級）
+・長期優良住宅認定対応
+・省エネ等級4以上
+・高断熱・高気密仕様
+
+**設備仕様**
+・システムキッチン
+・ユニットバス
+・洗面化粧台
+・トイレ（温水洗浄便座付）
+
+より詳しい仕様書をご希望の場合は、資料請求または展示場見学をお申し込みください。""",
+
+            "AI相談": """🤖 AI住まい相談を開始します！
+
+キノエデザインの住まいAIコンシェルジュです。
+住まいに関するご質問をお気軽にどうぞ！
+
+💡 **例えば：**
+・坪単価について教えて
+・標準仕様はどんな感じ？
+・耐震性能について知りたい
+・断熱性能はどのくらい？
+
+何でもお聞きください😊"""
+        }
+
+    async def generate_separated_response(self, query: str, platform: str = "web", user: str = "unknown") -> Dict[str, Any]:
+        """プラットフォーム分離応答生成（ハルシネーション対策強化版）"""
         start_time = time.time()
+        self.performance_metrics[f"{platform}_requests"] += 1
 
         try:
-            # 1) キャッシュチェック
-            cached_response = self.cache.get(query)
+            # 1) プラットフォーム別キャッシュチェック
+            cached_response = self.cache.get(query, platform)
             if cached_response:
                 return {
                     "answer": cached_response["answer"],
                     "processing_time": time.time() - start_time,
                     "source": "cache",
+                    "platform": platform,
                     "status": "ok",
                     "anti_hallucination_used": cached_response.get("meta", {}).get(
                         "anti_hallucination_used", False
                     ),
                 }
 
-            # 2) テンプレート即座マッチング（LINEボットと同じロジック）
-            template_response = self._match_unified_template(query)
+            # 2) プラットフォーム別テンプレートマッチング
+            templates = self.web_templates if platform == "web" else self.line_templates
+            template_response = self._match_template(query, templates, platform)
+            
             if template_response:
-                result = {
-                    "answer": template_response,
-                    "processing_time": time.time() - start_time,
-                    "source": "template",
-                    "status": "ok",
-                    "anti_hallucination_used": False,
-                }
-                self.cache.set(query, result)
-                return result
-
-            # 3) RAG処理（ハルチネーション対策付き）
-            rag_response = await self._unified_rag_processing(query)
-            if rag_response:
-                try:
-                    # ハルチネーション対策の適用
-                    enhanced_result = await enhance_web_chat_response(
-                        query=query,
-                        original_response=rag_response,
-                        user_context={"username": user},
-                    )
-
+                self.performance_metrics[f"{platform}_template_hits"] += 1
+                
+                # ハルシネーション対策の適用（テンプレート応答にも適用）
+                if ANTI_HALLUCINATION_AVAILABLE:
+                    try:
+                        enhanced_result = await enhance_web_chat_response(
+                            query=query,
+                            original_response=template_response,
+                            user_context={"username": user, "platform": platform}
+                        )
+                        
+                        result = {
+                            "answer": enhanced_result["answer"],
+                            "processing_time": time.time() - start_time,
+                            "source": "template_enhanced",
+                            "platform": platform,
+                            "status": "ok",
+                            "anti_hallucination_used": enhanced_result.get("anti_hallucination_used", False),
+                            "verification": enhanced_result.get("verification_note"),
+                            "confidence": enhanced_result.get("confidence_level")
+                        }
+                        
+                        self.performance_metrics["anti_hallucination_used"] += 1
+                        
+                    except Exception as enhance_error:
+                        logger.warning(f"Template enhancement error: {enhance_error}")
+                        # エラー時は元のテンプレート応答を使用
+                        result = {
+                            "answer": template_response,
+                            "processing_time": time.time() - start_time,
+                            "source": "template",
+                            "platform": platform,
+                            "status": "ok",
+                            "anti_hallucination_used": False,
+                        }
+                else:
                     result = {
-                        "answer": enhanced_result["answer"],
+                        "answer": template_response,
                         "processing_time": time.time() - start_time,
-                        "source": "rag_enhanced",
-                        "verification": enhanced_result.get("verification_note"),
-                        "last_updated": enhanced_result.get("last_updated"),
-                        "anti_hallucination_used": enhanced_result.get(
-                            "anti_hallucination_used", False
-                        ),
-                        "status": "ok",
-                    }
-
-                    self.cache.set(query, result)
-                    return result
-
-                except Exception as enhance_error:
-                    logger.error(f"Enhancement error: {enhance_error}")
-                    # エラー時は元のRAG回答を使用
-                    result = {
-                        "answer": rag_response,
-                        "processing_time": time.time() - start_time,
-                        "source": "rag",
+                        "source": "template",
+                        "platform": platform,
                         "status": "ok",
                         "anti_hallucination_used": False,
                     }
-                    self.cache.set(query, result)
-                    return result
+                
+                self.cache.set(query, result, platform)
+                return result
 
-            # 4) 統一フォールバック（LINEボットと同じ品質）
-            fallback_response = self._generate_unified_fallback(query)
-            result = {
-                "answer": fallback_response,
-                "processing_time": time.time() - start_time,
-                "source": "fallback",
-                "status": "ok",
-                "anti_hallucination_used": False,
-            }
+            # 3) プラットフォーム別フォールバック（ハルシネーション対策付き）
+            fallback_response = self._generate_platform_fallback(query, platform)
+            
+            # ハルシネーション対策をフォールバックにも適用
+            if ANTI_HALLUCINATION_AVAILABLE:
+                try:
+                    enhanced_result = await enhance_web_chat_response(
+                        query=query,
+                        original_response=fallback_response,
+                        user_context={"username": user, "platform": platform}
+                    )
+                    
+                    result = {
+                        "answer": enhanced_result["answer"],
+                        "processing_time": time.time() - start_time,
+                        "source": "fallback_enhanced",
+                        "platform": platform,
+                        "status": "ok",
+                        "anti_hallucination_used": enhanced_result.get("anti_hallucination_used", False),
+                        "verification": enhanced_result.get("verification_note"),
+                    }
+                    
+                    self.performance_metrics["anti_hallucination_used"] += 1
+                    
+                except Exception as enhance_error:
+                    logger.warning(f"Fallback enhancement error: {enhance_error}")
+                    result = {
+                        "answer": fallback_response,
+                        "processing_time": time.time() - start_time,
+                        "source": "fallback",
+                        "platform": platform,
+                        "status": "ok",
+                        "anti_hallucination_used": False,
+                    }
+            else:
+                result = {
+                    "answer": fallback_response,
+                    "processing_time": time.time() - start_time,
+                    "source": "fallback",
+                    "platform": platform,
+                    "status": "ok",
+                    "anti_hallucination_used": False,
+                }
+            
+            self.cache.set(query, result, platform)
             return result
 
         except Exception as e:
-            logger.error(f"Unified response generation error: {e}")
+            logger.error(f"Separated response generation error: {e}")
             return {
-                "answer": self._generate_unified_fallback(query),
+                "answer": self._generate_platform_fallback(query, platform),
                 "processing_time": time.time() - start_time,
                 "source": "error",
+                "platform": platform,
                 "status": "error",
                 "anti_hallucination_used": False,
             }
 
-    def _match_unified_template(self, query: str) -> Optional[str]:
-        """LINEボットと統一されたテンプレートマッチング"""
+    def _match_template(self, query: str, templates: Dict[str, str], platform: str) -> Optional[str]:
+        """プラットフォーム別テンプレートマッチング"""
         query_lower = query.lower()
 
-        # より詳細なキーワードマッチング
-        keyword_mapping: Dict[str, list[str]] = {
-            "坪単価": ["坪単価", "価格", "費用", "コスト", "いくら", "金額"],
-            "標準仕様": ["標準仕様", "仕様", "設備", "標準", "基本"],
-            "断熱性能": ["断熱", "断熱性能", "省エネ", "温度", "暖房", "冷房"],
-            "耐震性能": ["耐震", "地震", "耐震性能", "耐震等級", "安全"],
-            "資料請求": ["資料", "パンフレット", "カタログ", "資料請求"],
-            "見学予約": ["見学", "展示場", "予約", "見に行く", "見たい"],
-            "ZEH": ["zeh", "ゼッチ", "ぜっち", "省エネ住宅", "エネルギー"],
-            "長期優良住宅": ["長期優良", "優良住宅", "長期"],
+        # より詳細なキーワードマッピング
+        keyword_mapping: Dict[str, List[str]] = {
+            "坪単価": ["坪単価", "坪たんか", "価格", "値段", "費用", "コスト", "いくら", "金額", "料金"],
+            "標準仕様": ["標準仕様", "仕様", "設備", "標準", "基本", "スタンダード", "何が付く"],
+            "断熱性能": ["断熱", "断熱性能", "省エネ", "温度", "暖房", "冷房", "光熱費", "ua値"],
+            "耐震性能": ["耐震", "地震", "耐震性能", "安全", "強度", "構造", "震災"],
+            "資料請求": ["資料", "パンフレット", "カタログ", "資料請求", "送って", "郵送"],
+            "AI相談": ["ai相談", "相談", "質問", "聞きたい", "教えて", "知りたい"],
         }
 
         for template_key, keywords in keyword_mapping.items():
             if any(keyword in query_lower for keyword in keywords):
-                logger.info(f"🎯 Unified template match: {template_key}")
-                return self.response_templates.get(template_key)
+                logger.info(f"🎯 {platform.upper()} Template match: {template_key}")
+                return templates.get(template_key)
 
         return None
 
-    async def _unified_rag_processing(self, query: str) -> Optional[str]:
-        """統一されたRAG処理（LINEボットと同じ品質）"""
-        try:
-            # アプリのグローバル変数を取得
-            globals_dict = self._get_app_globals()
-            rag_chain = globals_dict.get("rag_chain_template")
+    def _generate_platform_fallback(self, query: str, platform: str) -> str:
+        """プラットフォーム別フォールバック応答"""
+        q_lower = query.lower()
 
-            if not rag_chain:
-                logger.warning("RAG chain not available")
-                return None
+        if platform == "line":
+            # LINE用（絵文字・短文・親しみやすい）
+            if any(keyword in q_lower for keyword in ["家を建てる", "マイホーム", "新築"]):
+                return """🏗️ 家づくりについてお答えいたします
 
-            # 非同期でRAG処理（タイムアウト付き）
-            def run_rag() -> Optional[str]:
-                try:
-                    result = rag_chain.invoke({"query": query})
-                    return result.get("result", "")
-                except Exception as e:
-                    logger.error(f"RAG processing error: {e}")
-                    return None
+家づくりは人生で最も大きな買い物の一つです✨
 
-            # 5秒タイムアウトで実行（LINEボットより少し余裕を持たせる）
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = loop.run_in_executor(executor, run_rag)
-                try:
-                    rag_result = await asyncio.wait_for(future, timeout=5.0)
-                    if rag_result and len(rag_result.strip()) > 10:
-                        # 自然な回答に変換（ingested_textの機能を活用）
-                        enhanced = self._enhance_rag_response(rag_result, query)
-                        logger.info(f"⚡ Unified RAG success: {len(enhanced)} chars")
-                        return enhanced
-                except asyncio.TimeoutError:
-                    logger.warning("⏰ RAG processing timeout (5s)")
-                    return None
+**まずはこちらから始めませんか？**
+1️⃣ 資料請求で情報収集
+2️⃣ 展示場見学で実際の住まいを体感
+3️⃣ 資金計画で予算を明確化
 
-        except Exception as e:
-            logger.error(f"Unified RAG error: {e}")
+お客様のご希望をお聞かせいただければ、最適なプランをご提案いたします。何からお聞きになりたいでしょうか？"""
 
-        return None
+            elif "坪単価" in q_lower or "価格" in q_lower:
+                return "💰 坪単価についてご案内いたします。お客様のご希望される仕様によって異なりますので、詳細なお見積りをご提供いたします。お気軽にお問い合わせください。"
+            else:
+                return """ご質問ありがとうございます✨
 
-    def _enhance_rag_response(self, raw_response: str, query: str) -> str:
-        """RAG回答を自然な形に変換（ingested_textと統一）"""
-        try:
-            # ingested_textの自然回答生成機能を使用
-            from rag.ingested_text import create_natural_response
+住まいづくりについて、どのようなことをお知りになりたいでしょうか？
 
-            enhanced = create_natural_response(raw_response, query)
-            if enhanced and len(enhanced.strip()) > 10:
-                return enhanced
-            return self._generate_unified_fallback(query)
+**よくあるご質問**
+💰 坪単価や費用について
+🏠 住宅性能や仕様について
+📋 資料請求・展示場見学
 
-        except Exception as e:
-            logger.error(f"Response enhancement error: {e}")
-            return self._generate_unified_fallback(query)
+具体的にお聞かせいただければ、詳しくご案内いたします。お気軽にお問い合わせください😊"""
 
-    def _generate_unified_fallback(self, query: str) -> str:
-        """LINEボットと統一されたフォールバック応答"""
-        if ("坪単価" in query) or ("価格" in query):
-            return "坪単価についてご案内いたします。お客様のご希望される仕様によって異なりますので、詳細なお見積りをご提供いたします。お気軽にお問い合わせください。"
-        if "仕様" in query:
-            return "住宅の仕様について詳しくご案内いたします。展示場でご確認いただくか、お気軽にお問い合わせください。"
-        if "性能" in query:
-            return "住宅性能について詳しくご説明いたします。耐震性能、断熱性能など、お客様のご要望に合わせてご案内いたします。"
-        if "資料" in query:
-            return "資料請求を承ります。お名前、ご住所、お電話番号をお教えいただければ、詳しい資料をお送りいたします。"
-        return "お尋ねの内容について詳しくご案内いたします。住宅に関することでしたら何でもお気軽にお問い合わせください。"
+        else:  # web
+            # Web用（シンプル・読みやすい・情報量多め）
+            if any(keyword in q_lower for keyword in ["家を建てる", "マイホーム", "新築"]):
+                return """家づくりについてお答えいたします。
 
-    def _get_app_globals(self) -> Dict[str, Any]:
-        """アプリのグローバル変数を取得"""
-        try:
-            import main
+家づくりは人生で最も大きな買い物の一つです。まずは情報収集から始めませんか？
 
-            return {
-                "vectorstore": getattr(main, "vectorstore", None),
-                "rag_chain_template": getattr(main, "rag_chain_template", None),
-                "llm_instance": getattr(main, "llm_instance", None),
+・資料請求で詳しい情報を入手
+・展示場見学で実際の住まいを体感
+・資金計画で予算を明確化
+
+お客様のご希望をお聞かせいただければ、最適なプランをご提案いたします。"""
+
+            elif "坪単価" in q_lower or "価格" in q_lower:
+                return "坪単価についてご案内いたします。お客様のご希望される仕様によって異なりますので、詳細なお見積りをご提供いたします。お気軽にお問い合わせください。"
+            else:
+                return """お尋ねの内容について詳しくご案内いたします。
+
+住まいづくりについて、どのようなことをお知りになりたいでしょうか？
+
+・坪単価や費用について
+・住宅性能や仕様について
+・資料請求・展示場見学について
+・資金計画・住宅ローンについて
+
+具体的にお聞かせいただければ、詳しくご案内いたします。住宅に関することでしたら何でもお気軽にお問い合わせください。"""
+
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """パフォーマンス統計取得"""
+        cache_stats = self.cache.get_stats()
+        
+        total_web = self.performance_metrics["web_requests"]
+        total_line = self.performance_metrics["line_requests"]
+        total_requests = total_web + total_line
+        
+        web_template_rate = (self.performance_metrics["web_template_hits"] / total_web * 100) if total_web > 0 else 0
+        line_template_rate = (self.performance_metrics["line_template_hits"] / total_line * 100) if total_line > 0 else 0
+        anti_hallucination_rate = (self.performance_metrics["anti_hallucination_used"] / total_requests * 100) if total_requests > 0 else 0
+        
+        return {
+            "platform_separation": {
+                "web_requests": total_web,
+                "line_requests": total_line,
+                "web_template_hit_rate": web_template_rate,
+                "line_template_hit_rate": line_template_rate,
+                "web_template_count": len(self.web_templates),
+                "line_template_count": len(self.line_templates)
+            },
+            "cache_performance": cache_stats,
+            "anti_hallucination": {
+                "available": ANTI_HALLUCINATION_AVAILABLE,
+                "usage_count": self.performance_metrics["anti_hallucination_used"],
+                "usage_rate": anti_hallucination_rate
             }
-        except Exception as e:
-            logger.error(f"Failed to get app globals: {e}")
-            return {"vectorstore": None, "rag_chain_template": None, "llm_instance": None}
-
+        }
 
 # ============================================================
 # リクエストモデル
 # ============================================================
-class UnifiedChatRequest(BaseModel):
+class SeparatedChatRequest(BaseModel):
     question: str
     username: str | None = None
-
+    platform: str | None = "web"  # プラットフォーム指定を追加
 
 # ============================================================
 # グローバルインスタンス
 # ============================================================
-unified_generator = UnifiedResponseGenerator()
-
+separated_generator = SeparatedResponseGenerator()
 
 # ============================================================
 # エンドポイント
 # ============================================================
-@router.post("/", summary="統一品質 AI チャット（ハルチネーション対策強化版）")
-async def unified_chat_endpoint(req: UnifiedChatRequest, request: Request):
-    """LINEボットと同じ品質のチャットエンドポイント（ハルチネーション対策強化版）"""
+@router.post("/", summary="Web/LINE分離 AI チャット（ハルシネーション対策強化版）")
+async def separated_chat_endpoint(req: SeparatedChatRequest, request: Request):
+    """Web/LINE分離チャットエンドポイント（ハルシネーション対策強化版）"""
 
     overall_start = time.time()
-    logger.info(f"🚀 Unified processing with anti-hallucination: {req.question[:50]}...")
+    platform = req.platform or "web"
+    logger.info(f"🚀 {platform.upper()} Separated processing: {req.question[:50]}...")
 
     try:
-        # 統一品質応答生成
-        response = await unified_generator.generate_unified_response(
-            req.question, req.username or "web-user"
+        # プラットフォーム分離応答生成
+        response = await separated_generator.generate_separated_response(
+            req.question, platform, req.username or f"{platform}-user"
         )
 
         total_time = time.time() - overall_start
 
         # パフォーマンスログ
         logger.info(
-            "✅ Unified response: %.3fs, source=%s, length=%d, anti_hallucination=%s",
+            "✅ %s response: %.3fs, source=%s, length=%d, anti_hallucination=%s",
+            platform.upper(),
             total_time,
             response.get("source"),
             len(response.get("answer", "")),
@@ -349,38 +562,37 @@ async def unified_chat_endpoint(req: UnifiedChatRequest, request: Request):
 
         return {
             "answer": response["answer"],
-            "sources": [],  # ソース情報は非表示（LINEボットと統一）
+            "sources": [],  # ソース情報は非表示
             "status": response["status"],
             "performance": {
                 "total_time": total_time,
                 "processing_time": response.get("processing_time", 0.0),
                 "source": response.get("source"),
-                "quality_unified": True,  # 品質統一フラグ
-                "anti_hallucination_used": response.get(
-                    "anti_hallucination_used", False
-                ),  # ハルチネーション対策フラグ
+                "platform": response.get("platform"),
+                "platform_separation_enabled": True,
+                "anti_hallucination_used": response.get("anti_hallucination_used", False),
             },
             "enhanced_info": {
                 "verification": response.get("verification"),
-                "last_updated": response.get("last_updated"),
+                "confidence": response.get("confidence"),
                 "anti_hallucination_used": response.get("anti_hallucination_used", False),
-            },
+            } if ANTI_HALLUCINATION_AVAILABLE else {},
         }
 
     except Exception as e:
         total_time = time.time() - overall_start
         error_id = str(uuid4())[:8]
 
-        logger.error(f"❌ Unified chat error [{error_id}]: {e}")
+        logger.error(f"❌ Separated chat error [{error_id}]: {e}")
         logger.error(traceback.format_exc())
 
-        # LINEボットと同じ品質のエラー応答（200でフォールバック）
-        fallback_answer = unified_generator._generate_unified_fallback(
-            req.question if hasattr(req, "question") else ""
+        # プラットフォーム別エラー応答
+        fallback_answer = separated_generator._generate_platform_fallback(
+            req.question if hasattr(req, "question") else "", platform
         )
 
         return JSONResponse(
-            status_code=200,  # エラーでも200を返す（LINEボットと統一）
+            status_code=200,
             content={
                 "answer": fallback_answer,
                 "sources": [],
@@ -388,94 +600,78 @@ async def unified_chat_endpoint(req: UnifiedChatRequest, request: Request):
                 "error_id": error_id,
                 "performance": {
                     "total_time": total_time,
-                    "quality_unified": True,
+                    "platform": platform,
+                    "platform_separation_enabled": True,
                     "anti_hallucination_used": False,
                 },
-                "enhanced_info": {
-                    "verification": "Error occurred during processing",
-                    "last_updated": None,
-                    "anti_hallucination_used": False,
-                },
+                "enhanced_info": {},
             },
         )
 
-
 @router.post("", include_in_schema=False)
-async def unified_chat_endpoint_slashless(req: UnifiedChatRequest, request: Request):
+async def separated_chat_endpoint_slashless(req: SeparatedChatRequest, request: Request):
     """スラッシュなしエンドポイント"""
-    return await unified_chat_endpoint(req, request)
-
+    return await separated_chat_endpoint(req, request)
 
 # ============================================================
 # 付随エンドポイント（監視/管理）
 # ============================================================
 @router.get("/performance-stats")
-def get_unified_performance_stats():
-    """統一品質パフォーマンス統計を取得"""
-    cache_stats = unified_generator.cache.get_stats()
+def get_separated_performance_stats():
+    """プラットフォーム分離パフォーマンス統計を取得"""
+    stats = separated_generator.get_performance_stats()
 
     return {
-        "cache_performance": cache_stats,
-        "response_templates": len(unified_generator.response_templates),
+        "platform_separated_performance": stats,
         "quality_features": [
-            "LINEボットとの品質統一",
-            "自然な回答生成",
-            "コンテキスト理解向上",
-            "統一フォールバック",
-            "ハルチネーション対策強化",
+            "Web/LINE完全分離",
+            "プラットフォーム最適化テンプレート",
+            "分離キャッシュシステム",
+            "ハルシネーション対策強化",
         ],
         "target_metrics": {
-            "response_time": "< 3.0s",
-            "cache_hit_rate": "> 50%",
-            "quality_consistency": "100%",
+            "web_response_time": "< 2.0s",
+            "line_response_time": "< 1.0s", 
+            "template_hit_rate": "> 70%",
+            "platform_separation_accuracy": "100%",
             "anti_hallucination_accuracy": "> 95%",
         },
         "anti_hallucination_status": {
-            "enabled": True,
-            "verification_methods": ["RAG validation", "Web verification", "Confidence scoring"],
+            "enabled": ANTI_HALLUCINATION_AVAILABLE,
+            "verification_methods": ["Template validation", "Response verification", "Confidence scoring"] if ANTI_HALLUCINATION_AVAILABLE else [],
             "last_check": datetime.now().isoformat(),
         },
         "timestamp": datetime.now().isoformat(),
     }
 
-
 @router.post("/clear-cache")
-def clear_unified_cache():
-    """統一キャッシュをクリア"""
-    old_stats = unified_generator.cache.get_stats()
-    unified_generator.cache = UnifiedFastCache(max_size=500)
+def clear_separated_cache():
+    """プラットフォーム分離キャッシュをクリア"""
+    old_stats = separated_generator.cache.get_stats()
+    separated_generator.cache = SeparatedFastCache(max_size=500)
 
     return {
-        "status": "unified_cache_cleared",
+        "status": "separated_cache_cleared",
         "previous_stats": old_stats,
-        "new_cache_size": 0,
+        "platforms_cleared": ["web", "line"],
+        "new_cache_size": {"web": 0, "line": 0},
         "anti_hallucination_cache_cleared": True,
         "timestamp": datetime.now().isoformat(),
     }
 
-
-@router.get("/response-templates")
-def get_unified_response_templates():
-    """統一回答テンプレート一覧を取得"""
+@router.get("/templates")
+def get_separated_templates():
+    """プラットフォーム分離テンプレート一覧を取得"""
     return {
-        "templates": unified_generator.response_templates,
-        "count": len(unified_generator.response_templates),
-        "unified_with_line_bot": True,
-        "anti_hallucination_enabled": True,
-        "timestamp": datetime.now().isoformat(),
-    }
-
-
-@router.post("/add-template")
-def add_unified_response_template(keyword: str, response: str):
-    """新しい統一回答テンプレートを追加"""
-    unified_generator.response_templates[keyword] = response
-
-    return {
-        "status": "unified_template_added",
-        "keyword": keyword,
-        "response_preview": response[:100] + "..." if len(response) > 100 else response,
-        "total_templates": len(unified_generator.response_templates),
-        "anti_hallucination_verified": True,
+        "templates": {
+            "web": list(separated_generator.web_templates.keys()),
+            "line": list(separated_generator.line_templates.keys())
+        },
+        "count": {
+            "web": len(separated_generator.web_templates),
+            "line": len(separated_generator.line_templates)
+        },
+        "platform_separation_enabled": True,
+        "anti_hallucination_enabled": ANTI_HALLUCINATION_AVAILABLE,
         "timestamp": datetime.now().isoformat(),
     }
