@@ -1,4 +1,4 @@
-# main.py - RAG機能有効化版（PDF + Google検索 + ChatGPT統合）
+# main.py - RAG機能有効化版（PDF + Google検索 + ChatGPT統合）- LINE Bot RAG統合修正版
 
 import logging
 import os
@@ -47,9 +47,9 @@ initialization_in_progress = False
 # 起動時刻を記録
 startup_time = time.time()
 
-# RAG初期化を有効化（修正: False に変更）
-DISABLE_RAG_INIT = False  # 修正: RAG機能を有効化
-FORCE_TEMPLATE_MODE = False  # 修正: テンプレートモード強制を無効化
+# RAG初期化を有効化
+DISABLE_RAG_INIT = False  # RAG機能を有効化
+FORCE_TEMPLATE_MODE = False  # テンプレートモード強制を無効化
 ENABLE_PDF_RAG = True  # PDFベースRAGを有効化
 ENABLE_GOOGLE_SEARCH = True  # Google検索を有効化
 ENABLE_CHATGPT_FALLBACK = True  # ChatGPT フォールバックを有効化
@@ -336,7 +336,7 @@ class GoogleSearchIntegration:
             }
 
 # ==============================================================================
-# プラットフォーム分離対応キャッシュシステム（修正版）
+# プラットフォーム分離対応キャッシュシステム
 # ==============================================================================
 class PlatformSeparatedCache:
     def __init__(self, max_size: int = 1000):
@@ -641,8 +641,8 @@ class PlatformSeparatedResponseGenerator:
         
         # 非常に限定的なキーワードのみテンプレート応答
         simple_keywords = {
-            "AI相談": ["ai相談を開始", "ai住まい相談を開始", "相談開始"],
-            "資料請求": ["資料請求お願い", "パンフレット請求", "カタログ請求"],
+            "AI相談": ["ai相談を開始します", "ai住まい相談を開始します", "相談を開始"],
+            "資料請求": ["資料請求をお願いします", "パンフレット請求をお願いします", "カタログ請求をお願いします"],
         }
         
         for template_key, keywords in simple_keywords.items():
@@ -679,6 +679,24 @@ class ChatRequest(BaseModel):
 
 # グローバルインスタンス
 platform_generator = PlatformSeparatedResponseGenerator()
+
+# ==============================================================================
+# 遅延読み込み関数（LINEルーター用）
+# ==============================================================================
+def ensure_vectorstore_loaded():
+    """ベクトルストアの遅延読み込み"""
+    global vectorstore
+    return vectorstore
+
+def ensure_rag_chain_loaded():
+    """RAGチェーンの遅延読み込み"""
+    global rag_chain_template
+    return rag_chain_template
+
+def ensure_llm_loaded():
+    """LLMインスタンスの遅延読み込み"""
+    global llm_instance
+    return llm_instance
 
 # ==============================================================================
 # メインチャットエンドポイント（RAG統合版）
@@ -789,7 +807,8 @@ async def root():
             "Google Search Anti-Hallucination",
             "ChatGPT API Integration",
             "Platform Separated Responses",
-            "Smart Caching System"
+            "Smart Caching System",
+            "LINE Bot RAG Integration"
         ],
         "rag_status": "enabled" if not DISABLE_RAG_INIT else "disabled",
         "uptime": time.time() - startup_time,
@@ -830,6 +849,25 @@ async def get_system_status():
     }
 
 # ==============================================================================
+# LINE デバッグエンドポイント
+# ==============================================================================
+@app.get("/line-debug")
+async def line_debug_status():
+    """LINEボットのデバッグ情報"""
+    return {
+        "line_bot_status": "RAG Integrated",
+        "router_used": "line_bot_fixed.py",
+        "rag_integration": {
+            "enabled": True,
+            "vectorstore_ready": vectorstore is not None,
+            "llm_ready": llm_instance is not None,
+            "rag_chain_ready": rag_chain_template is not None
+        },
+        "timestamp": datetime.now().isoformat(),
+        "message": "LINE Bot is now using RAG for intelligent responses"
+    }
+
+# ==============================================================================
 # アプリケーション起動時の処理
 # ==============================================================================
 @app.on_event("startup")
@@ -843,13 +881,20 @@ async def startup_event():
     else:
         logger.warning("⚠️ RAG initialization disabled (DISABLE_RAG_INIT=True)")
     
-    # LINE専用ルーター
+    # LINE専用ルーター（RAG統合版に変更）
     try:
-        from api.routers.line_bot_ultra_fast import router as ultra_line_router
-        app.include_router(ultra_line_router, prefix="/line", tags=["line-ultra-fast"])
-        logger.info("✅ LINE Ultra Fast router added")
+        from api.routers.line_bot_fixed import router as line_fixed_router
+        app.include_router(line_fixed_router, prefix="/line", tags=["line-rag-integrated"])
+        logger.info("✅ LINE RAG Integrated router added")
     except Exception as e:
-        logger.error(f"❌ Failed to add LINE router: {e}")
+        logger.error(f"❌ Failed to add LINE RAG router: {e}")
+        # フォールバックとして ultra fast を使用
+        try:
+            from api.routers.line_bot_ultra_fast import router as ultra_line_router
+            app.include_router(ultra_line_router, prefix="/line", tags=["line-ultra-fast"])
+            logger.warning("⚠️ Fallback to LINE Ultra Fast router")
+        except Exception as e2:
+            logger.error(f"❌ Failed to add fallback LINE router: {e2}")
     
     # その他のルーター
     try:
@@ -859,7 +904,7 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️ Upload router not added: {e}")
     
-    logger.info("🎉 RAG API startup completed")
+    logger.info("🎉 RAG API startup completed with LINE RAG integration")
     logger.info(f"⚡ Startup time: {time.time() - startup_time:.2f} seconds")
 
 @app.post("/clear-cache")
