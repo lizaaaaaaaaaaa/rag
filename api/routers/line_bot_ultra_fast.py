@@ -1,6 +1,6 @@
 # api/routers/line_bot_ultra_fast.py
 # reply失効対策・プラットフォーム分離対応版 ＋ 文章途切れ対策（LINE特化・完全修正版）
-# リッチメニュー専用応答・LLM/OpenAI API使用最小化版
+# リッチメニュー専用応答・LLM/OpenAI API使用最小化版（応答内容更新版）
 
 import logging
 import os
@@ -43,7 +43,7 @@ except ImportError as e:
 router = APIRouter(tags=["line-ultra-fast"])
 
 # ==============================================================================
-# LINE専用超高速応答システム（LLM/OpenAI API最小化版）
+# LINE専用超高速応答システム（LLM/OpenAI API最小化版・応答内容更新版）
 # ==============================================================================
 class LineUltraFastResponder:
     def __init__(self):
@@ -60,24 +60,88 @@ class LineUltraFastResponder:
         }
         
     def _load_line_templates(self) -> Dict[str, str]:
-        """LINE専用テンプレート（完全事前定義・LLM不使用）"""
+        """LINE専用テンプレート（更新版・完全事前定義・LLM不使用）"""
         return {
-            "AI相談": """🤖 AI住まい相談を開始しました！
+            # ===== メインリッチメニュー応答（更新版） =====
+            "AI相談": """🤖 AI住まい相談を開始します！
 
+キノエデザインの住まいAIコンシェルジュです。
 住まいに関するご質問をお気軽にどうぞ！
 
-💡 **よくあるご質問**
+💡 例えば
 ・坪単価について教えて
 ・標準仕様はどんな感じ？
 ・耐震性能について知りたい
 ・断熱性能はどのくらい？
-・補助金について教えて
-・資料請求したい
-・展示場の見学予約
 
 何でもお聞きください😊
-専門スタッフがお答えいたします。""",
 
+※ご使用の前に、必ず以下の取り扱いをご確認ください。
+プライバシーポリシー：https://preview.studio.site/live/EjOQljz1WJ/privacy-policy
+利用規約：https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service
+Cookie：https://preview.studio.site/live/EjOQljz1WJ/cookie""",
+
+            "AI住まいサイト": """🌐 AI住まいサイトのご案内
+
+キノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）
+
+🏠 サイト内容：
+・AIチャット相談（資金計画／補助金／間取り など）
+・施工写真（実例）
+・間取りの考え方・プラン例
+・よくある質問（最初に迷う3つのこと ほか）
+・保存版デジタル冊子 ZINE（無料ダウンロード）
+・LINEで無料相談／来場予約
+
+📱 サイトURL:
+https://preview.studio.site/live/EjOQljz1WJ/""",
+
+            "資料請求": """📋 ありがとうございます！こちらからご覧いただけます。
+
+〔資料タイトル〕（PDF）：〔URL〕
+
+よろしければ簡単アンケート（任意）：
+・ご計画時期：今すぐ / 3–6か月 / 1年以内 / 未定
+・連絡方法（任意）：このLINE / メール / 連絡不要
+
+※必ず以下の取り扱いをご確認ください。
+プライバシーポリシー：https://preview.studio.site/live/EjOQljz1WJ/privacy-policy
+利用規約：https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service
+Cookie：https://preview.studio.site/live/EjOQljz1WJ/cookie""",
+
+            "展示場来場予約": """📍 展示場のご来場予約につきましては、下記URLより必要事項のご入力をお願い申し上げます。
+
+https://preview.studio.site/live/EjOQljz1WJ/reservation
+
+スタッフ一同、心よりお待ちしております！""",
+
+            "資金計画": """💰 AI資金診断のご案内
+
+本診断は匿名でご利用いただけます。ご回答内容は保存いたしません。算出される金額は試算（概算）であり、目安としてご確認ください。
+
+お手数ですが、以下の5点をご入力ください。
+・年収（概算可）
+・毎月のご希望返済額
+・住宅ローンのご希望借入期間
+・ご家族構成（例：大人2名・お子さま1名）
+・その他の大きなご負担（例：自動車ローン 等）
+
+未入力の項目があっても進められます。ご入力後、概算結果をご提示いたします。""",
+
+            "チャット相談": """💬 スタッフとのご相談
+
+【対応時間】
+営業時間：9:00-18:00
+
+📱 ご相談方法：
+・このLINEでの直接相談
+・お電話での相談
+・展示場での対面相談
+
+営業時間内でしたら迅速にお返事します。
+お気軽にお声かけください！""",
+
+            # ===== 詳細質問応答（既存のまま維持） =====
             "坪単価": """💰 坪単価についてご案内いたします
 
 🏠 **当社の坪単価目安**
@@ -192,145 +256,6 @@ class LineUltraFastResponder:
 詳しい補助金情報は専門スタッフがご案内します。
 「資料請求」で最新の補助金ガイドをお送りします！""",
 
-            "資料請求": """📋 資料請求を承ります
-
-**📝 必要情報をお送りください**
-以下の情報をメッセージでお送りください：
-
-1️⃣ お名前（フルネーム）
-2️⃣ ご住所（〒郵便番号から）
-3️⃣ お電話番号
-4️⃣ ご希望資料の種類
-
-**📮 お送りする資料**
-・会社案内・施工事例集
-・間取りプラン集
-・価格・仕様資料
-・住宅ローンガイド
-・最新補助金情報
-
-**⏰ お届け予定**
-3営業日以内にお送りいたします！
-
-**例）送信内容**
-田中太郎
-〒123-4567 東京都○○区△△1-2-3
-090-1234-5678
-すべての資料希望
-
-このような形でお送りください😊""",
-
-            "展示場予約": """📍 展示場見学を承ります
-
-**📅 予約情報をお送りください**
-以下をメッセージでお送りください：
-
-・ご希望日時（第1・第2希望）
-・お名前・お電話番号
-・参加人数（大人・お子様）
-・ご質問・ご要望
-
-**🕒 見学について**
-・見学時間：約90分
-・完全予約制
-・専門スタッフがご案内
-・お子様連れ大歓迎
-
-**🏠 展示場の特徴**
-・最新の住宅仕様をご確認
-・実際の住み心地を体感
-・間取りプランのご相談
-・資金計画のご相談
-
-**例）送信内容**
-1月15日 10:00～ / 1月16日 14:00～
-田中太郎 090-1234-5678
-大人2名、子供1名
-キッチンを詳しく見たい
-
-スタッフ一同、心よりお待ちしております！""",
-
-            "資金計画": """💰 資金計画についてサポートします
-
-**📊 ご相談内容**
-・住宅ローンの種類・金利比較
-・月々の返済計画
-・頭金・諸費用の計算
-・住宅ローン控除について
-・最新の金利情報
-
-**💡 お聞かせください**
-・ご年収・自己資金
-・ご希望借入額・返済期間
-・家族構成・将来計画
-・現在の家賃
-
-**🎯 専門サポート**
-・住宅ローンアドバイザーが対応
-・複数の金融機関と提携
-・最適なローン商品をご提案
-・事前審査のサポート
-
-**📞 個別相談のご案内**
-詳しい資金計画は個別相談で承ります。
-「展示場予約」で専門スタッフがお答えします。
-
-または「資料請求」で住宅ローンガイドをお送りします！""",
-
-            "AI住まいサイト": """🌐 AI住まいサイトのご案内
-
-キノエデザインの住まい情報サイトをご紹介します。
-
-🏠 **サイト内容**
-・施工事例・間取りプラン
-・住宅性能・標準仕様  
-・価格・坪単価情報
-・お客様の声・実例
-・最新のイベント情報
-
-**📱 サイトURL**
-https://kinoe-design.com
-
-**🔍 おすすめコンテンツ**
-・施工事例ギャラリー
-・間取りシミュレーション
-・住宅性能について
-・資金計画シミュレーション
-
-サイトでより詳しい情報をご確認いただけます！
-
-**📞 サイトで気になることがあれば**
-こちらのLINEでお気軽にご質問ください😊""",
-
-            "チャット相談": """💬 スタッフとのご相談
-
-**⏰ 対応時間**
-平日・土日：9:00-18:00
-定休日：水曜日
-
-**📱 ご相談方法**
-・このLINEでの直接相談 ← 今ここ！
-・お電話での相談
-・展示場での対面相談
-
-**🏠 ご相談内容例**
-・住まいづくり全般
-・土地探し・資金計画  
-・間取り・デザイン
-・住宅性能について
-・契約・手続きについて
-
-**⚡ 返信について**
-・営業時間内：迅速にお返事
-・営業時間外：翌営業日にご返信
-・緊急時：お電話でお問い合わせください
-
-**🎯 専門スタッフ対応**
-住まいづくりの専門知識を持ったスタッフが
-親身になってお答えします。
-
-何でもお気軽にお声かけください！😊""",
-
             # 追加の応答テンプレート
             "土地探し": """🏗️ 土地探しについてご案内します
 
@@ -376,9 +301,9 @@ https://kinoe-design.com
         }
         
     def _load_greeting_message(self) -> str:
-        """友だち追加時の挨拶メッセージ"""
-        return """こんにちは！キノエデザインです。
-この度は友だち追加ありがとうございます✨
+        """友だち追加時の挨拶メッセージ（更新版）"""
+        return """こんにちは！キノエデザインです✨
+この度は友だち追加ありがとうございます。
 
 **🎯 目的のボタンをタップ👇**
 🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画 / 🌐サイト / 💬チャット
@@ -386,10 +311,10 @@ https://kinoe-design.com
 **⚡ 応答について**
 ・AIは24時間対応
 ・スタッフは営業日に対応
-・営業時間：9:00-18:00（水曜定休）
+・営業時間：9:00-18:00
 
 **🔒 プライバシー**
-取扱い：〔https://preview.studio.site/live/EjOQljz1WJ/privacy-policy〕
+取扱い：https://preview.studio.site/live/EjOQljz1WJ/privacy-policy
 
 住まいのことなら何でもお気軽にご相談ください😊"""
 
@@ -536,7 +461,7 @@ https://kinoe-design.com
 どちらがよろしいでしょうか？"""
 
     def _get_predefined_ai_response(self, message_text: str) -> Optional[str]:
-        """事前定義AI応答の取得"""
+        """事前定義AI応答の取得（更新版）"""
         text_lower = message_text.lower()
         
         predefined_responses = {
@@ -614,22 +539,22 @@ AI住まい相談をご利用いただきありがとうございます！
         return None
     
     def _detect_richmenu_action(self, message: str) -> str:
-        """リッチメニューアクション検出（拡張版）"""
+        """リッチメニューアクション検出（拡張版・更新版）"""
         text_clean = message.lower().replace(" ", "").replace("　", "")
         
-        # より正確なマッチングパターン
+        # 更新されたマッチングパターン（絵文字対応）
         richmenu_patterns = {
-            "AI相談": ["ai相談", "ai住まい相談", "相談開始", "aiチャット"],
+            "AI相談": ["🤖ai相談", "ai相談", "ai住まい相談", "相談開始", "aiチャット"],
+            "AI住まいサイト": ["🌐ai住まいサイト", "ai住まいサイト", "サイト", "ホームページ", "ウェブ"],
+            "資料請求": ["📋資料請求", "資料請求", "資料", "パンフレット", "カタログ", "送って"],
+            "展示場来場予約": ["📍展示場来場予約", "展示場来場予約", "展示場予約", "展示場", "見学", "予約", "来場"],
+            "資金計画": ["💰資金計画", "資金計画", "ローン", "住宅ローン", "お金", "返済"],
+            "チャット相談": ["💬チャット相談", "チャット相談", "チャット", "スタッフ", "担当者"],
             "坪単価": ["坪単価", "価格", "費用", "いくら", "金額", "値段", "コスト"],
             "標準仕様": ["標準仕様", "仕様", "設備", "標準", "基本仕様"],
             "断熱性能": ["断熱", "断熱性能", "省エネ", "温度", "暖房", "冷房"],
             "耐震性能": ["耐震", "地震", "安全", "強度", "耐震性"],
             "補助金": ["補助金", "助成金", "支援金", "補助制度", "支援制度"],
-            "資料請求": ["資料請求", "資料", "パンフレット", "カタログ", "送って"],
-            "展示場予約": ["展示場予約", "展示場", "見学", "予約", "来場"],
-            "資金計画": ["資金計画", "ローン", "住宅ローン", "お金", "返済"],
-            "AI住まいサイト": ["ai住まいサイト", "サイト", "ホームページ", "ウェブ"],
-            "チャット相談": ["チャット相談", "チャット", "スタッフ", "担当者"],
             "土地探し": ["土地探し", "土地", "敷地", "分譲地"],
             "間取り": ["間取り", "プラン", "設計", "レイアウト"]
         }
@@ -638,7 +563,7 @@ AI住まい相談をご利用いただきありがとうございます！
             # 完全一致または部分一致
             if any(pattern in text_clean for pattern in patterns):
                 # より正確な判定のため、文脈も考慮
-                if len(message.strip()) <= 10 and any(pattern == text_clean for pattern in patterns):
+                if len(message.strip()) <= 15 and any(pattern == text_clean for pattern in patterns):
                     # 短いメッセージで完全一致の場合
                     return action
                 elif any(pattern in text_clean for pattern in patterns):
@@ -677,9 +602,9 @@ AI住まい相談をご利用いただきありがとうございます！
                 "keywords": ["資料", "パンフレット", "カタログ", "送って", "郵送"],
                 "template": "資料請求"
             },
-            "展示場予約": {
+            "展示場来場予約": {
                 "keywords": ["見学", "展示場", "予約", "来場", "訪問"],
-                "template": "展示場予約"
+                "template": "展示場来場予約"
             },
             "資金計画": {
                 "keywords": ["ローン", "資金", "借入", "返済", "金利", "融資"],
@@ -702,10 +627,10 @@ AI住まい相談をご利用いただきありがとうございます！
         return None
     
     def _generate_line_fallback(self, query: str) -> str:
-        """LINE専用フォールバック（完全性強化版・LLM不使用）"""
+        """LINE専用フォールバック（完全性強化版・LLM不使用・更新版）"""
         q_lower = query.lower()
         
-        # より具体的なフォールバック応答
+        # より具体的なフォールバック応答（更新版）
         if any(word in q_lower for word in ["家を建てる", "マイホーム", "新築", "建築"]):
             return """🏗️ 家づくりについてお答えいたします
 
@@ -773,7 +698,7 @@ AI住まい相談をご利用いただきありがとうございます！
 しばらくしてから再度お試しいただくか、下記までお電話でお問い合わせください。
 
 📞 **お電話でのお問い合わせ**
-営業時間：9:00-18:00（水曜定休）
+営業時間：9:00-18:00
 
 ご不便をおかけして申し訳ございません。
 復旧次第、正常にご利用いただけます。"""
@@ -984,7 +909,7 @@ if LINE_SDK_AVAILABLE and handler:
     
     @handler.add(FollowEvent)
     def handle_follow_ultra_fast(event):
-        """超高速フォローハンドラ（挨拶送信）"""
+        """超高速フォローハンドラ（挨拶送信・更新版）"""
         start_time = time.time()
         try:
             user_id = event.source.user_id
@@ -1005,7 +930,7 @@ if LINE_SDK_AVAILABLE and handler:
     
     @handler.add(MessageEvent, message=TextMessageContent)
     def handle_message_ultra_fast(event):
-        """超高速メッセージハンドラ（LLM最小化版）"""
+        """超高速メッセージハンドラ（LLM最小化版・更新版）"""
         start_time = time.time()
         
         try:
@@ -1039,7 +964,7 @@ if LINE_SDK_AVAILABLE and handler:
 
     @handler.add(PostbackEvent)
     def handle_postback_ultra_fast(event):
-        """Postbackハンドラ（修正版）"""
+        """Postbackハンドラ（修正版・更新版）"""
         try:
             user_id = event.source.user_id
             reply_token = event.reply_token
@@ -1055,7 +980,7 @@ if LINE_SDK_AVAILABLE and handler:
                         action_value = part.split("=", 1)[1]
                         break
                 
-                # アクションに対応する応答
+                # アクションに対応する応答（更新版テンプレート使用）
                 response_text = ultra_responder.line_templates.get(action_value, "ご利用ありがとうございます。")
             else:
                 response_text = "メニューからお選びください。"
@@ -1074,7 +999,7 @@ if LINE_SDK_AVAILABLE and handler:
 # ==============================================================================
 @router.get("/performance")
 def get_line_performance():
-    """LINE専用パフォーマンス統計（LLM回避重視）"""
+    """LINE専用パフォーマンス統計（LLM回避重視・更新版）"""
     stats = ultra_responder.get_performance_stats()
     
     return {
@@ -1093,6 +1018,7 @@ def get_line_performance():
             "ai_consultation_optimized": True,
             "api_exception_fixed": True,
             "import_error_fixed": True,
+            "richmenu_responses_updated": True,
         },
         "performance_targets": {
             "response_time": "< 200ms",
@@ -1104,11 +1030,13 @@ def get_line_performance():
             "Reply Token Expiry Protection",
             "Push API Automatic Fallback", 
             "AI相談 Specialized Mode",
-            "LINE-Specific Template Responses",
+            "LINE-Specific Template Responses (Updated)",
             "Ultra Fast Processing",
             "LLM/OpenAI API Minimization",
             "Predefined Response Priority",
             "Sentence Completeness Guard (LINE)",
+            "Updated Rich Menu Responses",
+            "New URLs and Privacy Policy Links",
         ],
         "ai_consultation": {
             "active_users": len(ultra_responder.ai_consultation_active_users),
@@ -1116,12 +1044,20 @@ def get_line_performance():
             "predefined_responses": True,
             "llm_bypass_enabled": True
         },
+        "richmenu_updates": {
+            "ai_consultation": "Updated with privacy policy links",
+            "ai_site": "Updated with new site URL",
+            "document_request": "Updated with simplified response",
+            "showroom_visit": "Updated with reservation URL",
+            "financial_planning": "Updated with AI diagnosis guide",
+            "chat_consultation": "Updated with business hours only"
+        },
         "timestamp": datetime.now().isoformat()
     }
 
 @router.get("/debug")
 def line_debug_info():
-    """LINE Bot デバッグ情報（修正版）"""
+    """LINE Bot デバッグ情報（修正版・更新版）"""
     return {
         "line_sdk_available": LINE_SDK_AVAILABLE,
         "line_bot_api_initialized": line_bot_api is not None,
@@ -1146,14 +1082,32 @@ def line_debug_info():
             "Push API fallback enhanced",
             "Sentence completeness guard (LINE) enabled",
             "LLM calls minimization implemented",
-            "AI consultation specialized mode added"
+            "AI consultation specialized mode added",
+            "Rich menu responses updated to new specifications"
         ],
+        "richmenu_response_updates": {
+            "updated_templates": [
+                "AI相談 - Added privacy policy links",
+                "AI住まいサイト - New site description and URL",
+                "資料請求 - Simplified response format",
+                "展示場来場予約 - Direct reservation URL",
+                "資金計画 - AI diagnosis guide",
+                "チャット相談 - Business hours only"
+            ],
+            "new_urls": [
+                "https://preview.studio.site/live/EjOQljz1WJ/",
+                "https://preview.studio.site/live/EjOQljz1WJ/reservation",
+                "https://preview.studio.site/live/EjOQljz1WJ/privacy-policy",
+                "https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service",
+                "https://preview.studio.site/live/EjOQljz1WJ/cookie"
+            ]
+        },
         "timestamp": datetime.now().isoformat()
     }
 
 @router.post("/clear-cache")
 def clear_line_cache():
-    """LINEキャッシュクリア"""
+    """LINEキャッシュクリア（更新版）"""
     ultra_responder.performance_stats = {
         "requests": 0, 
         "template_hits": 0, 
@@ -1170,16 +1124,24 @@ def clear_line_cache():
         "fixes_confirmed": [
             "ApiException handling active",
             "Import errors resolved",
-            "Template responses updated",
+            "Template responses updated to new specifications",
             "Sentence completeness guard reset",
-            "LLM avoidance system reset"
+            "LLM avoidance system reset",
+            "Rich menu responses updated"
+        ],
+        "updated_content": [
+            "All rich menu responses updated",
+            "New privacy policy URLs added",
+            "Site URL updated to preview.studio.site",
+            "Reservation URL updated",
+            "Greeting message updated"
         ],
         "timestamp": datetime.now().isoformat()
     }
 
 @router.get("/templates")
 def get_line_templates():
-    """LINE専用テンプレート一覧"""
+    """LINE専用テンプレート一覧（更新版）"""
     return {
         "line_templates": list(ultra_responder.line_templates.keys()),
         "count": len(ultra_responder.line_templates),
@@ -1193,19 +1155,29 @@ def get_line_templates():
             "ai_consultation_mode": True,
             "emergency_responses": True
         },
+        "template_updates": {
+            "AI相談": "Added privacy policy, terms of use, and cookie links",
+            "AI住まいサイト": "Updated site description and new preview URL",
+            "資料請求": "Simplified with PDF placeholder and optional survey",
+            "展示場来場予約": "Direct to reservation URL",
+            "資金計画": "AI diagnosis guide with 5-point input",
+            "チャット相談": "Business hours only (9:00-18:00)"
+        },
         "fixes_applied": [
-            "補助金テンプレート追加",
-            "ApiException エラー処理修正",
-            "Sentence completeness guard (LINE) 追加",
-            "LLM/OpenAI API 使用最小化",
-            "事前定義応答システム強化"
+            "Rich menu response content updated",
+            "New URLs integrated",
+            "Privacy policy links added",
+            "ApiException error handling fixed",
+            "Sentence completeness guard (LINE) added",
+            "LLM/OpenAI API usage minimized",
+            "Predefined response system enhanced"
         ],
         "timestamp": datetime.now().isoformat()
     }
 
 @router.get("/ai-consultation-status")
 def get_ai_consultation_status():
-    """AI相談モードの状態確認"""
+    """AI相談モードの状態確認（更新版）"""
     return {
         "ai_consultation_active": True,
         "active_users": len(ultra_responder.ai_consultation_active_users),
@@ -1217,24 +1189,35 @@ def get_ai_consultation_status():
             "Predefined Response Priority",
             "LLM/OpenAI API Minimization", 
             "Staff Escalation Ready",
-            "Template-based Answers"
+            "Template-based Answers",
+            "Updated Rich Menu Responses",
+            "Privacy Policy Compliance"
         ],
+        "ai_consultation_template_updated": {
+            "privacy_policy": "Added",
+            "terms_of_use": "Added",
+            "cookie_policy": "Added",
+            "consultation_flow": "Enhanced"
+        },
         "timestamp": datetime.now().isoformat()
     }
 
 @router.post("/reset-ai-consultation/{user_id}")
 def reset_ai_consultation(user_id: str):
-    """特定ユーザーのAI相談モードをリセット"""
+    """特定ユーザーのAI相談モードをリセット（更新版）"""
     if user_id in ultra_responder.ai_consultation_active_users:
         ultra_responder.ai_consultation_active_users.remove(user_id)
         return {
             "status": "reset_successful",
             "user_id": user_id,
-            "remaining_active_users": len(ultra_responder.ai_consultation_active_users)
+            "remaining_active_users": len(ultra_responder.ai_consultation_active_users),
+            "template_updates_applied": True,
+            "privacy_compliance": True
         }
     else:
         return {
             "status": "user_not_in_consultation",
             "user_id": user_id,
-            "active_users": len(ultra_responder.ai_consultation_active_users)
+            "active_users": len(ultra_responder.ai_consultation_active_users),
+            "template_updates_applied": True
         }
