@@ -1,5 +1,5 @@
 # api/routers/line_bot_ultra_fast.py
-# 資金計画機能統合版（完全統合版）
+# 重複メッセージ完全防止版（資金計画機能統合）
 
 import logging
 import os
@@ -46,19 +46,117 @@ except ImportError as e:
             return decorator
         def handle(self, *args, **kwargs): pass
 
-router = APIRouter(tags=["line-smart-integrated-financial"])
+router = APIRouter(tags=["line-smart-integrated-financial-no-duplicates"])
 
 # ==============================================================================
-# LINE統合スマートルーティングシステム（資金計画機能統合版）
+# 重複メッセージ防止システム（統合版）
 # ==============================================================================
-class LineSmartRouterWithFinancial:
-    """LINE専用スマートルーティングシステム（資金計画統合版）"""
+class LineDuplicateMessagePrevention:
+    """LINE専用重複メッセージ防止システム"""
+    
+    def __init__(self):
+        self.recent_sends = {}  # {(user_id, message_hash): timestamp}
+        self.recent_events = {}  # {(user_id, event_hash): timestamp}  # 🆕 イベント重複防止
+        self.duplicate_window = 60  # 60秒以内の重複を防止
+        self.event_window = 10  # 10秒以内のイベント重複を防止
+        self.cleanup_interval = 300  # 5分毎にクリーンアップ
+        self.last_cleanup = time.time()
+        self.stats = {
+            "message_duplicates_prevented": 0,
+            "event_duplicates_prevented": 0,
+            "total_send_attempts": 0,
+            "successful_sends": 0
+        }
+        
+    def should_send_message(self, user_id: str, message: str) -> bool:
+        """メッセージを送信すべきかチェック"""
+        self.stats["total_send_attempts"] += 1
+        
+        # メッセージハッシュ生成（最初の100文字で判定）
+        message_preview = message[:100]
+        message_hash = hashlib.md5(message_preview.encode()).hexdigest()[:8]
+        key = (user_id, message_hash)
+        
+        current_time = time.time()
+        
+        # 定期クリーンアップ
+        if current_time - self.last_cleanup > self.cleanup_interval:
+            self._cleanup_old_records(current_time)
+        
+        # 重複チェック
+        if key in self.recent_sends:
+            time_diff = current_time - self.recent_sends[key]
+            if time_diff < self.duplicate_window:
+                logger.warning(f"🛑 MESSAGE duplicate suppressed: user={user_id}, age={time_diff:.1f}s, hash={message_hash}")
+                self.stats["message_duplicates_prevented"] += 1
+                return False
+        
+        # 送信記録
+        self.recent_sends[key] = current_time
+        self.stats["successful_sends"] += 1
+        return True
+    
+    def should_process_event(self, user_id: str, event_data: str) -> bool:
+        """🆕 イベントを処理すべきかチェック（Webhook レベルでの重複防止）"""
+        event_hash = hashlib.md5(event_data.encode()).hexdigest()[:8]
+        key = (user_id, event_hash)
+        
+        current_time = time.time()
+        
+        # イベント重複チェック
+        if key in self.recent_events:
+            time_diff = current_time - self.recent_events[key]
+            if time_diff < self.event_window:
+                logger.warning(f"🛑 EVENT duplicate suppressed: user={user_id}, age={time_diff:.1f}s, hash={event_hash}")
+                self.stats["event_duplicates_prevented"] += 1
+                return False
+        
+        # イベント記録
+        self.recent_events[key] = current_time
+        return True
+    
+    def _cleanup_old_records(self, current_time: float):
+        """古い記録をクリーンアップ"""
+        # メッセージ記録のクリーンアップ
+        message_cutoff = current_time - self.duplicate_window * 2
+        old_message_keys = [key for key, timestamp in self.recent_sends.items() if timestamp < message_cutoff]
+        
+        for key in old_message_keys:
+            del self.recent_sends[key]
+        
+        # イベント記録のクリーンアップ
+        event_cutoff = current_time - self.event_window * 2
+        old_event_keys = [key for key, timestamp in self.recent_events.items() if timestamp < event_cutoff]
+        
+        for key in old_event_keys:
+            del self.recent_events[key]
+        
+        self.last_cleanup = current_time
+        
+        if old_message_keys or old_event_keys:
+            logger.info(f"🧹 Cleaned up {len(old_message_keys)} message records, {len(old_event_keys)} event records")
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """重複防止統計取得"""
+        return {
+            "active_message_records": len(self.recent_sends),
+            "active_event_records": len(self.recent_events),
+            "message_duplicate_window_seconds": self.duplicate_window,
+            "event_duplicate_window_seconds": self.event_window,
+            "stats": self.stats.copy()
+        }
+
+# ==============================================================================
+# LINE統合スマートルーティングシステム（重複防止強化版）
+# ==============================================================================
+class LineSmartRouterWithDuplicatePrevention:
+    """LINE専用スマートルーティングシステム（重複防止強化版）"""
     
     def __init__(self):
         self.routing_stats = {
             "template_responses": 0,
             "rag_responses": 0,
-            "financial_responses": 0,  # 資金計画用統計追加
+            "financial_responses": 0,
             "fallback_responses": 0,
             "total_requests": 0,
             "processing_times": []
@@ -74,10 +172,12 @@ class LineSmartRouterWithFinancial:
             "🤖ai相談": "AI相談", 
             "ai住まいサイト": "AI住まいサイト",
             "🌐ai住まいサイト": "AI住まいサイト",
+            "aiサイト": "AI住まいサイト",
             "資料請求": "資料請求",
             "📋資料請求": "資料請求",
             "展示場来場予約": "展示場来場予約",
             "📍展示場来場予約": "展示場来場予約",
+            "展示場予約": "展示場来場予約",
             "チャット相談": "チャット相談",
             "💬チャット相談": "チャット相談",
             
@@ -107,11 +207,11 @@ class LineSmartRouterWithFinancial:
             "建ぺい率", "容積率", "法規", "規制", "基準", "建築基準法"
         ]
         
-        # テンプレートを読み込み（資金計画更新版）
+        # テンプレートを読み込み
         self.templates = self._load_templates()
         
     def _load_templates(self) -> Dict[str, str]:
-        """統合テンプレート読み込み（資金計画統合版）"""
+        """統合テンプレート読み込み（重複防止対応版）"""
         return {
             "AI相談": """🤖 AI住まい相談を開始します！
 
@@ -202,7 +302,7 @@ https://preview.studio.site/live/EjOQljz1WJ/reservation
         }
         
     def determine_response_route(self, message_text: str, user_id: str) -> Dict[str, Any]:
-        """メッセージに基づく応答ルート決定（資金計画統合版）"""
+        """メッセージに基づく応答ルート決定（重複防止対応版）"""
         start_time = time.time()
         self.routing_stats["total_requests"] += 1
         
@@ -283,7 +383,7 @@ https://preview.studio.site/live/EjOQljz1WJ/reservation
         }
     
     def get_stats(self) -> Dict[str, Any]:
-        """統計情報取得（資金計画統計追加）"""
+        """統計情報取得（重複防止統計追加）"""
         total = self.routing_stats["total_requests"]
         avg_processing_time = sum(self.routing_stats["processing_times"]) / len(self.routing_stats["processing_times"]) if self.routing_stats["processing_times"] else 0
         
@@ -291,15 +391,15 @@ https://preview.studio.site/live/EjOQljz1WJ/reservation
             "total_requests": total,
             "template_responses": self.routing_stats["template_responses"],
             "rag_responses": self.routing_stats["rag_responses"],
-            "financial_responses": self.routing_stats["financial_responses"],  # 新規追加
+            "financial_responses": self.routing_stats["financial_responses"],
             "fallback_responses": self.routing_stats["fallback_responses"],
             "template_rate": (self.routing_stats["template_responses"] / total * 100) if total > 0 else 0,
             "rag_rate": (self.routing_stats["rag_responses"] / total * 100) if total > 0 else 0,
-            "financial_rate": (self.routing_stats["financial_responses"] / total * 100) if total > 0 else 0,  # 新規追加
+            "financial_rate": (self.routing_stats["financial_responses"] / total * 100) if total > 0 else 0,
             "fallback_rate": (self.routing_stats["fallback_responses"] / total * 100) if total > 0 else 0,
             "avg_processing_time_ms": avg_processing_time * 1000,
-            "financial_integration": True,  # 新規追加
-            "duplicate_prevention": True,
+            "financial_integration": True,
+            "duplicate_prevention": True,  # 🆕
             "single_handler": True
         }
 
@@ -415,21 +515,6 @@ class LineRAGIntegration:
 詳しくは展示場で体感してください✨
 「展示場予約」でお申し込みいただけます！"""
         
-        elif any(keyword in query_lower for keyword in ["耐震", "地震", "安全"]):
-            return """🏗️ 耐震性能についてご案内いたします
-
-**耐震等級**
-・耐震等級3（最高等級）を標準採用
-・建築基準法の1.5倍の強度
-・許容応力度計算による構造計算
-
-**保証**
-・構造躯体20年保証
-・地盤保証20年
-・瑕疵担保責任保険対応
-
-安心・安全な住まいをお約束します✨"""
-        
         else:
             return """ご質問ありがとうございます😊
 
@@ -495,9 +580,10 @@ LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = get_line_credentials_safe()
 line_bot_api = None
 handler = None
 
-# グローバルインスタンス（資金計画統合版）
-smart_router = LineSmartRouterWithFinancial()
+# グローバルインスタンス（重複防止強化版）
+smart_router = LineSmartRouterWithDuplicatePrevention()
 rag_integration = LineRAGIntegration()
+duplicate_prevention = LineDuplicateMessagePrevention()  # 🆕
 
 if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
     try:
@@ -511,7 +597,7 @@ if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
             with ApiClient(configuration) as api_client:
                 line_bot_api = MessagingApi(api_client)
             
-            logger.info("✅ LINE Smart Integrated Bot with Financial Planning initialized")
+            logger.info("✅ LINE Smart Integrated Bot with Duplicate Prevention initialized")
         else:
             raise ValueError("Empty normalized credentials")
             
@@ -520,13 +606,18 @@ if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
         line_bot_api, handler = None, None
 
 # ==============================================================================
-# 安全送信関数（既存）
+# 安全送信関数（重複防止強化版）
 # ==============================================================================
 def send_line_message_safe(reply_token: str, user_id: str, message: str) -> bool:
-    """安全なLINE送信（reply失効時はPush APIにフォールバック）"""
+    """安全なLINE送信（重複防止機能付き）"""
     if not line_bot_api:
         logger.error("❌ LINE Bot API not initialized")
         return False
+    
+    # 🆕 重複防止チェック
+    if not duplicate_prevention.should_send_message(user_id, message):
+        logger.info(f"🛑 Duplicate message prevented for user: {user_id}")
+        return True  # 重複防止されたが「成功」として扱う
     
     try:
         normalized_token = normalize_line_token(LINE_CHANNEL_ACCESS_TOKEN)
@@ -546,7 +637,7 @@ def send_line_message_safe(reply_token: str, user_id: str, message: str) -> bool
                         messages=[TextMessage(text=message)]
                     )
                 )
-                logger.info(f"✅ Single reply sent: {len(message)} chars")
+                logger.info(f"✅ Reply sent: {len(message)} chars")
                 return True
                 
             except ApiException as reply_error:
@@ -575,12 +666,12 @@ def send_line_message_safe(reply_token: str, user_id: str, message: str) -> bool
         return False
 
 # ==============================================================================
-# Webhook エンドポイント
+# Webhook エンドポイント（重複防止強化版）
 # ==============================================================================
 @router.post("/webhook")
-async def smart_integrated_webhook_with_financial(request: Request, background_tasks: BackgroundTasks):
-    """スマート統合Webhook（資金計画機能統合版）"""
-    logger.info("🚀 LINE Smart Integrated Webhook with Financial Planning called")
+async def smart_integrated_webhook_with_duplicate_prevention(request: Request, background_tasks: BackgroundTasks):
+    """重複防止機能付きスマート統合Webhook"""
+    logger.info("🚀 LINE Smart Integrated Webhook with Duplicate Prevention called")
     
     if not line_bot_api or not handler:
         logger.error("❌ LINE Bot not configured properly")
@@ -595,35 +686,41 @@ async def smart_integrated_webhook_with_financial(request: Request, background_t
             return {"status": "error", "message": "Missing signature"}
         
         body_text = body.decode("utf-8")
-        logger.info(f"📨 Financial planning webhook processing: {body_text[:200]}...")
+        logger.info(f"📨 Duplicate prevention webhook processing: {body_text[:200]}...")
         
         handler.handle(body_text, signature)
         
-        logger.info("✅ Financial planning webhook processed successfully")
+        logger.info("✅ Duplicate prevention webhook processed successfully")
         return {"status": "ok", "timestamp": datetime.now().isoformat()}
         
     except InvalidSignatureError as sig_error:
         logger.error(f"❌ Invalid signature: {sig_error}")
         return {"status": "signature_error"}
     except Exception as e:
-        logger.error(f"💥 Smart integrated webhook with financial error: {e}")
+        logger.error(f"💥 Smart integrated webhook with duplicate prevention error: {e}")
         logger.error(traceback.format_exc())
         return {"status": "error", "error": str(e)}
 
 # ==============================================================================
-# イベントハンドラ（資金計画統合版）
+# イベントハンドラ（重複防止強化版）
 # ==============================================================================
 if LINE_SDK_AVAILABLE and handler:
     
     @handler.add(FollowEvent)
-    def handle_follow_smart_integrated_financial(event):
-        """フォローハンドラ（資金計画統合版）"""
+    def handle_follow_with_duplicate_prevention(event):
+        """フォローハンドラ（重複防止強化版）"""
         start_time = time.time()
         try:
             user_id = event.source.user_id
             reply_token = event.reply_token
             
-            logger.info(f"👤 New follower (financial integrated): {user_id}")
+            # 🆕 イベント重複防止チェック
+            event_data = f"follow_{user_id}_{reply_token}"
+            if not duplicate_prevention.should_process_event(user_id, event_data):
+                logger.info(f"🛑 Follow event duplicate prevented for user: {user_id}")
+                return
+            
+            logger.info(f"👤 New follower (duplicate prevention): {user_id}")
             
             greeting_message = """こんにちは！キノエデザインです✨
 この度は友だち追加ありがとうございます。
@@ -645,15 +742,15 @@ if LINE_SDK_AVAILABLE and handler:
             success = send_line_message_safe(reply_token, user_id, greeting_message)
             
             duration = (time.time() - start_time) * 1000
-            logger.info(f"✅ Financial integrated greeting sent: {duration:.1f}ms, success: {success}")
+            logger.info(f"✅ Greeting with duplicate prevention sent: {duration:.1f}ms, success: {success}")
             
         except Exception as e:
-            logger.error(f"❌ Smart follow with financial error: {e}")
+            logger.error(f"❌ Follow handler with duplicate prevention error: {e}")
             logger.error(traceback.format_exc())
     
     @handler.add(MessageEvent, message=TextMessageContent)
-    def handle_message_smart_integrated_financial(event):
-        """メッセージハンドラ（資金計画統合版・単一応答保証）"""
+    def handle_message_with_duplicate_prevention(event):
+        """メッセージハンドラ（重複防止強化版・単一応答保証）"""
         start_time = time.time()
         
         try:
@@ -661,23 +758,29 @@ if LINE_SDK_AVAILABLE and handler:
             message_text = event.message.text
             reply_token = event.reply_token
             
-            logger.info(f"📱 Financial integrated processing: '{message_text[:30]}...' from user: {user_id}")
+            # 🆕 イベント重複防止チェック
+            event_data = f"message_{user_id}_{message_text[:50]}_{reply_token}"
+            if not duplicate_prevention.should_process_event(user_id, event_data):
+                logger.info(f"🛑 Message event duplicate prevented for user: {user_id}")
+                return
             
-            # スマートルーティング実行（資金計画統合版）
+            logger.info(f"📱 Processing with duplicate prevention: '{message_text[:30]}...' from user: {user_id}")
+            
+            # スマートルーティング実行
             routing_result = smart_router.determine_response_route(message_text, user_id)
             route = routing_result["route"]
             
-            logger.info(f"🧠 Route selected with financial: {route} - {routing_result['reason']}")
+            logger.info(f"🧠 Route selected with duplicate prevention: {route} - {routing_result['reason']}")
             
-            # ルート別処理（資金計画ルート追加）
+            # ルート別処理
             if route == "financial":
-                # 🆕 資金計画処理
+                # 資金計画処理
                 logger.info(f"💰 Processing financial planning for user: {user_id}")
                 response_text = handle_financial_message_for_line(user_id, message_text)
                 success = send_line_message_safe(reply_token, user_id, response_text)
                 
                 duration = (time.time() - start_time) * 1000
-                logger.info(f"💰 Financial response: {duration:.1f}ms, success: {success}")
+                logger.info(f"💰 Financial response with dup prevention: {duration:.1f}ms, success: {success}")
                 
             elif route == "template":
                 # テンプレート即座応答
@@ -685,7 +788,7 @@ if LINE_SDK_AVAILABLE and handler:
                 success = send_line_message_safe(reply_token, user_id, response_text)
                 
                 duration = (time.time() - start_time) * 1000
-                logger.info(f"⚡ Template response: {duration:.1f}ms, success: {success}")
+                logger.info(f"⚡ Template response with dup prevention: {duration:.1f}ms, success: {success}")
                 
             elif route == "rag":
                 # RAG処理（非同期実行）
@@ -716,7 +819,7 @@ if LINE_SDK_AVAILABLE and handler:
                 success = send_line_message_safe(reply_token, user_id, response_text)
                 
                 duration = (time.time() - start_time) * 1000
-                logger.info(f"🤖 RAG response: {duration:.1f}ms, success: {success}")
+                logger.info(f"🤖 RAG response with dup prevention: {duration:.1f}ms, success: {success}")
                 
             else:
                 # フォールバック応答
@@ -729,14 +832,14 @@ if LINE_SDK_AVAILABLE and handler:
                 success = send_line_message_safe(reply_token, user_id, response_text)
                 
                 duration = (time.time() - start_time) * 1000
-                logger.info(f"🔄 Fallback response: {duration:.1f}ms, success: {success}")
+                logger.info(f"🔄 Fallback response with dup prevention: {duration:.1f}ms, success: {success}")
             
             # 統計更新
             total_duration = (time.time() - start_time) * 1000
-            logger.info(f"✅ Financial integrated message processed: {total_duration:.1f}ms, route: {route}")
+            logger.info(f"✅ Message with duplicate prevention processed: {total_duration:.1f}ms, route: {route}")
             
         except Exception as e:
-            logger.error(f"❌ Smart message handler with financial error: {e}")
+            logger.error(f"❌ Message handler with duplicate prevention error: {e}")
             logger.error(traceback.format_exc())
             try:
                 emergency = """申し訳ございません。一時的にシステムの不具合が発生しています。
@@ -748,14 +851,20 @@ if LINE_SDK_AVAILABLE and handler:
                 logger.error(f"❌ Emergency response failed: {final_error}")
 
     @handler.add(PostbackEvent)
-    def handle_postback_smart_integrated_financial(event):
-        """Postbackハンドラ（資金計画統合版）"""
+    def handle_postback_with_duplicate_prevention(event):
+        """Postbackハンドラ（重複防止強化版）"""
         try:
             user_id = event.source.user_id
             reply_token = event.reply_token
             postback_data = event.postback.data or ""
             
-            logger.info(f"🔙 Financial integrated postback from {user_id}: {postback_data}")
+            # 🆕 イベント重複防止チェック
+            event_data = f"postback_{user_id}_{postback_data}_{reply_token}"
+            if not duplicate_prevention.should_process_event(user_id, event_data):
+                logger.info(f"🛑 Postback event duplicate prevented for user: {user_id}")
+                return
+            
+            logger.info(f"🔙 Postback with duplicate prevention from {user_id}: {postback_data}")
             
             # 資金計画のPostbackをチェック
             if "financial_plan" in postback_data or "資金計画" in postback_data:
@@ -775,14 +884,52 @@ if LINE_SDK_AVAILABLE and handler:
                 response_text = "メニューからお選びください。"
             
             success = send_line_message_safe(reply_token, user_id, response_text)
-            logger.info(f"✅ Financial integrated postback processed: success={success}")
+            logger.info(f"✅ Postback with duplicate prevention processed: success={success}")
             
         except Exception as e:
-            logger.error(f"💥 Postback handler with financial error: {e}")
+            logger.error(f"💥 Postback handler with duplicate prevention error: {e}")
             logger.error(traceback.format_exc())
 
 # ==============================================================================
-# 資金計画専用エンドポイント
+# 重複防止専用エンドポイント（新規追加）
+# ==============================================================================
+@router.get("/duplicate-prevention-stats")
+def get_line_duplicate_prevention_stats():
+    """LINE重複防止統計取得"""
+    duplicate_stats = duplicate_prevention.get_stats()
+    routing_stats = smart_router.get_stats()
+    
+    return {
+        "duplicate_prevention": duplicate_stats,
+        "routing_stats": routing_stats,
+        "effectiveness": {
+            "message_duplicates_prevented": duplicate_stats["stats"]["message_duplicates_prevented"],
+            "event_duplicates_prevented": duplicate_stats["stats"]["event_duplicates_prevented"],
+            "successful_sends": duplicate_stats["stats"]["successful_sends"],
+            "total_send_attempts": duplicate_stats["stats"]["total_send_attempts"],
+            "success_rate": (duplicate_stats["stats"]["successful_sends"] / duplicate_stats["stats"]["total_send_attempts"] * 100) if duplicate_stats["stats"]["total_send_attempts"] > 0 else 0
+        },
+        "timestamp": datetime.now().isoformat()
+    }
+
+@router.post("/clear-duplicate-prevention")
+def clear_line_duplicate_prevention():
+    """LINE重複防止キャッシュクリア"""
+    old_message_count = len(duplicate_prevention.recent_sends)
+    old_event_count = len(duplicate_prevention.recent_events)
+    
+    duplicate_prevention.recent_sends.clear()
+    duplicate_prevention.recent_events.clear()
+    
+    return {
+        "status": "cleared",
+        "cleared_message_records": old_message_count,
+        "cleared_event_records": old_event_count,
+        "timestamp": datetime.now().isoformat()
+    }
+
+# ==============================================================================
+# 既存のエンドポイント（資金計画・パフォーマンス・デバッグ）
 # ==============================================================================
 @router.get("/financial-sessions")
 def get_financial_sessions():
@@ -800,44 +947,20 @@ def get_financial_sessions():
     return {
         "active_sessions": len(sessions),
         "sessions": sessions,
+        "duplicate_prevention_active": True,
         "timestamp": datetime.now().isoformat()
     }
 
-@router.post("/financial-sessions/{user_id}/clear")
-def clear_financial_session(user_id: str):
-    """特定ユーザーの資金計画セッションをクリア"""
-    success = smart_router.financial_handler.state_manager.end_session(user_id)
-    
-    return {
-        "success": success,
-        "user_id": user_id,
-        "timestamp": datetime.now().isoformat()
-    }
-
-@router.post("/financial-sessions/clear-all")
-def clear_all_financial_sessions():
-    """全ての資金計画セッションをクリア"""
-    session_count = len(smart_router.financial_handler.state_manager.user_states)
-    smart_router.financial_handler.state_manager.user_states.clear()
-    
-    return {
-        "cleared_sessions": session_count,
-        "timestamp": datetime.now().isoformat()
-    }
-
-# ==============================================================================
-# 監視・デバッグエンドポイント（資金計画統合版）
-# ==============================================================================
 @router.get("/performance")
-def get_smart_performance_with_financial():
-    """スマート統合パフォーマンス統計（資金計画統合版）"""
+def get_smart_performance_with_duplicate_prevention():
+    """パフォーマンス統計（重複防止機能付き）"""
     stats = smart_router.get_stats()
-    
-    # アクティブセッション情報追加
+    duplicate_stats = duplicate_prevention.get_stats()
     active_sessions = len(smart_router.financial_handler.state_manager.user_states)
     
     return {
-        "line_smart_integrated_financial_stats": stats,
+        "line_smart_integrated_duplicate_prevention_stats": stats,
+        "duplicate_prevention_stats": duplicate_stats,
         "financial_planning": {
             "active_sessions": active_sessions,
             "session_timeout_hours": 2,
@@ -854,41 +977,43 @@ def get_smart_performance_with_financial():
             "line_sdk_available": LINE_SDK_AVAILABLE,
             "line_bot_configured": line_bot_api is not None,
             "rag_integration_available": rag_integration.rag_available,
-            "financial_planning_enabled": True,  # 新規追加
-            "single_handler": True,
-            "duplicate_prevention": True
+            "financial_planning_enabled": True,
+            "duplicate_prevention_enabled": True,  # 🆕
+            "single_handler": True
         },
         "features": [
-            "Single Handler Processing (No Duplicates)",
-            "Smart Route Selection (Template/RAG/Financial/Fallback)",
-            "Financial Planning with State Management",  # 新規追加
-            "Template Instant Response (< 200ms)",
-            "RAG Integration with Timeout",
-            "Financial Calculation Engine",  # 新規追加
-            "Reply Token Expiry Protection",
-            "Push API Automatic Fallback",
-            "LINE-Specific Response Formatting",
-            "Response Caching"
+            "🚫 Duplicate Message Prevention (Message + Event Level)",
+            "🎯 Single Handler Processing (No Handler Conflicts)",
+            "⚡ Smart Route Selection (Template/RAG/Financial/Fallback)",
+            "💰 Financial Planning with State Management",
+            "🔧 Template Instant Response (< 200ms)",
+            "🤖 RAG Integration with Timeout",
+            "🧮 Financial Calculation Engine",
+            "🛡️ Reply Token Expiry Protection",
+            "📤 Push API Automatic Fallback",
+            "📱 LINE-Specific Response Formatting",
+            "💾 Response Caching"
         ],
         "performance_targets": {
             "template_response_time": "< 200ms",
             "rag_response_time": "< 10s",
-            "financial_response_time": "< 1s",  # 新規追加
+            "financial_response_time": "< 1s",
             "duplicate_messages": "0 (prevented)",
             "success_rate": "> 99%"
         },
-        "routing_efficiency": {
-            "template_rate": f"{stats['template_rate']:.1f}%",
-            "rag_rate": f"{stats['rag_rate']:.1f}%", 
-            "financial_rate": f"{stats['financial_rate']:.1f}%",  # 新規追加
-            "fallback_rate": f"{stats['fallback_rate']:.1f}%"
+        "duplicate_prevention_effectiveness": {
+            "message_prevention_rate": f"{(duplicate_stats['stats']['message_duplicates_prevented'] / max(duplicate_stats['stats']['total_send_attempts'], 1) * 100):.1f}%",
+            "event_prevention_rate": f"Active",
+            "overall_success_rate": f"{(duplicate_stats['stats']['successful_sends'] / max(duplicate_stats['stats']['total_send_attempts'], 1) * 100):.1f}%"
         },
         "timestamp": datetime.now().isoformat()
     }
 
 @router.get("/debug")
-def smart_debug_info_with_financial():
-    """スマート統合デバッグ情報（資金計画統合版）"""
+def smart_debug_info_with_duplicate_prevention():
+    """デバッグ情報（重複防止機能付き）"""
+    duplicate_stats = duplicate_prevention.get_stats()
+    
     return {
         "line_sdk_available": LINE_SDK_AVAILABLE,
         "line_bot_api_initialized": line_bot_api is not None,
@@ -897,7 +1022,7 @@ def smart_debug_info_with_financial():
             "available_templates": len(smart_router.templates),
             "template_keywords": len(smart_router.template_keywords),
             "rag_keywords": len(smart_router.rag_keywords),
-            "financial_keywords": len(smart_router.financial_keywords),  # 新規追加
+            "financial_keywords": len(smart_router.financial_keywords),
             "single_handler": True,
             "duplicate_prevention": True
         },
@@ -905,33 +1030,47 @@ def smart_debug_info_with_financial():
             "available": rag_integration.rag_available,
             "cache_entries": len(rag_integration.rag_cache)
         },
-        "financial_planning": {  # 新規追加
+        "financial_planning": {
             "handler_initialized": True,
             "active_sessions": len(smart_router.financial_handler.state_manager.user_states),
             "calculation_engine": "active",
             "input_parser": "active",
             "state_manager": "active"
         },
+        "duplicate_prevention": {  # 🆕
+            "enabled": True,
+            "stats": duplicate_stats["stats"],
+            "active_records": {
+                "message_records": duplicate_stats["active_message_records"],
+                "event_records": duplicate_stats["active_event_records"]
+            },
+            "window_settings": {
+                "message_window_seconds": duplicate_stats["message_duplicate_window_seconds"],
+                "event_window_seconds": duplicate_stats["event_duplicate_window_seconds"]
+            }
+        },
         "credentials_set": {
             "access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
             "channel_secret_set": bool(LINE_CHANNEL_SECRET)
         },
         "fixes_applied": [
-            "Single webhook handler (no duplicates)",
-            "Smart routing integration",
-            "Financial planning state management",  # 新規追加
-            "RAG processing with timeout",
-            "Template instant response",
-            "Reply token expiry handling",
-            "Error recovery with fallback"
+            "🚫 Duplicate message prevention (message + event level)",
+            "🎯 Single webhook handler (no handler conflicts)",
+            "⚡ Smart routing integration",
+            "💰 Financial planning state management",
+            "🤖 RAG processing with timeout",
+            "📱 Template instant response",
+            "🛡️ Reply token expiry handling",
+            "🔄 Error recovery with fallback"
         ],
         "timestamp": datetime.now().isoformat()
     }
 
 @router.get("/health")
-def smart_health_check_with_financial():
-    """スマート統合ヘルスチェック（資金計画統合版）"""
+def smart_health_check_with_duplicate_prevention():
+    """ヘルスチェック（重複防止機能付き）"""
     stats = smart_router.get_stats()
+    duplicate_stats = duplicate_prevention.get_stats()
     active_sessions = len(smart_router.financial_handler.state_manager.user_states)
     
     health_status = {
@@ -942,66 +1081,29 @@ def smart_health_check_with_financial():
             "handler": "ok" if handler else "error",
             "smart_router": "ok",
             "rag_integration": "ok" if rag_integration.rag_available else "available_fallback",
-            "financial_planning": "ok",  # 新規追加
+            "financial_planning": "ok",
+            "duplicate_prevention": "ok",  # 🆕
             "credentials": "ok" if LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET else "error"
         },
         "metrics": stats,
-        "financial_planning": {  # 新規追加
+        "duplicate_prevention": duplicate_stats,
+        "financial_planning": {
             "active_sessions": active_sessions,
             "calculation_engine": "operational",
             "state_management": "operational"
         },
+        "duplicate_prevention_summary": {
+            "message_duplicates_prevented": duplicate_stats["stats"]["message_duplicates_prevented"],
+            "event_duplicates_prevented": duplicate_stats["stats"]["event_duplicates_prevented"],
+            "success_rate": f"{(duplicate_stats['stats']['successful_sends'] / max(duplicate_stats['stats']['total_send_attempts'], 1) * 100):.1f}%"
+        },
         "single_handler": True,
-        "duplicate_prevention": True,
-        "new_features": ["Financial Planning Integration"],  # 新規追加
+        "new_features": [
+            "Duplicate Message Prevention",
+            "Event Duplicate Prevention",
+            "Financial Planning Integration"
+        ],
         "timestamp": datetime.now().isoformat()
     }
     
     return health_status
-
-# ==============================================================================
-# 資金計画テスト用エンドポイント
-# ==============================================================================
-@router.post("/test-financial-planning")
-def test_financial_planning_endpoint():
-    """資金計画機能テスト"""
-    test_user_id = f"test_{int(time.time())}"
-    
-    test_messages = [
-        "💰 資金計画",
-        "年収600万円",
-        "月8万円",
-        "35年",
-        "夫婦と子ども1人",
-        "車ローン月3万円"
-    ]
-    
-    results = []
-    
-    for i, message in enumerate(test_messages):
-        try:
-            response = handle_financial_message_for_line(test_user_id, message)
-            results.append({
-                "step": i + 1,
-                "input": message,
-                "output": response[:200] + "..." if len(response) > 200 else response,
-                "success": True
-            })
-        except Exception as e:
-            results.append({
-                "step": i + 1,
-                "input": message,
-                "output": str(e),
-                "success": False
-            })
-    
-    # テストセッションをクリア
-    smart_router.financial_handler.state_manager.end_session(test_user_id)
-    
-    return {
-        "test_completed": True,
-        "test_user_id": test_user_id,
-        "steps_tested": len(test_messages),
-        "results": results,
-        "timestamp": datetime.now().isoformat()
-    }

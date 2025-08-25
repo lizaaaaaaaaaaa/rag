@@ -1,39 +1,53 @@
-# api/routers/line_bot_rag_integrated.py - 最小限修正版
-# 重複登録防止とエラー回避
+# api/routers/line_bot_rag_integrated.py - 修正版（条件付き無効化）
+"""
+このファイルは重複メッセージ防止のため条件付き無効化されています。
+ultra_fast モードの時のみ有効になります。
+"""
 
 import logging
+import os
 from fastapi import APIRouter
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["line-rag-integrated"])
 
-# ⚠️ このファイルは main.py で LINE_BOT_MODE=rag_integrated の時のみ使用されます
-# 通常は line_bot_ultra_fast.py が使用されます
+# 環境変数でモード確認
+LINE_BOT_MODE = os.getenv("LINE_BOT_MODE", "ultra_fast_financial")
 
-# 最小限の健全性チェックエンドポイントのみ提供
 @router.get("/health")
 def rag_integrated_health():
     """RAG統合モード健全性チェック"""
+    is_active = LINE_BOT_MODE == "rag_integrated"
+    
     return {
-        "status": "available_but_inactive",
-        "message": "This router is available but not active. Using ultra_fast mode.",
+        "status": "active" if is_active else "inactive",
+        "message": "RAG integrated mode" if is_active else "This router is inactive to prevent duplicate messages",
         "mode": "rag_integrated",
+        "current_active_mode": LINE_BOT_MODE,
+        "webhook_registered": is_active,
         "timestamp": datetime.now().isoformat()
     }
 
 @router.get("/debug")
 def rag_integrated_debug():
     """RAG統合モードデバッグ情報"""
+    is_active = LINE_BOT_MODE == "rag_integrated"
+    
     return {
         "mode": "rag_integrated",
-        "active": False,
-        "message": "RAG integrated mode available but not currently active",
-        "recommended_mode": "ultra_fast",
+        "active": is_active,
+        "current_mode": LINE_BOT_MODE,
+        "message": "RAG integrated mode active" if is_active else "Inactive to prevent duplicates",
+        "recommended_mode": "ultra_fast_financial",
+        "duplicate_prevention": True,
         "timestamp": datetime.now().isoformat()
     }
 
-# Webhook は main.py の選択に従って登録される
-# このファイル単独では Webhook を登録しない（重複防止）
+# Webhook は LINE_BOT_MODE が rag_integrated の場合のみ有効
+# main.py で条件付きで登録される
 
-logger.info("📋 LINE RAG Integrated module loaded (inactive mode)")
+if LINE_BOT_MODE == "rag_integrated":
+    logger.info("📋 LINE RAG Integrated module loaded (active mode)")
+else:
+    logger.info("📋 LINE RAG Integrated module loaded (inactive - duplicate prevention)")

@@ -1,50 +1,76 @@
-# api/routers/line_bot_template_fast.py - 最小限修正版
-# 重複登録防止とエラー回避
+# api/routers/line_bot_template_fast.py - 修正版（条件付き無効化）
+"""
+このファイルは重複メッセージ防止のため条件付き無効化されています。
+template_only モードの時のみ有効になります。
+"""
 
 import logging
+import os
 from fastapi import APIRouter
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["line-template-fast"])
 
-# ⚠️ このファイルは main.py で LINE_BOT_MODE=template_only の時のみ使用されます
+# 環境変数でモード確認
+LINE_BOT_MODE = os.getenv("LINE_BOT_MODE", "ultra_fast_financial")
 
-# 最小限の健全性チェックエンドポイントのみ提供
 @router.get("/health")
 def template_fast_health():
     """テンプレート高速モード健全性チェック"""
+    is_active = LINE_BOT_MODE == "template_only"
+    
     return {
-        "status": "available_but_inactive",
-        "message": "This router is available but not active. Using ultra_fast mode.",
+        "status": "active" if is_active else "inactive",
+        "message": "Template fast mode" if is_active else "This router is inactive to prevent duplicate messages",
         "mode": "template_only",
+        "current_active_mode": LINE_BOT_MODE,
+        "webhook_registered": is_active,
         "timestamp": datetime.now().isoformat()
     }
 
 @router.get("/debug")
 def template_fast_debug():
     """テンプレート高速モードデバッグ情報"""
+    is_active = LINE_BOT_MODE == "template_only"
+    
     return {
         "mode": "template_only",
-        "active": False,
-        "message": "Template fast mode available but not currently active",
-        "recommended_mode": "ultra_fast",
+        "active": is_active,
+        "current_mode": LINE_BOT_MODE,
+        "message": "Template fast mode active" if is_active else "Inactive to prevent duplicates",
+        "recommended_mode": "ultra_fast_financial", 
+        "duplicate_prevention": True,
         "timestamp": datetime.now().isoformat()
     }
 
-# テンプレート応答クラス（参照用のみ、実際には ultra_fast で統合）
+# テンプレート応答クラス（条件付き有効）
 class TemplateFastResponder:
+    def __init__(self):
+        self.active = LINE_BOT_MODE == "template_only"
+        
     def get_instant_response(self, message_text: str, user_id: str = "unknown"):
+        if not self.active:
+            return {
+                "response": "このモードは重複防止のため非アクティブです。ultra_fast_financial モードを使用してください。",
+                "success": False,
+                "mode": "template_only_inactive"
+            }
+        
+        # テンプレート処理（アクティブ時のみ）
         return {
-            "response": "このモードは現在非アクティブです。ultra_fast モードを使用してください。",
-            "success": False,
-            "mode": "template_only_inactive"
+            "response": "テンプレート応答（アクティブモード）",
+            "success": True,
+            "mode": "template_only_active"
         }
 
-# グローバルインスタンス（参照用）
+# グローバルインスタンス
 template_responder = TemplateFastResponder()
 
-# Webhook は main.py の選択に従って登録される
-# このファイル単独では Webhook を登録しない（重複防止）
+# Webhook は LINE_BOT_MODE が template_only の場合のみ有効
+# main.py で条件付きで登録される
 
-logger.info("📋 LINE Template Fast module loaded (inactive mode)")
+if LINE_BOT_MODE == "template_only":
+    logger.info("📋 LINE Template Fast module loaded (active mode)")
+else:
+    logger.info("📋 LINE Template Fast module loaded (inactive - duplicate prevention)")

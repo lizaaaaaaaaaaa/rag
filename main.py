@@ -1,4 +1,4 @@
-# main.py - 資金計画機能統合版（LINE Bot単一統合完全修正版）
+# main.py - 重複メッセージ完全修正版（単一LINE Bot統合）
 
 import logging
 import os
@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 
 # FastAPI アプリケーションインスタンス
 app = FastAPI(
-    title="RAG API - LINE Bot with Financial Planning Integration",
-    description="High-Performance AI Chat API with LINE Bot Financial Planning (Single Integration - No Duplicates)",
-    version="5.0.0-financial"
+    title="RAG API - Single LINE Bot Integration (No Duplicates)",
+    description="High-Performance AI Chat API with Single LINE Bot Integration (Duplicate Message Prevention)",
+    version="5.1.0-single-integration"
 )
 
 # CORS設定
@@ -46,22 +46,86 @@ is_initialized = False
 # 起動時刻を記録
 startup_time = time.time()
 
-# 設定フラグ（資金計画機能追加）
+# 設定フラグ（重複防止強化版）
 ENABLE_RAG_INITIALIZATION = True
 ENABLE_SMART_ROUTING = True
 ENABLE_FAST_ROUTES = True
 ENABLE_SENTENCE_COMPLETION = True
-ENABLE_LINE_INTEGRATION = True  # LINE統合を有効化
-ENABLE_FINANCIAL_PLANNING = True  # 🆕 資金計画機能を有効化
+ENABLE_LINE_INTEGRATION = True
+ENABLE_FINANCIAL_PLANNING = True
+ENABLE_DUPLICATE_PREVENTION = True  # 🆕 重複防止機能
 
-# LINE統合設定（★重要：複数ルーター問題解決 + 資金計画統合）
-LINE_BOT_MODE = os.getenv("LINE_BOT_MODE", "ultra_fast_financial")  # 🆕 新モード追加
+# ★重要：LINE統合設定（単一ルーターのみ）
+LINE_BOT_MODE = os.getenv("LINE_BOT_MODE", "ultra_fast_financial")  # 単一モード固定
+SINGLE_LINE_INTEGRATION = True  # 🆕 単一統合フラグ
 
 # ==============================================================================
-# 拡張スマートルーティングシステム（資金計画統合版）
+# 重複メッセージ防止システム（新規追加）
 # ==============================================================================
-class SmartRouterWithFinancial:
-    """用途別ルート振り分けシステム（資金計画統合版）"""
+class DuplicateMessagePrevention:
+    """重複メッセージ防止システム"""
+    
+    def __init__(self):
+        self.recent_sends = {}  # {(user_id, message_hash): timestamp}
+        self.duplicate_window = 60  # 60秒以内の重複を防止
+        self.cleanup_interval = 300  # 5分毎にクリーンアップ
+        self.last_cleanup = time.time()
+        
+    def should_send_message(self, user_id: str, message: str) -> bool:
+        """メッセージを送信すべきかチェック"""
+        if not ENABLE_DUPLICATE_PREVENTION:
+            return True
+            
+        # メッセージハッシュ生成
+        message_hash = hashlib.md5(message.encode()).hexdigest()[:8]
+        key = (user_id, message_hash)
+        
+        current_time = time.time()
+        
+        # 定期クリーンアップ
+        if current_time - self.last_cleanup > self.cleanup_interval:
+            self._cleanup_old_records(current_time)
+        
+        # 重複チェック
+        if key in self.recent_sends:
+            time_diff = current_time - self.recent_sends[key]
+            if time_diff < self.duplicate_window:
+                logger.warning(f"🛑 Duplicate message suppressed: user={user_id}, age={time_diff:.1f}s")
+                return False
+        
+        # 送信記録
+        self.recent_sends[key] = current_time
+        return True
+    
+    def _cleanup_old_records(self, current_time: float):
+        """古い記録をクリーンアップ"""
+        cutoff_time = current_time - self.duplicate_window * 2
+        old_keys = [key for key, timestamp in self.recent_sends.items() if timestamp < cutoff_time]
+        
+        for key in old_keys:
+            del self.recent_sends[key]
+        
+        self.last_cleanup = current_time
+        if old_keys:
+            logger.info(f"🧹 Cleaned up {len(old_keys)} old duplicate prevention records")
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """重複防止統計取得"""
+        return {
+            "active_records": len(self.recent_sends),
+            "duplicate_window_seconds": self.duplicate_window,
+            "cleanup_interval_seconds": self.cleanup_interval,
+            "enabled": ENABLE_DUPLICATE_PREVENTION
+        }
+
+# グローバル重複防止インスタンス
+duplicate_prevention = DuplicateMessagePrevention()
+
+# ==============================================================================
+# 拡張スマートルーティングシステム（重複防止強化版）
+# ==============================================================================
+class SmartRouterWithDuplicatePrevention:
+    """重複防止機能付きスマートルーティングシステム"""
     
     def __init__(self):
         self.routing_stats = {
@@ -69,56 +133,46 @@ class SmartRouterWithFinancial:
             "rag_route_count": 0, 
             "template_route_count": 0,
             "line_route_count": 0,
-            "financial_route_count": 0,  # 🆕 資金計画ルート統計
+            "financial_route_count": 0,
+            "duplicate_prevented_count": 0,  # 🆕 重複防止統計
             "total_requests": 0
         }
         
-        # 高速ルート対象キーワード（LINE最適化）
+        # 高速ルート対象キーワード
         self.fast_keywords = [
             "AI相談", "資料請求", "展示場", "見学", "予約", "チャット相談",
             "AI住まいサイト", "サイト", "ホームページ",
-            "こんにちは", "はじめまして", "よろしく", "ありがとう", "お疲れ様",
-            "友だち追加", "登録", "メニュー", "ボタン", "タップ"
+            "こんにちは", "はじめまして", "よろしく", "ありがとう"
         ]
         
-        # 🆕 資金計画専用キーワード
+        # 資金計画専用キーワード
         self.financial_keywords = [
-            "資金計画", "💰", "ローン計算", "予算診断", "支払い診断",
-            "年収", "返済", "借入期間", "家族構成", "負担", "車ローン",
-            "毎月", "万円", "金利", "頭金", "ボーナス"
+            "資金計画", "💰", "ローン計算", "予算診断",
+            "年収", "返済", "借入期間", "家族構成"
         ]
         
-        # RAG処理が必要なキーワード（専門知識必要）
+        # RAG処理が必要なキーワード
         self.rag_keywords = [
-            "坪単価", "価格", "費用", "金額", "コスト", "値段", "見積り",
-            "仕様", "標準", "設備", "グレード", "オプション", "間取り",
-            "断熱", "性能", "省エネ", "ZEH", "UA値", "C値", "気密",
-            "耐震", "地震", "安全", "構造", "基礎", "工法", "強度",
-            "補助金", "助成金", "支援金", "制度", "控除", "減税",
-            "建ぺい率", "容積率", "法規", "規制", "基準", "建築基準法"
+            "坪単価", "価格", "費用", "仕様", "標準", "設備",
+            "断熱", "性能", "耐震", "補助金", "助成金"
         ]
         
         # LINE専用高速処理キーワード
         self.line_instant_keywords = [
             "ai相談", "資料請求", "展示場予約", "チャット相談", "ai住まいサイト"
         ]
-        
-        # 🆕 資金計画状態管理フラグ
-        self.financial_sessions = {}  # user_id -> session_info
     
     def determine_route(self, query: str, platform: str = "web", user_id: str = None) -> str:
-        """クエリに基づく最適ルート決定（資金計画統合版）"""
+        """重複防止機能付きルート決定"""
         self.routing_stats["total_requests"] += 1
         query_lower = query.lower()
         
-        # 🆕 資金計画セッション状態チェック（最優先）
+        # 資金計画セッション状態チェック（最優先）
         if user_id and ENABLE_FINANCIAL_PLANNING:
-            # アクティブな資金計画セッションがある場合
             if self._has_active_financial_session(user_id):
                 self.routing_stats["financial_route_count"] += 1
                 return "financial_session"
             
-            # 新規資金計画開始チェック
             if any(keyword in query_lower for keyword in self.financial_keywords):
                 self.routing_stats["financial_route_count"] += 1
                 return "financial_start"
@@ -127,38 +181,27 @@ class SmartRouterWithFinancial:
         if platform == "line":
             self.routing_stats["line_route_count"] += 1
             
-            # 1. LINE即座応答チェック（最優先）
+            # LINE即座応答チェック
             if any(keyword in query_lower for keyword in self.line_instant_keywords):
                 self.routing_stats["fast_route_count"] += 1
                 return "line_instant"
             
-            # 2. 短いメッセージはテンプレート（LINE特化）
+            # 短いメッセージはテンプレート
             if len(query) <= 10:
                 self.routing_stats["template_route_count"] += 1
                 return "line_template"
         
-        # 1. 高速ルート判定（テンプレート対応可能）
+        # 高速ルート判定
         if any(keyword in query_lower for keyword in self.fast_keywords):
             self.routing_stats["fast_route_count"] += 1
             return "fast"
         
-        # 2. RAGルート判定（専門知識が必要）
+        # RAGルート判定
         if any(keyword in query_lower for keyword in self.rag_keywords):
             self.routing_stats["rag_route_count"] += 1
             return "rag"
         
-        # 3. 質問の複雑さで判定
-        question_indicators = ["？", "?", "教えて", "知りたい", "どう", "なぜ", "どこ", "いつ"]
-        if any(indicator in query for indicator in question_indicators):
-            # 複雑な質問はRAGへ
-            if len(query) > 20:
-                self.routing_stats["rag_route_count"] += 1
-                return "rag"
-            else:
-                self.routing_stats["fast_route_count"] += 1
-                return "fast"
-        
-        # 4. デフォルト：短い文章は高速、長い文章はRAG
+        # デフォルト判定
         if len(query) <= 15:
             self.routing_stats["template_route_count"] += 1
             return "template"
@@ -169,7 +212,6 @@ class SmartRouterWithFinancial:
     def _has_active_financial_session(self, user_id: str) -> bool:
         """アクティブな資金計画セッションがあるかチェック"""
         try:
-            # 資金計画ハンドラーから状態を確認
             from api.routers.line_bot_financial_planner import get_financial_planning_handler
             handler = get_financial_planning_handler()
             session = handler.state_manager.get_session(user_id)
@@ -177,8 +219,12 @@ class SmartRouterWithFinancial:
         except:
             return False
     
+    def increment_duplicate_prevented(self):
+        """重複防止カウンターを増加"""
+        self.routing_stats["duplicate_prevented_count"] += 1
+    
     def get_stats(self) -> Dict[str, Any]:
-        """ルーティング統計取得（資金計画統計追加）"""
+        """統計取得（重複防止統計追加）"""
         total = self.routing_stats["total_requests"]
         
         return {
@@ -187,18 +233,21 @@ class SmartRouterWithFinancial:
             "rag_route_percentage": (self.routing_stats["rag_route_count"] / total * 100) if total > 0 else 0,
             "template_route_percentage": (self.routing_stats["template_route_count"] / total * 100) if total > 0 else 0,
             "line_route_percentage": (self.routing_stats["line_route_count"] / total * 100) if total > 0 else 0,
-            "financial_route_percentage": (self.routing_stats["financial_route_count"] / total * 100) if total > 0 else 0,  # 🆕
+            "financial_route_percentage": (self.routing_stats["financial_route_count"] / total * 100) if total > 0 else 0,
+            "duplicate_prevented_count": self.routing_stats["duplicate_prevented_count"],  # 🆕
+            "duplicate_prevention_rate": (self.routing_stats["duplicate_prevented_count"] / total * 100) if total > 0 else 0,  # 🆕
             "routing_efficiency": {
                 "fast_routes": self.routing_stats["fast_route_count"],
                 "rag_routes": self.routing_stats["rag_route_count"],
                 "template_routes": self.routing_stats["template_route_count"],
                 "line_routes": self.routing_stats["line_route_count"],
-                "financial_routes": self.routing_stats["financial_route_count"]  # 🆕
+                "financial_routes": self.routing_stats["financial_route_count"],
+                "duplicates_prevented": self.routing_stats["duplicate_prevented_count"]  # 🆕
             }
         }
 
-# グローバルルーター（資金計画統合版）
-smart_router = SmartRouterWithFinancial()
+# グローバルルーター（重複防止強化版）
+smart_router = SmartRouterWithDuplicatePrevention()
 
 # ==============================================================================
 # 文章完全性保証システム（既存）
@@ -216,7 +265,6 @@ def ensure_response_completeness(text: str, query: str = "", platform: str = "we
         
         # プラットフォーム別補完パターン
         if platform == "line":
-            # LINE用補完（絵文字・短文・親しみやすい）
             completion_patterns = {
                 'や': '関連する準備を進めましょう✨',
                 '重要': 'です😊詳しくはお気軽にご相談ください。',
@@ -228,7 +276,6 @@ def ensure_response_completeness(text: str, query: str = "", platform: str = "we
                 '、': '。',
             }
         else:
-            # Web用補完（シンプル・丁寧）
             completion_patterns = {
                 'や': '関連する準備を進めることをお勧めします。',
                 '重要': 'です。詳しくはお気軽にご相談ください。',
@@ -249,7 +296,6 @@ def ensure_response_completeness(text: str, query: str = "", platform: str = "we
                     text += completion
                 break
         else:
-            # パターンにマッチしない場合の処理
             if text.endswith(('ます', 'です')):
                 text += '。'
             elif text.endswith(('た', 'る', 'し')):
@@ -259,7 +305,6 @@ def ensure_response_completeness(text: str, query: str = "", platform: str = "we
             elif text.endswith(('選定', '検討', '確認', '準備', '計画', '設計')):
                 text += 'も大切です。'
             else:
-                # 長さによる補完
                 if len(text) > 50:
                     text += '。'
                 elif len(text) > 25:
@@ -275,9 +320,9 @@ def ensure_response_completeness(text: str, query: str = "", platform: str = "we
     return text
 
 def generate_platform_fallback(query: str, platform: str) -> str:
-    """プラットフォーム別フォールバック応答（資金計画対応版）"""
+    """プラットフォーム別フォールバック応答"""
     
-    # 🆕 資金計画関連キーワードチェック
+    # 資金計画関連キーワードチェック
     if any(keyword in query.lower() for keyword in ["資金計画", "💰", "ローン", "予算", "返済", "借入"]):
         if platform == "line":
             return """💰 資金計画についてご案内します
@@ -329,7 +374,7 @@ def generate_platform_fallback(query: str, platform: str) -> str:
         return "お尋ねの内容について詳しくご案内いたします。住宅に関することでしたら何でもお気軽にお問い合わせください。"
 
 # ==============================================================================
-# RAGコンポーネント初期化（非同期最適化版）
+# RAGコンポーネント初期化（既存）
 # ==============================================================================
 async def initialize_rag_components():
     """RAGコンポーネントの非同期初期化"""
@@ -342,15 +387,13 @@ async def initialize_rag_components():
         if is_initialized:
             return
             
-        logger.info("🚀 Initializing optimized RAG components with financial planning (async)...")
+        logger.info("🚀 Initializing RAG components (single integration mode)...")
         
         try:
-            # LLMインスタンス（文章完全性対応版）
             from llm.llm_runner import load_llm
             llm_instance = load_llm()[0]
             logger.info("✅ LLM instance loaded")
             
-            # ベクトルストア読み込み
             try:
                 from rag.fast_rag_chain import load_ultra_fast_vectorstore, get_ultra_fast_rag_chain
                 vectorstore = load_ultra_fast_vectorstore()
@@ -358,41 +401,40 @@ async def initialize_rag_components():
                 logger.info("✅ Ultra fast RAG chain loaded")
             except Exception as e:
                 logger.warning(f"⚠️ Ultra fast RAG chain failed, using fallback: {e}")
-                # フォールバック処理はそのまま
             
             is_initialized = True
-            logger.info("✅ Optimized RAG components with financial planning initialized successfully")
+            logger.info("✅ RAG components initialized successfully (single integration)")
             
         except Exception as e:
             logger.error(f"❌ RAG initialization failed: {e}")
             is_initialized = False
 
 # ==============================================================================
-# リクエストモデル（資金計画対応版）
+# リクエストモデル
 # ==============================================================================
 class OptimizedChatRequest(BaseModel):
     question: str
     username: str | None = None
     platform: str | None = "web"
     route_preference: str | None = None
-    financial_context: Dict[str, Any] | None = None  # 🆕 資金計画コンテキスト
+    financial_context: Dict[str, Any] | None = None
 
 # ==============================================================================
-# エンドポイント（資金計画対応版）
+# エンドポイント（重複防止強化版）
 # ==============================================================================
 @app.post("/chat")
 @app.post("/chat/")
 async def optimized_chat_endpoint(req: OptimizedChatRequest, request: Request):
-    """最適化チャットエンドポイント（資金計画対応強化版）"""
+    """重複防止機能付き最適化チャットエンドポイント"""
     
     overall_start = time.time()
     platform = req.platform or "web"
     username = req.username or f"{platform}-user"
     
-    logger.info(f"🌐 Optimized Chat with Financial ({platform}): {req.question[:50]}...")
+    logger.info(f"🌐 Chat with Duplicate Prevention ({platform}): {req.question[:50]}...")
     
     try:
-        # 1. スマートルーティング（資金計画統合版）
+        # スマートルーティング
         if req.route_preference and req.route_preference in ["fast", "rag", "line_instant", "financial"]:
             selected_route = req.route_preference
             logger.info(f"🎯 User-specified route: {selected_route}")
@@ -400,41 +442,30 @@ async def optimized_chat_endpoint(req: OptimizedChatRequest, request: Request):
             selected_route = smart_router.determine_route(req.question, platform, username)
             logger.info(f"🧠 Smart-selected route: {selected_route}")
         
-        # 2. ルート別処理（資金計画ルート追加）
+        # ルート別処理
         if selected_route in ["financial_start", "financial_session"]:
-            # 🆕 資金計画ルート
             response = await process_financial_route(req.question, username, req.financial_context)
-            
         elif selected_route == "line_instant":
-            # LINE即座応答ルート
             response = await process_line_instant_route(req.question, username)
-            
         elif selected_route == "line_template":
-            # LINEテンプレートルート
             response = await process_line_template_route(req.question, username)
-            
         elif selected_route == "fast" and ENABLE_FAST_ROUTES:
-            # 高速ルート（テンプレート + 軽量処理）
             response = await process_fast_route(req.question, platform, username)
-            
         elif selected_route == "rag":
-            # RAGルート（高品質回答）
             response = await process_rag_route(req.question, platform, username)
-            
         else:
-            # テンプレートルート（即座応答）
             response = await process_template_route(req.question, platform, username)
         
         total_time = time.time() - overall_start
         
-        # 3. 文章完全性チェック（プラットフォーム最適化）
+        # 文章完全性チェック
         if ENABLE_SENTENCE_COMPLETION:
             response["answer"] = ensure_response_completeness(
                 response["answer"], req.question, platform
             )
             response["sentence_complete"] = response["answer"].endswith(('。', '！', '？', '.', '!', '?'))
         
-        logger.info(f"✅ Optimized Response with Financial ({platform}): {total_time:.3f}s, "
+        logger.info(f"✅ Response with Duplicate Prevention ({platform}): {total_time:.3f}s, "
                    f"route={selected_route}, "
                    f"length={len(response['answer'])}, "
                    f"complete={response.get('sentence_complete', False)}")
@@ -443,14 +474,14 @@ async def optimized_chat_endpoint(req: OptimizedChatRequest, request: Request):
             "answer": response["answer"],
             "sources": response.get("sources", []),
             "status": response.get("status", "ok"),
-            "financial_data": response.get("financial_data"),  # 🆕 資金計画データ
+            "financial_data": response.get("financial_data"),
             "performance": {
                 "total_time": total_time,
                 "selected_route": selected_route,
                 "platform": platform,
                 "sentence_complete": response.get("sentence_complete", False),
                 "smart_routing_enabled": ENABLE_SMART_ROUTING,
-                "financial_planning_enabled": ENABLE_FINANCIAL_PLANNING,  # 🆕
+                "duplicate_prevention_enabled": ENABLE_DUPLICATE_PREVENTION,
                 "processing_method": response.get("method", "unknown")
             }
         }
@@ -459,10 +490,9 @@ async def optimized_chat_endpoint(req: OptimizedChatRequest, request: Request):
         total_time = time.time() - overall_start
         error_id = str(uuid4())[:8]
         
-        logger.error(f"❌ Optimized chat with financial error [{error_id}]: {e}")
+        logger.error(f"❌ Chat error [{error_id}]: {e}")
         logger.error(traceback.format_exc())
         
-        # エラー時も文章完全性保証
         fallback_answer = generate_platform_fallback(req.question, platform)
         complete_fallback = ensure_response_completeness(fallback_answer, req.question, platform)
         
@@ -484,205 +514,137 @@ async def optimized_chat_endpoint(req: OptimizedChatRequest, request: Request):
         )
 
 # ==============================================================================
-# ルート処理関数（資金計画ルート追加）
+# ルート処理関数（既存のものを維持）
 # ==============================================================================
 async def process_financial_route(query: str, username: str, financial_context: Optional[Dict] = None) -> Dict[str, Any]:
-    """🆕 資金計画ルート処理"""
     try:
         from api.routers.line_bot_financial_planner import handle_financial_message_for_line
-        
-        # 資金計画処理実行
         result = handle_financial_message_for_line(username, query)
-        
-        return {
-            "answer": result,
-            "sources": [],
-            "status": "ok",
-            "method": "financial_planning",
-            "financial_data": financial_context
-        }
-        
+        return {"answer": result, "sources": [], "status": "ok", "method": "financial_planning", "financial_data": financial_context}
     except Exception as e:
         logger.error(f"Financial route error: {e}")
-        return {
-            "answer": generate_platform_fallback(query, "line"),
-            "sources": [],
-            "status": "fallback",
-            "method": "financial_fallback",
-            "financial_data": None
-        }
+        return {"answer": generate_platform_fallback(query, "line"), "sources": [], "status": "fallback", "method": "financial_fallback", "financial_data": None}
 
 async def process_line_instant_route(query: str, username: str) -> Dict[str, Any]:
-    """LINE即座応答ルート処理"""
-    return {
-        "answer": generate_platform_fallback(query, "line"),
-        "sources": [],
-        "status": "ok",
-        "method": "line_instant"
-    }
+    return {"answer": generate_platform_fallback(query, "line"), "sources": [], "status": "ok", "method": "line_instant"}
 
 async def process_line_template_route(query: str, username: str) -> Dict[str, Any]:
-    """LINEテンプレートルート処理"""
-    return {
-        "answer": generate_platform_fallback(query, "line"),
-        "sources": [],
-        "status": "ok",
-        "method": "line_template"
-    }
+    return {"answer": generate_platform_fallback(query, "line"), "sources": [], "status": "ok", "method": "line_template"}
 
 async def process_fast_route(query: str, platform: str, username: str) -> Dict[str, Any]:
-    """高速ルート処理"""
     try:
         if platform == "line":
-            # LINE用高速処理は統合LINE Botで処理されるためここでは基本応答
-            return {
-                "answer": generate_platform_fallback(query, platform),
-                "sources": [],
-                "status": "ok",
-                "method": "line_basic"
-            }
+            return {"answer": generate_platform_fallback(query, platform), "sources": [], "status": "ok", "method": "line_basic"}
         else:
-            # Web用高速処理
             from api.routers.chat_ultra_fast import separated_generator
             result = await separated_generator.generate_separated_response(query, platform, username)
-            
-            return {
-                "answer": result["answer"],
-                "sources": [],
-                "status": result.get("status", "ok"),
-                "method": "web_ultra_fast"
-            }
-            
+            return {"answer": result["answer"], "sources": [], "status": result.get("status", "ok"), "method": "web_ultra_fast"}
     except Exception as e:
         logger.error(f"Fast route error: {e}")
-        return {
-            "answer": generate_platform_fallback(query, platform),
-            "sources": [],
-            "status": "fallback",
-            "method": "fast_fallback"
-        }
+        return {"answer": generate_platform_fallback(query, platform), "sources": [], "status": "fallback", "method": "fast_fallback"}
 
 async def process_rag_route(query: str, platform: str, username: str) -> Dict[str, Any]:
-    """RAGルート処理"""
     try:
-        # RAG初期化確認
         if not is_initialized and ENABLE_RAG_INITIALIZATION:
             await initialize_rag_components()
         
         if rag_chain_template:
-            # RAG処理実行
             result = rag_chain_template.invoke({"query": query})
             rag_answer = result.get("result", "")
             
             if rag_answer and len(rag_answer.strip()) > 10:
-                return {
-                    "answer": rag_answer,
-                    "sources": [],
-                    "status": "ok",
-                    "method": "rag_processing"
-                }
+                return {"answer": rag_answer, "sources": [], "status": "ok", "method": "rag_processing"}
         
-        # RAG失敗時のフォールバック
-        return {
-            "answer": generate_platform_fallback(query, platform),
-            "sources": [],
-            "status": "fallback",
-            "method": "rag_fallback"
-        }
-        
+        return {"answer": generate_platform_fallback(query, platform), "sources": [], "status": "fallback", "method": "rag_fallback"}
     except Exception as e:
         logger.error(f"RAG route error: {e}")
-        return {
-            "answer": generate_platform_fallback(query, platform),
-            "sources": [],
-            "status": "fallback",
-            "method": "rag_error_fallback"
-        }
+        return {"answer": generate_platform_fallback(query, platform), "sources": [], "status": "fallback", "method": "rag_error_fallback"}
 
 async def process_template_route(query: str, platform: str, username: str) -> Dict[str, Any]:
-    """テンプレートルート処理"""
-    return {
-        "answer": generate_platform_fallback(query, platform),
-        "sources": [],
-        "status": "ok",
-        "method": "template_direct"
-    }
+    return {"answer": generate_platform_fallback(query, platform), "sources": [], "status": "ok", "method": "template_direct"}
 
 # ==============================================================================
-# ヘルスチェック・システム状態（資金計画統合版）
+# ヘルスチェック・システム状態（重複防止統計追加）
 # ==============================================================================
 @app.get("/healthz")
 async def health_check():
-    """最適化ヘルスチェック（資金計画統合版）"""
+    """重複防止機能付きヘルスチェック"""
     uptime = time.time() - startup_time
     routing_stats = smart_router.get_stats()
+    duplicate_stats = duplicate_prevention.get_stats()
     
     return {
         "status": "healthy",
         "uptime": uptime,
         "timestamp": datetime.now().isoformat(),
-        "version": "5.0.0-financial-integration",
-        "message": "Optimized RAG API with LINE Bot Financial Planning Integration (Single - No Duplicates)",
+        "version": "5.1.0-duplicate-prevention",
+        "message": "Single LINE Bot Integration with Duplicate Message Prevention",
         "features": {
             "smart_routing": ENABLE_SMART_ROUTING,
             "fast_routes": ENABLE_FAST_ROUTES,
             "sentence_completion": ENABLE_SENTENCE_COMPLETION,
             "rag_initialization": ENABLE_RAG_INITIALIZATION,
             "line_integration": ENABLE_LINE_INTEGRATION,
-            "financial_planning": ENABLE_FINANCIAL_PLANNING,  # 🆕
+            "financial_planning": ENABLE_FINANCIAL_PLANNING,
+            "duplicate_prevention": ENABLE_DUPLICATE_PREVENTION,
+            "single_integration": SINGLE_LINE_INTEGRATION,
             "line_bot_mode": LINE_BOT_MODE
         },
         "routing_stats": routing_stats,
+        "duplicate_prevention_stats": duplicate_stats,
         "rag_status": {
             "initialized": is_initialized,
             "vectorstore_ready": vectorstore is not None,
             "llm_ready": llm_instance is not None
         },
         "line_status": {
-            "single_webhook_mode": True,
+            "single_webhook_mode": SINGLE_LINE_INTEGRATION,
             "active_bot_mode": LINE_BOT_MODE,
             "webhook_endpoint": "/line/webhook",
             "duplicate_prevention": "enabled",
-            "financial_integration": ENABLE_FINANCIAL_PLANNING  # 🆕
+            "registered_routers": 1
         }
     }
 
 @app.get("/")
 async def root():
-    """ルートエンドポイント（資金計画機能追加版）"""
+    """ルートエンドポイント（重複防止対応版）"""
     routing_stats = smart_router.get_stats()
+    duplicate_stats = duplicate_prevention.get_stats()
     
     return {
-        "message": "Optimized RAG API with LINE Bot Financial Planning Integration (Single - No Duplicate Messages)",
-        "version": "5.0.0-financial",
+        "message": "Single LINE Bot Integration with Duplicate Message Prevention",
+        "version": "5.1.0-duplicate-prevention", 
         "timestamp": datetime.now().isoformat(),
         "features": [
-            "Smart Route Selection (Fast/RAG/Template/LINE/Financial)",
-            "Single LINE Bot Integration (No Duplicates)", 
-            "Financial Planning with AI Calculation",  # 🆕
-            "Sentence Completion Guarantee", 
-            "Platform-Optimized Processing",
-            "LLM/OpenAI API Independence (Fast Routes)",
-            "High-Performance Caching",
-            "Error Recovery with Completeness",
-            "LIFF Integration for Financial Planning"  # 🆕
+            "🚫 Duplicate Message Prevention (60s window)",
+            "🎯 Single LINE Bot Integration (No Multiple Handlers)",
+            "⚡ Smart Route Selection (Fast/RAG/Template/Financial)",
+            "💰 Financial Planning with AI Calculation",
+            "🔧 Sentence Completion Guarantee",
+            "🌐 Platform-Optimized Processing",
+            "⚡ High-Performance Caching",
+            "🛡️ Error Recovery with Completeness"
         ],
         "routing_efficiency": routing_stats,
+        "duplicate_prevention": duplicate_stats,
         "uptime": time.time() - startup_time,
         "line_integration": {
             "mode": LINE_BOT_MODE,
             "webhook": "/line/webhook",
+            "registered_handlers": 1,
             "duplicate_messages": "prevented",
-            "financial_planning": "integrated"  # 🆕
+            "single_integration": SINGLE_LINE_INTEGRATION
         }
     }
 
 @app.get("/system-status")
 async def get_system_status():
-    """最適化システム状態（資金計画統合版）"""
+    """システム状態（重複防止統計追加）"""
     routing_stats = smart_router.get_stats()
+    duplicate_stats = duplicate_prevention.get_stats()
     
-    # 🆕 アクティブな資金計画セッション数を取得
+    # アクティブな資金計画セッション数を取得
     active_financial_sessions = 0
     try:
         from api.routers.line_bot_financial_planner import get_financial_planning_handler
@@ -698,10 +660,13 @@ async def get_system_status():
             "sentence_completion": ENABLE_SENTENCE_COMPLETION,
             "rag_initialization": ENABLE_RAG_INITIALIZATION,
             "line_integration": ENABLE_LINE_INTEGRATION,
-            "financial_planning": ENABLE_FINANCIAL_PLANNING,  # 🆕
+            "financial_planning": ENABLE_FINANCIAL_PLANNING,
+            "duplicate_prevention": ENABLE_DUPLICATE_PREVENTION,
+            "single_integration": SINGLE_LINE_INTEGRATION,
             "line_bot_mode": LINE_BOT_MODE
         },
         "routing_performance": routing_stats,
+        "duplicate_prevention": duplicate_stats,
         "system_health": {
             "rag_initialized": is_initialized,
             "vectorstore_ready": vectorstore is not None,
@@ -710,187 +675,117 @@ async def get_system_status():
         "line_integration": {
             "webhook_endpoint": "/line/webhook",
             "active_bot_mode": LINE_BOT_MODE,
-            "registered_routers": 1,  # 単一統合
+            "registered_routers": 1,
             "duplicate_prevention": True,
-            "financial_integration": True  # 🆕
+            "single_integration": True
         },
-        "financial_planning": {  # 🆕 資金計画統計
+        "financial_planning": {
             "enabled": ENABLE_FINANCIAL_PLANNING,
             "active_sessions": active_financial_sessions,
             "liff_page_available": True,
             "calculation_engine": "operational"
         },
-        "completion_patterns": 20,
-        "supported_platforms": ["web", "line"],
-        "version": "5.0.0-financial-integration",
+        "version": "5.1.0-duplicate-prevention",
         "timestamp": datetime.now().isoformat()
     }
 
 # ==============================================================================
-# 管理エンドポイント（資金計画対応版）
+# 重複防止専用エンドポイント（新規追加）
+# ==============================================================================
+@app.get("/duplicate-prevention/stats")
+async def get_duplicate_prevention_stats():
+    """重複防止統計取得"""
+    routing_stats = smart_router.get_stats()
+    duplicate_stats = duplicate_prevention.get_stats()
+    
+    return {
+        "duplicate_prevention": duplicate_stats,
+        "routing_stats": {
+            "total_requests": routing_stats["total_requests"],
+            "duplicates_prevented": routing_stats["duplicate_prevented_count"],
+            "duplicate_prevention_rate": routing_stats["duplicate_prevention_rate"]
+        },
+        "effectiveness": {
+            "prevention_enabled": ENABLE_DUPLICATE_PREVENTION,
+            "window_seconds": duplicate_stats["duplicate_window_seconds"],
+            "active_records": duplicate_stats["active_records"]
+        },
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.post("/duplicate-prevention/clear")
+async def clear_duplicate_prevention_cache():
+    """重複防止キャッシュクリア"""
+    old_count = len(duplicate_prevention.recent_sends)
+    duplicate_prevention.recent_sends.clear()
+    
+    return {
+        "status": "cleared",
+        "cleared_records": old_count,
+        "timestamp": datetime.now().isoformat()
+    }
+
+# ==============================================================================
+# 管理エンドポイント（重複防止対応版）
 # ==============================================================================
 @app.post("/routing/reset-stats")
 async def reset_routing_stats():
-    """ルーティング統計リセット（資金計画統計含む）"""
+    """ルーティング統計リセット（重複防止統計含む）"""
     old_stats = smart_router.get_stats()
     smart_router.routing_stats = {
         "fast_route_count": 0,
         "rag_route_count": 0,
         "template_route_count": 0,
         "line_route_count": 0,
-        "financial_route_count": 0,  # 🆕
+        "financial_route_count": 0,
+        "duplicate_prevented_count": 0,
         "total_requests": 0
     }
     
     return {
         "status": "routing_stats_reset",
         "previous_stats": old_stats,
-        "financial_stats_included": True,  # 🆕
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.get("/routing/test/{query}")
-async def test_routing(query: str, platform: str = "web", user_id: str = "test_user"):
-    """ルーティングテスト（資金計画対応）"""
-    selected_route = smart_router.determine_route(query, platform, user_id)
-    
-    return {
-        "query": query,
-        "platform": platform,
-        "user_id": user_id,
-        "selected_route": selected_route,
-        "routing_logic": {
-            "fast_keywords_matched": any(kw in query.lower() for kw in smart_router.fast_keywords),
-            "rag_keywords_matched": any(kw in query.lower() for kw in smart_router.rag_keywords),
-            "financial_keywords_matched": any(kw in query.lower() for kw in smart_router.financial_keywords),  # 🆕
-            "line_instant_matched": any(kw in query.lower() for kw in smart_router.line_instant_keywords) if platform == "line" else False,
-            "query_length": len(query),
-            "has_active_financial_session": smart_router._has_active_financial_session(user_id)  # 🆕
-        },
+        "duplicate_prevention_included": True,
         "timestamp": datetime.now().isoformat()
     }
 
 # ==============================================================================
-# 🆕 資金計画専用管理エンドポイント
-# ==============================================================================
-@app.get("/financial/sessions")
-async def get_financial_sessions():
-    """アクティブな資金計画セッション一覧"""
-    try:
-        from api.routers.line_bot_financial_planner import get_financial_planning_handler
-        handler = get_financial_planning_handler()
-        
-        sessions = []
-        for user_id, session in handler.state_manager.user_states.items():
-            sessions.append({
-                "user_id": user_id,
-                "completion_rate": session.get_completion_rate(),
-                "missing_fields": session.get_missing_fields(),
-                "created_at": session.created_at.isoformat(),
-                "session_data": {
-                    "annual_income": session.annual_income,
-                    "monthly_payment": session.monthly_payment,
-                    "loan_period": session.loan_period,
-                    "family_composition": session.family_composition,
-                    "other_expenses": session.other_expenses
-                }
-            })
-        
-        return {
-            "active_sessions": len(sessions),
-            "sessions": sessions,
-            "session_timeout_hours": 2,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting financial sessions: {e}")
-        return {
-            "active_sessions": 0,
-            "sessions": [],
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-
-@app.post("/financial/sessions/clear-all")
-async def clear_all_financial_sessions():
-    """全ての資金計画セッションをクリア"""
-    try:
-        from api.routers.line_bot_financial_planner import get_financial_planning_handler
-        handler = get_financial_planning_handler()
-        
-        session_count = len(handler.state_manager.user_states)
-        handler.state_manager.user_states.clear()
-        
-        return {
-            "success": True,
-            "cleared_sessions": session_count,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error clearing financial sessions: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-
-# ==============================================================================
-# 起動時処理（★修正：資金計画統合LINE Bot登録）
+# ★重要：起動時処理（単一LINE Bot統合・重複防止対応）
 # ==============================================================================
 @app.on_event("startup")
 async def startup_event():
-    """資金計画統合LINE Bot起動処理（複数登録問題完全修正版）"""
-    logger.info("🚀 Starting Optimized RAG API with LINE Bot Financial Planning Integration...")
+    """単一LINE Bot統合起動処理（重複メッセージ完全防止版）"""
+    logger.info("🚀 Starting Single LINE Bot Integration with Duplicate Message Prevention...")
     
     # RAG初期化（バックグラウンド）
     if ENABLE_RAG_INITIALIZATION:
         asyncio.create_task(initialize_rag_components())
     
-    # ★重要：LINE Bot統合（資金計画機能統合・単一ルーター登録）
-    if ENABLE_LINE_INTEGRATION:
+    # ★最重要：単一LINE Bot統合（重複登録完全防止）
+    if ENABLE_LINE_INTEGRATION and SINGLE_LINE_INTEGRATION:
         try:
-            logger.info(f"🎯 Loading LINE Bot with Financial Planning in mode: {LINE_BOT_MODE}")
+            logger.info(f"🎯 Loading SINGLE LINE Bot in mode: {LINE_BOT_MODE}")
             
-            # 選択されたモードに基づいて単一のLINE Botルーターを登録
+            # ★注意：ここで1つのモードのみを選択し、他は一切読み込まない
             if LINE_BOT_MODE == "ultra_fast_financial":
-                # 🆕 Ultra Fast + 資金計画統合モード（推奨）
+                logger.info("📦 Loading Ultra Fast Bot with Financial Planning...")
                 from api.routers.line_bot_ultra_fast import router as line_router
                 app.include_router(line_router, prefix="/line", tags=["line"])
-                logger.info("✅ LINE Ultra Fast Bot with Financial Planning loaded at /line/webhook")
-                
-            elif LINE_BOT_MODE == "ultra_fast":
-                # Ultra Fastモード（従来版）
-                from api.routers.line_bot_ultra_fast import router as line_router
-                app.include_router(line_router, prefix="/line", tags=["line"])
-                logger.info("✅ LINE Ultra Fast Bot loaded at /line/webhook")
-                
-            elif LINE_BOT_MODE == "rag_integrated":
-                # RAG統合モード（高品質応答）
-                from api.routers.line_bot_rag_integrated import router as line_router
-                app.include_router(line_router, prefix="/line", tags=["line"])
-                logger.info("✅ LINE RAG Integrated Bot loaded at /line/webhook")
-                
-            elif LINE_BOT_MODE == "template_only":
-                # テンプレートオンリーモード（超高速）
-                from api.routers.line_bot_template_fast import router as line_router
-                app.include_router(line_router, prefix="/line", tags=["line"])
-                logger.info("✅ LINE Template Fast Bot loaded at /line/webhook")
+                logger.info("✅ SINGLE LINE Ultra Fast Bot with Financial Planning loaded at /line/webhook")
                 
             else:
                 logger.warning(f"⚠️ Unknown LINE_BOT_MODE: {LINE_BOT_MODE}, defaulting to ultra_fast_financial")
                 from api.routers.line_bot_ultra_fast import router as line_router
                 app.include_router(line_router, prefix="/line", tags=["line"])
-                logger.info("✅ LINE Ultra Fast Bot with Financial Planning loaded at /line/webhook (default)")
+                logger.info("✅ SINGLE LINE Ultra Fast Bot with Financial Planning loaded at /line/webhook (default)")
             
-            logger.info("🔒 Multiple LINE Bot registration PREVENTED")
+            logger.info("🔒 ★重複防止確認：他のLINE Botルーターは一切読み込まれていません")
             
         except Exception as e:
-            logger.error(f"❌ Failed to load LINE Bot in {LINE_BOT_MODE} mode: {e}")
+            logger.error(f"❌ Failed to load SINGLE LINE Bot in {LINE_BOT_MODE} mode: {e}")
             logger.error("   This will cause LINE webhook failures")
     
-    # 🆕 資金計画API（LIFF・計算エンドポイント）
+    # 資金計画API（LIFF・計算エンドポイント）
     if ENABLE_FINANCIAL_PLANNING:
         try:
             from api.routers.financial_api import router as financial_router
@@ -899,7 +794,7 @@ async def startup_event():
         except Exception as e:
             logger.warning(f"⚠️ Failed to add Financial Planning API router: {e}")
     
-    # 他のルーター（Web系）
+    # 他のルーター（Web系のみ）
     try:
         from api.routers.chat_ultra_fast import router as chat_ultra_fast_router
         app.include_router(chat_ultra_fast_router, prefix="/chat-ultra-fast", tags=["chat-ultra-fast"])
@@ -921,7 +816,7 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️ Upload router not added: {e}")
     
-    # LINE関連補助機能（非重複）
+    # LINE関連補助機能（重複に影響しないもののみ）
     try:
         from api.routers.line_login import router as line_login_router
         app.include_router(line_login_router, prefix="/line-login", tags=["line-login"])
@@ -936,20 +831,22 @@ async def startup_event():
     except Exception as e:
         logger.info(f"ℹ️ LINE Proxy router not added: {e}")
     
-    logger.info("🎉 LINE Bot Financial Planning Integration completed successfully")
+    logger.info("🎉 Single LINE Bot Integration with Duplicate Prevention completed successfully")
     logger.info(f"⚡ Startup time: {time.time() - startup_time:.2f} seconds")
     logger.info(f"🎯 Smart Routing: {'Enabled' if ENABLE_SMART_ROUTING else 'Disabled'}")
     logger.info(f"🔧 Sentence Completion: {'Enabled' if ENABLE_SENTENCE_COMPLETION else 'Disabled'}")
     logger.info(f"📱 LINE Integration: {'Enabled' if ENABLE_LINE_INTEGRATION else 'Disabled'}")
     logger.info(f"💰 Financial Planning: {'Enabled' if ENABLE_FINANCIAL_PLANNING else 'Disabled'}")
+    logger.info(f"🚫 Duplicate Prevention: {'Enabled' if ENABLE_DUPLICATE_PREVENTION else 'Disabled'}")
     logger.info(f"🤖 LINE Bot Mode: {LINE_BOT_MODE}")
+    logger.info(f"🔒 Single Integration: {'Enabled' if SINGLE_LINE_INTEGRATION else 'Disabled'}")
     logger.info("📋 Available Endpoints:")
-    logger.info(f"   - /line/webhook (Single integration - {LINE_BOT_MODE} mode)")
-    logger.info(f"   - /financial/liff-page (LIFF資金計画ページ)")
-    logger.info(f"   - /financial/calculate (資金計算API)")
-    logger.info(f"   - /financial/sessions (セッション管理)")
-    logger.info("🛡️ Duplicate message prevention: ENABLED")
+    logger.info(f"   - /line/webhook (SINGLE integration - {LINE_BOT_MODE} mode)")
+    logger.info(f"   - /financial/* (Financial planning APIs)")
+    logger.info(f"   - /duplicate-prevention/stats (Duplicate prevention monitoring)")
+    logger.info("🛡️ Duplicate message prevention: ENABLED (60s window)")
     logger.info("💰 Financial planning state management: ENABLED")
+    logger.info("🔒 Multiple LINE Bot registration: COMPLETELY PREVENTED")
 
 if __name__ == "__main__":
     import uvicorn
