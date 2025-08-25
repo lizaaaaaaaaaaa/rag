@@ -1,4 +1,4 @@
-# main.py - LINE Webhook 404エラー修正 & 最適化版
+# main.py - LINE Bot複数登録問題修正版（単一ルーター統合版）
 
 import logging
 import os
@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 
 # FastAPI アプリケーションインスタンス
 app = FastAPI(
-    title="RAG API - LINE Webhook Fixed & Optimized Edition",
-    description="High-Performance AI Chat API with Fixed LINE Integration and Smart Routing",
-    version="4.1.0"
+    title="RAG API - LINE Bot Single Integration Fixed",
+    description="High-Performance AI Chat API with Single LINE Bot Integration (No Duplicate Messages)",
+    version="4.2.0"
 )
 
 # CORS設定
@@ -53,18 +53,21 @@ ENABLE_FAST_ROUTES = True
 ENABLE_SENTENCE_COMPLETION = True
 ENABLE_LINE_INTEGRATION = True  # LINE統合を有効化
 
+# LINE統合設定（★重要：複数ルーター問題解決）
+LINE_BOT_MODE = os.getenv("LINE_BOT_MODE", "ultra_fast")  # "ultra_fast", "rag_integrated", "template_only"
+
 # ==============================================================================
-# スマートルーティングシステム（改良版）
+# スマートルーティングシステム（LINE統合最適化版）
 # ==============================================================================
 class SmartRouter:
-    """用途別ルート振り分けシステム（LINE最適化版）"""
+    """用途別ルート振り分けシステム（LINE統合最適化版）"""
     
     def __init__(self):
         self.routing_stats = {
             "fast_route_count": 0,
             "rag_route_count": 0, 
             "template_route_count": 0,
-            "line_route_count": 0,  # LINE専用統計追加
+            "line_route_count": 0,
             "total_requests": 0
         }
         
@@ -73,7 +76,6 @@ class SmartRouter:
             "AI相談", "資料請求", "展示場", "見学", "予約", "チャット相談",
             "AI住まいサイト", "サイト", "ホームページ", "資金計画", "ローン",
             "こんにちは", "はじめまして", "よろしく", "ありがとう", "お疲れ様",
-            # LINE特有の表現を追加
             "友だち追加", "登録", "メニュー", "ボタン", "タップ"
         ]
         
@@ -93,7 +95,7 @@ class SmartRouter:
         ]
     
     def determine_route(self, query: str, platform: str = "web") -> str:
-        """クエリに基づく最適ルート決定（LINE最適化版）"""
+        """クエリに基づく最適ルート決定（LINE統合最適化版）"""
         self.routing_stats["total_requests"] += 1
         query_lower = query.lower()
         
@@ -419,26 +421,12 @@ async def optimized_chat_endpoint(req: OptimizedChatRequest, request: Request):
 # ==============================================================================
 async def process_line_instant_route(query: str, username: str) -> Dict[str, Any]:
     """LINE即座応答ルート処理"""
-    try:
-        # LINE専用高速テンプレート処理
-        from api.routers.line_bot_template_fast import template_responder
-        result = template_responder.get_instant_response(query, username)
-        
-        return {
-            "answer": result["response"],
-            "sources": [],
-            "status": "ok",
-            "method": "line_instant"
-        }
-        
-    except Exception as e:
-        logger.error(f"LINE instant route error: {e}")
-        return {
-            "answer": generate_platform_fallback(query, "line"),
-            "sources": [],
-            "status": "fallback",
-            "method": "line_instant_fallback"
-        }
+    return {
+        "answer": generate_platform_fallback(query, "line"),
+        "sources": [],
+        "status": "ok",
+        "method": "line_instant"
+    }
 
 async def process_line_template_route(query: str, username: str) -> Dict[str, Any]:
     """LINEテンプレートルート処理"""
@@ -453,15 +441,12 @@ async def process_fast_route(query: str, platform: str, username: str) -> Dict[s
     """高速ルート処理"""
     try:
         if platform == "line":
-            # LINE用高速処理
-            from api.routers.line_bot_template_fast import template_responder
-            result = template_responder.get_instant_response(query, username)
-            
+            # LINE用高速処理は統合LINE Botで処理されるためここでは基本応答
             return {
-                "answer": result["response"],
+                "answer": generate_platform_fallback(query, platform),
                 "sources": [],
                 "status": "ok",
-                "method": "line_template_fast"
+                "method": "line_basic"
             }
         else:
             # Web用高速処理
@@ -543,14 +528,15 @@ async def health_check():
         "status": "healthy",
         "uptime": uptime,
         "timestamp": datetime.now().isoformat(),
-        "version": "4.1.0-line-fixed",
-        "message": "Optimized RAG API with LINE Integration Fixed",
+        "version": "4.2.0-single-line-integration",
+        "message": "Optimized RAG API with Single LINE Integration (No Duplicates)",
         "features": {
             "smart_routing": ENABLE_SMART_ROUTING,
             "fast_routes": ENABLE_FAST_ROUTES,
             "sentence_completion": ENABLE_SENTENCE_COMPLETION,
             "rag_initialization": ENABLE_RAG_INITIALIZATION,
-            "line_integration": ENABLE_LINE_INTEGRATION
+            "line_integration": ENABLE_LINE_INTEGRATION,
+            "line_bot_mode": LINE_BOT_MODE
         },
         "routing_stats": routing_stats,
         "rag_status": {
@@ -559,8 +545,10 @@ async def health_check():
             "llm_ready": llm_instance is not None
         },
         "line_status": {
-            "webhooks_available": ["/line/webhook", "/line-template-fast/webhook"],
-            "routes_configured": True
+            "single_webhook_mode": True,
+            "active_bot_mode": LINE_BOT_MODE,
+            "webhook_endpoint": "/line/webhook",
+            "duplicate_prevention": "enabled"
         }
     }
 
@@ -570,12 +558,12 @@ async def root():
     routing_stats = smart_router.get_stats()
     
     return {
-        "message": "Optimized RAG API with LINE Integration Fixed",
-        "version": "4.1.0",
+        "message": "Optimized RAG API with Single LINE Integration (No Duplicate Messages)",
+        "version": "4.2.0",
         "timestamp": datetime.now().isoformat(),
         "features": [
             "Smart Route Selection (Fast/RAG/Template/LINE)",
-            "LINE Webhook 404 Error Fixed", 
+            "Single LINE Bot Integration (No Duplicates)", 
             "Sentence Completion Guarantee", 
             "Platform-Optimized Processing",
             "LLM/OpenAI API Independence (Fast Routes)",
@@ -584,7 +572,11 @@ async def root():
         ],
         "routing_efficiency": routing_stats,
         "uptime": time.time() - startup_time,
-        "line_webhooks": ["/line/webhook", "/line-template-fast/webhook"]
+        "line_integration": {
+            "mode": LINE_BOT_MODE,
+            "webhook": "/line/webhook",
+            "duplicate_messages": "prevented"
+        }
     }
 
 @app.get("/system-status")
@@ -598,7 +590,8 @@ async def get_system_status():
             "fast_routes": ENABLE_FAST_ROUTES,
             "sentence_completion": ENABLE_SENTENCE_COMPLETION,
             "rag_initialization": ENABLE_RAG_INITIALIZATION,
-            "line_integration": ENABLE_LINE_INTEGRATION
+            "line_integration": ENABLE_LINE_INTEGRATION,
+            "line_bot_mode": LINE_BOT_MODE
         },
         "routing_performance": routing_stats,
         "system_health": {
@@ -607,13 +600,14 @@ async def get_system_status():
             "llm_ready": llm_instance is not None
         },
         "line_integration": {
-            "webhook_endpoints": ["/line/webhook", "/line-template-fast/webhook"],
-            "line_routers_loaded": 2,
-            "line_optimization_enabled": True
+            "webhook_endpoint": "/line/webhook",
+            "active_bot_mode": LINE_BOT_MODE,
+            "registered_routers": 1,  # 単一統合
+            "duplicate_prevention": True
         },
         "completion_patterns": 20,
         "supported_platforms": ["web", "line"],
-        "version": "4.1.0-line-fixed",
+        "version": "4.2.0-single-line-fixed",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -657,42 +651,54 @@ async def test_routing(query: str, platform: str = "web"):
     }
 
 # ==============================================================================
-# 起動時処理（LINE Webhook 404エラー修正）
+# 起動時処理（★修正：単一LINE Bot登録）
 # ==============================================================================
 @app.on_event("startup")
 async def startup_event():
-    """最適化起動処理（LINE統合修正版）"""
-    logger.info("🚀 Starting Optimized RAG API with LINE Integration Fixed...")
+    """単一LINE Bot統合起動処理（複数登録問題修正版）"""
+    logger.info("🚀 Starting Optimized RAG API with Single LINE Integration...")
     
     # RAG初期化（バックグラウンド）
     if ENABLE_RAG_INITIALIZATION:
         asyncio.create_task(initialize_rag_components())
     
-    # ルーター追加（LINE Webhook 404エラー修正版）
-    
-    # 1. LINE Bot統合ルーター追加（404エラー修正）
+    # ★重要：LINE Bot統合（単一ルーター登録）
     if ENABLE_LINE_INTEGRATION:
         try:
-            # LINE Ultra Fast Bot を /line プレフィックスで追加（/line/webhook 対応）
-            from api.routers.line_bot_ultra_fast import router as line_ultra_fast_router
-            app.include_router(line_ultra_fast_router, prefix="/line", tags=["line"])
-            logger.info("✅ LINE Ultra Fast router added at /line (WEBHOOK FIXED)")
+            logger.info(f"🎯 Loading LINE Bot in mode: {LINE_BOT_MODE}")
             
-            # テンプレート高速応答も /line-template-fast で追加（既存の構成維持）
-            from api.routers.line_bot_template_fast import router as line_template_fast_router
-            app.include_router(line_template_fast_router, prefix="/line-template-fast", tags=["line-template-fast"])
-            logger.info("✅ LINE Template Fast router added at /line-template-fast")
+            # 選択されたモードに基づいて単一のLINE Botルーターを登録
+            if LINE_BOT_MODE == "ultra_fast":
+                # Ultra Fastモード（高速応答重視）
+                from api.routers.line_bot_ultra_fast import router as line_router
+                app.include_router(line_router, prefix="/line", tags=["line"])
+                logger.info("✅ LINE Ultra Fast Bot loaded at /line/webhook")
+                
+            elif LINE_BOT_MODE == "rag_integrated":
+                # RAG統合モード（高品質応答）
+                from api.routers.line_bot_rag_integrated import router as line_router
+                app.include_router(line_router, prefix="/line", tags=["line"])
+                logger.info("✅ LINE RAG Integrated Bot loaded at /line/webhook")
+                
+            elif LINE_BOT_MODE == "template_only":
+                # テンプレートオンリーモード（超高速）
+                from api.routers.line_bot_template_fast import router as line_router
+                app.include_router(line_router, prefix="/line", tags=["line"])
+                logger.info("✅ LINE Template Fast Bot loaded at /line/webhook")
+                
+            else:
+                logger.warning(f"⚠️ Unknown LINE_BOT_MODE: {LINE_BOT_MODE}, defaulting to ultra_fast")
+                from api.routers.line_bot_ultra_fast import router as line_router
+                app.include_router(line_router, prefix="/line", tags=["line"])
+                logger.info("✅ LINE Ultra Fast Bot loaded at /line/webhook (default)")
             
-            # 統合RAG版も追加（フォールバック用）
-            from api.routers.line_bot_rag_integrated import router as line_rag_router
-            app.include_router(line_rag_router, prefix="/line-rag", tags=["line-rag"])
-            logger.info("✅ LINE RAG Integrated router added at /line-rag")
+            logger.info("🔒 Multiple LINE Bot registration PREVENTED")
             
         except Exception as e:
-            logger.error(f"❌ Failed to add LINE routers: {e}")
-            logger.error(f"   This may cause continued 404 errors for LINE webhooks")
+            logger.error(f"❌ Failed to load LINE Bot in {LINE_BOT_MODE} mode: {e}")
+            logger.error("   This will cause LINE webhook failures")
     
-    # 2. 高速チャット
+    # 他のルーター（Web系）
     try:
         from api.routers.chat_ultra_fast import router as chat_ultra_fast_router
         app.include_router(chat_ultra_fast_router, prefix="/chat-ultra-fast", tags=["chat-ultra-fast"])
@@ -700,7 +706,6 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️ Failed to add Chat Ultra Fast router: {e}")
     
-    # 3. 標準チャットルーター
     try:
         from api.routers.chat import router as chat_router
         app.include_router(chat_router, prefix="/chat-standard", tags=["chat-standard"])
@@ -708,7 +713,6 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️ Failed to add Standard Chat router: {e}")
     
-    # 4. アップロード機能
     try:
         from api.routers.upload import router as upload_router
         app.include_router(upload_router, prefix="/upload", tags=["upload"])
@@ -716,7 +720,7 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️ Upload router not added: {e}")
     
-    # 5. LINE関連の補助機能
+    # LINE関連補助機能（非重複）
     try:
         from api.routers.line_login import router as line_login_router
         app.include_router(line_login_router, prefix="/line-login", tags=["line-login"])
@@ -731,15 +735,15 @@ async def startup_event():
     except Exception as e:
         logger.info(f"ℹ️ LINE Proxy router not added: {e}")
     
-    logger.info("🎉 Optimized RAG API startup completed with LINE integration fixed")
+    logger.info("🎉 Single LINE Bot Integration completed successfully")
     logger.info(f"⚡ Startup time: {time.time() - startup_time:.2f} seconds")
     logger.info(f"🎯 Smart Routing: {'Enabled' if ENABLE_SMART_ROUTING else 'Disabled'}")
     logger.info(f"🔧 Sentence Completion: {'Enabled' if ENABLE_SENTENCE_COMPLETION else 'Disabled'}")
     logger.info(f"📱 LINE Integration: {'Enabled' if ENABLE_LINE_INTEGRATION else 'Disabled'}")
-    logger.info("📋 Available LINE Webhook URLs:")
-    logger.info("   - /line/webhook (Primary - fixes 404 error)")
-    logger.info("   - /line-template-fast/webhook (Template fast)")
-    logger.info("   - /line-rag/webhook (RAG integrated)")
+    logger.info(f"🤖 LINE Bot Mode: {LINE_BOT_MODE}")
+    logger.info("📋 Available LINE Webhook URL:")
+    logger.info(f"   - /line/webhook (Single integration - {LINE_BOT_MODE} mode)")
+    logger.info("🛡️ Duplicate message prevention: ENABLED")
 
 if __name__ == "__main__":
     import uvicorn

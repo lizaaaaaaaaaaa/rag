@@ -1,6 +1,6 @@
 # api/routers/line_bot_ultra_fast.py
-# reply失効対策・プラットフォーム分離対応版 ＋ 文章途切れ対策（LINE特化・完全修正版）
-# リッチメニュー専用応答・LLM/OpenAI API使用最小化版（応答内容更新版）
+# スマートルーティング統合版（複数応答問題解決版）
+# 単一ハンドラ内でテンプレート応答・RAG処理を振り分け
 
 import logging
 import os
@@ -19,13 +19,13 @@ from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
-# LINE SDK v3 import（修正版 - LineBotApiError問題解決）
+# LINE SDK v3 import
 try:
     from linebot.v3 import WebhookHandler
     from linebot.v3.exceptions import InvalidSignatureError
     from linebot.v3.messaging import (
         Configuration, ApiClient, MessagingApi, ReplyMessageRequest, PushMessageRequest, TextMessage,
-        ApiException  # 修正: LineBotApiError → ApiException
+        ApiException
     )
     from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent, FollowEvent
     LINE_SDK_AVAILABLE = True
@@ -40,29 +40,66 @@ except ImportError as e:
             return decorator
         def handle(self, *args, **kwargs): pass
 
-router = APIRouter(tags=["line-ultra-fast"])
+router = APIRouter(tags=["line-smart-integrated"])
 
 # ==============================================================================
-# LINE専用超高速応答システム（LLM/OpenAI API最小化版・応答内容更新版）
+# LINE統合スマートルーティングシステム
 # ==============================================================================
-class LineUltraFastResponder:
+class LineSmartRouter:
+    """LINE専用スマートルーティングシステム（統合版）"""
+    
     def __init__(self):
-        self.line_templates = self._load_line_templates()
-        self.greeting_message = self._load_greeting_message()
-        self.ai_consultation_active_users = set()  # AI相談モード中のユーザー
-        self.performance_stats = {
-            "requests": 0, 
-            "template_hits": 0, 
-            "greeting_sent": 0, 
-            "push_fallbacks": 0,
-            "ai_consultation_started": 0,
-            "llm_calls_avoided": 0
+        self.routing_stats = {
+            "template_responses": 0,
+            "rag_responses": 0,
+            "fallback_responses": 0,
+            "total_requests": 0,
+            "processing_times": []
         }
         
-    def _load_line_templates(self) -> Dict[str, str]:
-        """LINE専用テンプレート（更新版・完全事前定義・LLM不使用）"""
+        # テンプレート即座応答キーワード（最優先）
+        self.template_keywords = {
+            # リッチメニュー項目（完全一致）
+            "ai相談": "AI相談",
+            "🤖ai相談": "AI相談", 
+            "ai住まいサイト": "AI住まいサイト",
+            "🌐ai住まいサイト": "AI住まいサイト",
+            "資料請求": "資料請求",
+            "📋資料請求": "資料請求",
+            "展示場来場予約": "展示場来場予約",
+            "📍展示場来場予約": "展示場来場予約",
+            "資金計画": "資金計画",
+            "💰資金計画": "資金計画",
+            "チャット相談": "チャット相談",
+            "💬チャット相談": "チャット相談",
+            
+            # 挨拶・基本応答
+            "こんにちは": "挨拶",
+            "はじめまして": "挨拶",
+            "よろしく": "挨拶",
+            "ありがとう": "お礼",
+            "助かり": "お礼"
+        }
+        
+        # RAG処理が必要なキーワード（専門知識）
+        self.rag_keywords = [
+            "坪単価", "価格", "費用", "金額", "コスト", "値段", "見積り", "料金",
+            "仕様", "標準", "設備", "グレード", "オプション", "何が含ま", "含まれる",
+            "断熱", "性能", "省エネ", "ZEH", "UA値", "C値", "気密", "光熱費",
+            "耐震", "地震", "安全", "構造", "基礎", "工法", "強度", "震災",
+            "補助金", "助成金", "支援金", "制度", "控除", "減税", "支援制度",
+            "間取り", "プラン", "設計", "レイアウト", "配置", "部屋数",
+            "土地", "敷地", "分譲", "宅地", "建築地", "土地探し",
+            "建ぺい率", "容積率", "法規", "規制", "基準", "建築基準法",
+            "ローン", "融資", "金利", "審査", "借入", "返済", "資金繰り"
+        ]
+        
+        # テンプレートを読み込み
+        self.templates = self._load_templates()
+        
+    def _load_templates(self) -> Dict[str, str]:
+        """統合テンプレート読み込み"""
         return {
-            # ===== メインリッチメニュー応答（更新版） =====
             "AI相談": """🤖 AI住まい相談を開始します！
 
 キノエデザインの住まいAIコンシェルジュです。
@@ -141,8 +178,197 @@ https://preview.studio.site/live/EjOQljz1WJ/reservation
 営業時間内でしたら迅速にお返事します。
 お気軽にお声かけください！""",
 
-            # ===== 詳細質問応答（既存のまま維持） =====
-            "坪単価": """💰 坪単価についてご案内いたします
+            "挨拶": """こんにちは！キノエデザインです✨
+
+住まいづくりのことでしたら何でもお気軽にご相談ください😊
+
+**🎯 人気のご相談内容**
+💰 坪単価・価格について
+🏠 住宅性能・仕様について  
+📋 資料請求・展示場見学
+💴 資金計画・住宅ローン
+
+どのようなことを知りたいですか？""",
+
+            "お礼": """どういたしまして😊
+
+他にもご質問がございましたら、お気軽にお聞かせください。
+
+**📞 より詳しい相談をご希望の場合**
+・「展示場予約」→専門スタッフが直接対応
+・「資料請求」→詳細資料をお送りします
+
+住まいづくりを全力でサポートいたします✨"""
+        }
+    
+    def determine_response_route(self, message_text: str) -> Dict[str, Any]:
+        """メッセージに基づく応答ルート決定"""
+        start_time = time.time()
+        self.routing_stats["total_requests"] += 1
+        
+        message_lower = message_text.lower().replace(" ", "").replace("　", "")
+        
+        # 1. テンプレート応答チェック（最優先・最高速）
+        for keyword, template_key in self.template_keywords.items():
+            if keyword in message_lower or keyword == message_lower:
+                self.routing_stats["template_responses"] += 1
+                processing_time = time.time() - start_time
+                self.routing_stats["processing_times"].append(processing_time)
+                
+                return {
+                    "route": "template",
+                    "template_key": template_key,
+                    "response": self.templates.get(template_key, ""),
+                    "processing_time": processing_time,
+                    "reason": f"Template match: {keyword}"
+                }
+        
+        # 2. RAG処理が必要なキーワードチェック
+        rag_matched = []
+        for keyword in self.rag_keywords:
+            if keyword in message_text:
+                rag_matched.append(keyword)
+        
+        if rag_matched:
+            self.routing_stats["rag_responses"] += 1
+            processing_time = time.time() - start_time
+            self.routing_stats["processing_times"].append(processing_time)
+            
+            return {
+                "route": "rag",
+                "rag_keywords": rag_matched,
+                "processing_time": processing_time,
+                "reason": f"RAG keywords matched: {', '.join(rag_matched[:3])}"
+            }
+        
+        # 3. 質問の複雑さと長さで判定
+        question_indicators = ["？", "?", "教えて", "知りたい", "どう", "なぜ", "どこ", "いつ", "いくら"]
+        is_question = any(indicator in message_text for indicator in question_indicators)
+        
+        if is_question and len(message_text) > 15:
+            self.routing_stats["rag_responses"] += 1
+            processing_time = time.time() - start_time
+            self.routing_stats["processing_times"].append(processing_time)
+            
+            return {
+                "route": "rag",
+                "rag_keywords": ["complex_question"],
+                "processing_time": processing_time,
+                "reason": f"Complex question detected (length: {len(message_text)})"
+            }
+        
+        # 4. フォールバック（基本応答）
+        self.routing_stats["fallback_responses"] += 1
+        processing_time = time.time() - start_time
+        self.routing_stats["processing_times"].append(processing_time)
+        
+        return {
+            "route": "fallback",
+            "processing_time": processing_time,
+            "reason": "No specific pattern matched"
+        }
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """統計情報取得"""
+        total = self.routing_stats["total_requests"]
+        avg_processing_time = sum(self.routing_stats["processing_times"]) / len(self.routing_stats["processing_times"]) if self.routing_stats["processing_times"] else 0
+        
+        return {
+            "total_requests": total,
+            "template_responses": self.routing_stats["template_responses"],
+            "rag_responses": self.routing_stats["rag_responses"],
+            "fallback_responses": self.routing_stats["fallback_responses"],
+            "template_rate": (self.routing_stats["template_responses"] / total * 100) if total > 0 else 0,
+            "rag_rate": (self.routing_stats["rag_responses"] / total * 100) if total > 0 else 0,
+            "fallback_rate": (self.routing_stats["fallback_responses"] / total * 100) if total > 0 else 0,
+            "avg_processing_time_ms": avg_processing_time * 1000,
+            "duplicate_prevention": True,
+            "single_handler": True
+        }
+
+# ==============================================================================
+# RAG処理統合クラス
+# ==============================================================================
+class LineRAGIntegration:
+    """LINE用RAG処理統合"""
+    
+    def __init__(self):
+        self.rag_cache = {}
+        self.rag_available = False
+        self._initialize_rag()
+    
+    def _initialize_rag(self):
+        """RAGシステム初期化"""
+        try:
+            from main import vectorstore, rag_chain_template, llm_instance, is_initialized
+            if is_initialized and rag_chain_template:
+                self.rag_available = True
+                logger.info("✅ RAG integration initialized for LINE")
+            else:
+                logger.info("ℹ️ RAG not initialized, will use fallback")
+        except Exception as e:
+            logger.warning(f"⚠️ RAG integration failed: {e}")
+    
+    async def process_rag_query(self, query: str, user_id: str) -> str:
+        """RAG処理実行"""
+        if not self.rag_available:
+            return self._generate_rag_fallback(query)
+        
+        # キャッシュチェック
+        cache_key = hashlib.md5(f"{query}::{user_id}".encode()).hexdigest()
+        if cache_key in self.rag_cache:
+            cached_result = self.rag_cache[cache_key]
+            if time.time() - cached_result["timestamp"] < 3600:  # 1時間キャッシュ
+                logger.info(f"🎯 RAG cache hit for: {query[:30]}...")
+                return cached_result["answer"]
+        
+        try:
+            # メインアプリのRAGチェーンを使用
+            from main import rag_chain_template
+            if rag_chain_template:
+                # タイムアウト付きRAG処理
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(self._execute_rag, query, rag_chain_template)
+                    try:
+                        result = future.result(timeout=8)  # 8秒タイムアウト
+                        if result and len(result.strip()) > 10:
+                            # キャッシュ保存
+                            self.rag_cache[cache_key] = {
+                                "answer": result,
+                                "timestamp": time.time()
+                            }
+                            return self._ensure_line_format(result)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning("⚠️ RAG processing timeout")
+            
+            return self._generate_rag_fallback(query)
+            
+        except Exception as e:
+            logger.error(f"❌ RAG processing error: {e}")
+            return self._generate_rag_fallback(query)
+    
+    def _execute_rag(self, query: str, rag_chain):
+        """RAG実行（同期処理）"""
+        result = rag_chain.invoke({"query": query})
+        return result.get("result", "")
+    
+    def _ensure_line_format(self, text: str) -> str:
+        """LINE用フォーマット調整"""
+        if not text.endswith(('。', '！', '？', '.', '!', '?')):
+            text += '。'
+        
+        # LINE用に長すぎる場合は短縮
+        if len(text) > 1500:
+            text = text[:1400] + "...\n\n詳しくはお問い合わせください😊"
+        
+        return text
+    
+    def _generate_rag_fallback(self, query: str) -> str:
+        """RAG処理失敗時のフォールバック"""
+        query_lower = query.lower()
+        
+        if any(keyword in query_lower for keyword in ["坪単価", "価格", "費用", "金額"]):
+            return """💰 坪単価についてご案内いたします
 
 🏠 **当社の坪単価目安**
 ・標準仕様：約70～85万円/坪
@@ -154,575 +380,54 @@ https://preview.studio.site/live/EjOQljz1WJ/reservation
 ・高断熱・高気密仕様
 ・標準設備一式
 
-お客様のご要望により変動いたします。
-詳細なお見積りは無料で承ります！
+詳細なお見積りは「展示場予約」でご相談ください😊"""
+        
+        elif any(keyword in query_lower for keyword in ["断熱", "性能", "省エネ"]):
+            return """🌡️ 断熱性能についてご案内いたします
 
-📞 **お問い合わせ**
-展示場見学または資料請求をご希望でしたら、
-「展示場予約」「資料請求」とメッセージください。""",
-
-            "標準仕様": """🏗️ 標準仕様についてご説明いたします
-
-**🏠 構造・性能**
-・耐震等級3（最高等級）
-・長期優良住宅認定対応
-・省エネ等級4以上
-・高断熱・高気密仕様
-
-**🔧 設備仕様**
-・システムキッチン
-・ユニットバス
-・洗面化粧台
-・トイレ（温水洗浄便座付）
-
-**📋 詳細確認方法**
-より詳しい仕様書をご希望の場合：
-「資料請求」→ 詳細仕様書をお送りします
-「展示場予約」→ 実際の住宅をご確認いただけます
-
-どちらをご希望か教えてください😊""",
-
-            "断熱性能": """🌡️ 断熱性能についてご案内いたします
-
-**📊 断熱等級**
+**断熱等級**
 ・断熱等級4以上（ZEH基準対応）
-・UA値：0.6以下（地域区分6）
-・C値：1.0以下（気密性能）
+・UA値：0.6以下
+・C値：1.0以下（高気密）
 
-**🧱 使用断熱材**
-・外壁：高性能グラスウール
-・屋根：吹付断熱材
-・基礎：押出法ポリスチレンフォーム
-
-**✨ 快適性のメリット**
+**快適性**
 ・夏涼しく、冬暖かい
-・光熱費の大幅削減
-・結露の抑制
+・光熱費の削減効果
 ・一年中快適な室温
 
-**🏠 体感してみませんか？**
-展示場で実際の断熱性能を体感していただけます。
-「展示場予約」とメッセージください！""",
+詳しくは展示場で体感してください✨
+「展示場予約」でお申し込みいただけます！"""
+        
+        elif any(keyword in query_lower for keyword in ["耐震", "地震", "安全"]):
+            return """🏗️ 耐震性能についてご案内いたします
 
-            "耐震性能": """🏗️ 耐震性能についてご案内いたします
-
-**🛡️ 耐震等級**
+**耐震等級**
 ・耐震等級3（最高等級）を標準採用
-・建築基準法の1.5倍の耐震強度
+・建築基準法の1.5倍の強度
 ・許容応力度計算による構造計算
 
-**🔩 構造材の特徴**
-・構造用集成材使用
-・金物工法による強固な接合
-・ベタ基礎による堅固な基礎
-
-**📝 充実の保証**
+**保証**
 ・構造躯体20年保証
 ・地盤保証20年
 ・瑕疵担保責任保険対応
 
-**🏆 安心のポイント**
-大地震にも耐えうる最高水準の耐震性能で、
-ご家族の安全を守ります。
-
-構造の詳細は展示場でご確認いただけます。
-「展示場予約」でご見学ください！""",
-
-            "補助金": """💰 住宅補助金制度についてご案内します
-
-**🏠 主な補助金制度**
-
-**🌱 ZEH補助金**
-・高性能住宅への補助
-・定額55万円～（条件により異なる）
-
-**👶 こどもエコすまい支援事業**  
-・子育て世帯・若年夫婦世帯対象
-・最大100万円の補助
-
-**🏦 住宅ローン減税**
-・所得税の控除制度
-・13年間の減税メリット
-・年間最大35万円の控除
-
-**🏘️ 地域独自の補助金**
-・自治体による支援制度
-・地域により内容が異なります
-
-**⚠️ 重要なお知らせ**
-制度は年度ごとに変更される可能性があります。
-
-**📞 最新情報の確認**
-詳しい補助金情報は専門スタッフがご案内します。
-「資料請求」で最新の補助金ガイドをお送りします！""",
-
-            # 追加の応答テンプレート
-            "土地探し": """🏗️ 土地探しについてご案内します
-
-**🔍 土地選びのポイント**
-・立地条件（交通・生活利便性）
-・土地の形状・面積
-・建築制限・用途地域
-・地盤の状況
-・予算バランス
-
-**🏠 当社のサポート**
-・土地探しから建築まで一貫対応
-・建築会社の視点での土地評価
-・資金計画込みでのご提案
-・地盤調査・改良工事対応
-
-**📞 土地探しご相談**
-「展示場予約」で専門スタッフがご相談を承ります。
-ご希望エリアや条件をお聞かせください！""",
-
-            "間取り": """🏠 間取りについてご案内します
-
-**📐 間取りプランニング**
-・ライフスタイルに合わせた設計
-・家族構成を考慮した間取り
-・将来の変化に対応した可変性
-・収納計画・家事動線の最適化
-
-**🎨 設計の特徴**
-・自然光を活かした明るい空間
-・風通しの良い快適な環境
-・プライバシーに配慮した配置
-・バリアフリー対応
-
-**📋 間取り相談の流れ**
-1️⃣ ご家族構成・ライフスタイルヒアリング
-2️⃣ 土地条件の確認
-3️⃣ 間取りプラン作成
-4️⃣ プレゼンテーション・修正
-
-**🏠 実際の間取りをご覧ください**
-「展示場予約」で実際の間取りをご確認いただけます！""",
-        }
+安心・安全な住まいをお約束します✨"""
         
-    def _load_greeting_message(self) -> str:
-        """友だち追加時の挨拶メッセージ（更新版）"""
-        return """こんにちは！キノエデザインです✨
-この度は友だち追加ありがとうございます。
-
-**🎯 目的のボタンをタップ👇**
-🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画 / 🌐サイト / 💬チャット
-
-**⚡ 応答について**
-・AIは24時間対応
-・スタッフは営業日に対応
-・営業時間：9:00-18:00
-
-**🔒 プライバシー**
-取扱い：https://preview.studio.site/live/EjOQljz1WJ/privacy-policy
-
-住まいのことなら何でもお気軽にご相談ください😊"""
-
-    # ---------------------------
-    # 文章完全性の確保（★強化版）
-    # ---------------------------
-    def ensure_line_response_complete(self, text: str, query: str = "") -> str:
-        """LINE用文章完全性確保（強化版）"""
-        if not text or len(text.strip()) < 5:
-            return self._emergency_response()
-        
-        text = text.strip()
-        
-        # 文末チェックと補完（LINE特化）
-        if not text.endswith(('。', '！', '？', '.', '!', '?')):
-            logger.info(f"🔧 Fixing LINE response: '{text[-30:]}'")
-            
-            # 特定の途切れパターンの補完（LINE用）
-            if text.endswith('や'):  # 「土地探しや」のケース
-                text += "建築準備を進めることが大切です✨"
-            elif text.endswith('重要'):  # 「重要」のケース
-                text += 'です😊お気軽にご相談ください。'
-            elif text.endswith('必要'):
-                text += 'です。'
-            elif text.endswith('について'):
-                text += 'は詳しくご案内いたします💡'
-            elif text.endswith('選定') or text.endswith('検討'):
-                text += 'も重要なポイントです。'
-            elif text.endswith('ます') or text.endswith('です'):
-                text += '。'
-            elif text.endswith('た') or text.endswith('る'):
-                text += '。'
-            elif text.endswith('、'):
-                text = text[:-1] + '。'
-            elif text.endswith('は') or text.endswith('が'):
-                text += '重要です✨'
-            elif text.endswith('ので') or text.endswith('ため'):
-                text += '、お気軽にご相談ください😊'
-            elif text.endswith('準備') or text.endswith('計画'):
-                text += 'を進めましょう。'
-            else:
-                # 長さによる補完（LINE用）
-                if len(text) > 30:
-                    text += '。'
-                elif len(text) > 15:
-                    text += '。詳しくはお問い合わせください😊'
-                else:
-                    text = self._emergency_response()
-            
-            logger.info(f"✅ Fixed LINE response: '{text[-30:]}'")
-        
-        return text
-
-    def process_ultra_fast(self, message_text: str, user_id: str = "unknown") -> str:
-        """超高速処理（文章完全性強化版・LLM回避優先）"""
-        start_time = time.time()
-        self.performance_stats["requests"] += 1
-        
-        try:
-            # 1. リッチメニューアクション検出（最優先・LLM不使用）
-            action = self._detect_richmenu_action(message_text)
-            if action != "unknown":
-                self.performance_stats["template_hits"] += 1
-                self.performance_stats["llm_calls_avoided"] += 1
-                
-                # AI相談の場合は専用処理
-                if action == "AI相談":
-                    self.ai_consultation_active_users.add(user_id)
-                    self.performance_stats["ai_consultation_started"] += 1
-                    logger.info(f"🤖 AI consultation activated for user: {user_id}")
-                
-                response = self.line_templates.get(action, "ご利用ありがとうございます。")
-                
-                # 🔧 リッチメニュー応答も完全性チェック
-                complete_response = self.ensure_line_response_complete(response, message_text)
-                
-                processing_time = (time.time() - start_time) * 1000
-                logger.info(f"🎯 LINE Richmenu response: {action} in {processing_time:.1f}ms")
-                return complete_response
-
-            # 2. AI相談モード中のユーザーの質問処理
-            if user_id in self.ai_consultation_active_users:
-                logger.info(f"🤖 Processing AI consultation for user: {user_id}")
-                return self._process_ai_consultation_question(message_text, user_id)
-
-            # 3. 一般質問の高速テンプレート処理（LLM回避）
-            template_response = self._match_question_template(message_text)
-            if template_response:
-                self.performance_stats["template_hits"] += 1
-                self.performance_stats["llm_calls_avoided"] += 1
-                
-                # 🔧 質問テンプレート応答も完全性チェック
-                complete_template = self.ensure_line_response_complete(template_response, message_text)
-                
-                processing_time = (time.time() - start_time) * 1000
-                logger.info(f"🎯 LINE Question template in {processing_time:.1f}ms")
-                return complete_template
-            
-            # 4. インテリジェントフォールバック（LLM回避）
-            fallback_response = self._generate_line_fallback(message_text)
-            self.performance_stats["llm_calls_avoided"] += 1
-            
-            # 🔧 フォールバック応答も完全性チェック
-            complete_fallback = self.ensure_line_response_complete(fallback_response, message_text)
-            
-            processing_time = (time.time() - start_time) * 1000
-            logger.info(f"🔄 LINE Fallback in {processing_time:.1f}ms")
-            return complete_fallback
-            
-        except Exception as e:
-            logger.error(f"❌ LINE processing error: {e}")
-            emergency = self._emergency_response()
-            return self.ensure_line_response_complete(emergency, message_text)
-
-    def _process_ai_consultation_question(self, message_text: str, user_id: str) -> str:
-        """AI相談モード中の質問処理（LLM最小使用版）"""
-        # まずテンプレートで回答できるか確認
-        template_response = self._match_question_template(message_text)
-        if template_response:
-            self.performance_stats["llm_calls_avoided"] += 1
-            return self.ensure_line_response_complete(template_response + "\n\n他にもご質問がございましたらお気軽にどうぞ😊", message_text)
-        
-        # 特定キーワードによる事前定義回答
-        predefined_response = self._get_predefined_ai_response(message_text)
-        if predefined_response:
-            self.performance_stats["llm_calls_avoided"] += 1
-            return self.ensure_line_response_complete(predefined_response, message_text)
-        
-        # 最終手段：スタッフへの誘導（LLM使用回避）
-        self.performance_stats["llm_calls_avoided"] += 1
-        return """ご質問ありがとうございます😊
+        else:
+            return """ご質問ありがとうございます😊
 
 より詳しい情報をお答えするため、専門スタッフがご対応いたします。
 
 **📞 すぐに相談したい場合**
 「展示場予約」で直接ご相談いただけます
 
-**📄 詳しい資料が欲しい場合**
+**📄 詳しい資料が欲しい場合**  
 「資料請求」で専門資料をお送りします
-
-**💬 このLINEで相談継続**
-営業時間内（9:00-18:00）でしたらスタッフが直接お答えします
 
 どちらがよろしいでしょうか？"""
 
-    def _get_predefined_ai_response(self, message_text: str) -> Optional[str]:
-        """事前定義AI応答の取得（更新版）"""
-        text_lower = message_text.lower()
-        
-        predefined_responses = {
-            "挨拶": {
-                "keywords": ["こんにちは", "こんばんは", "おはよう", "はじめまして"],
-                "response": """こんにちは😊
-AI住まい相談をご利用いただきありがとうございます！
-
-住まいに関することでしたら何でもお気軽にご質問ください。
-
-💡 **人気の質問**
-・坪単価について
-・住宅の性能について
-・資料請求・展示場見学
-・補助金制度について
-
-どのようなことを知りたいですか？"""
-            },
-            
-            "お礼": {
-                "keywords": ["ありがとう", "感謝", "助かり"],
-                "response": """どういたしまして😊
-
-他にもご質問がございましたら、お気軽にお聞かせください。
-
-**📞 より詳しい相談をご希望の場合**
-・「展示場予約」→専門スタッフが直接対応
-・「資料請求」→詳細資料をお送りします
-
-住まいづくりを全力でサポートいたします✨"""
-            },
-            
-            "家づくり開始": {
-                "keywords": ["家を建てたい", "マイホーム", "新築したい", "住宅建築"],
-                "response": """🏠 家づくりを始められるのですね！
-
-**✨ 家づくりのステップ**
-1️⃣ 資金計画・予算確認
-2️⃣ 土地探し
-3️⃣ 住宅会社選び
-4️⃣ 間取り・仕様打合せ
-5️⃣ 契約・着工
-
-**🎯 まずはこちらから**
-・「資金計画」→ 予算の相談
-・「展示場予約」→ 実際の住宅を見学
-・「資料請求」→ 基本情報の収集
-
-どこから始めますか？😊"""
-            },
-            
-            "比較検討": {
-                "keywords": ["他社比較", "検討中", "迷って", "決められない"],
-                "response": """🤔 検討段階ですね！
-
-**🔍 比較のポイント**
-・住宅性能（耐震・断熱など）
-・アフターサービス・保証
-・価格・コストパフォーマンス
-・施工実績・信頼性
-・スタッフの対応
-
-**💡 当社の特徴を知りたい場合**
-「展示場予約」で実際に体感してください！
-
-他社との違いを分かりやすくご説明します😊
-比較検討のポイントもお教えします！"""
-            }
-        }
-        
-        for category, data in predefined_responses.items():
-            if any(keyword in text_lower for keyword in data["keywords"]):
-                return data["response"]
-        
-        return None
-    
-    def _detect_richmenu_action(self, message: str) -> str:
-        """リッチメニューアクション検出（拡張版・更新版）"""
-        text_clean = message.lower().replace(" ", "").replace("　", "")
-        
-        # 更新されたマッチングパターン（絵文字対応）
-        richmenu_patterns = {
-            "AI相談": ["🤖ai相談", "ai相談", "ai住まい相談", "相談開始", "aiチャット"],
-            "AI住まいサイト": ["🌐ai住まいサイト", "ai住まいサイト", "サイト", "ホームページ", "ウェブ"],
-            "資料請求": ["📋資料請求", "資料請求", "資料", "パンフレット", "カタログ", "送って"],
-            "展示場来場予約": ["📍展示場来場予約", "展示場来場予約", "展示場予約", "展示場", "見学", "予約", "来場"],
-            "資金計画": ["💰資金計画", "資金計画", "ローン", "住宅ローン", "お金", "返済"],
-            "チャット相談": ["💬チャット相談", "チャット相談", "チャット", "スタッフ", "担当者"],
-            "坪単価": ["坪単価", "価格", "費用", "いくら", "金額", "値段", "コスト"],
-            "標準仕様": ["標準仕様", "仕様", "設備", "標準", "基本仕様"],
-            "断熱性能": ["断熱", "断熱性能", "省エネ", "温度", "暖房", "冷房"],
-            "耐震性能": ["耐震", "地震", "安全", "強度", "耐震性"],
-            "補助金": ["補助金", "助成金", "支援金", "補助制度", "支援制度"],
-            "土地探し": ["土地探し", "土地", "敷地", "分譲地"],
-            "間取り": ["間取り", "プラン", "設計", "レイアウト"]
-        }
-        
-        for action, patterns in richmenu_patterns.items():
-            # 完全一致または部分一致
-            if any(pattern in text_clean for pattern in patterns):
-                # より正確な判定のため、文脈も考慮
-                if len(message.strip()) <= 15 and any(pattern == text_clean for pattern in patterns):
-                    # 短いメッセージで完全一致の場合
-                    return action
-                elif any(pattern in text_clean for pattern in patterns):
-                    # 部分一致の場合
-                    return action
-        
-        return "unknown"
-    
-    def _match_question_template(self, query: str) -> Optional[str]:
-        """一般質問のテンプレートマッチング（拡張版）"""
-        query_lower = query.lower()
-        
-        # より詳細なマッチング辞書
-        question_templates = {
-            "坪単価": {
-                "keywords": ["坪単価", "価格", "費用", "コスト", "いくら", "値段", "金額", "料金"],
-                "template": "坪単価"
-            },
-            "標準仕様": {
-                "keywords": ["仕様", "設備", "標準", "基本", "何が", "ついて", "含ま"],
-                "template": "標準仕様"
-            },
-            "断熱性能": {
-                "keywords": ["断熱", "省エネ", "温度", "光熱費", "暖房", "冷房", "快適"],
-                "template": "断熱性能"
-            },
-            "耐震性能": {
-                "keywords": ["耐震", "地震", "安全", "強度", "構造", "震災"],
-                "template": "耐震性能"
-            },
-            "補助金": {
-                "keywords": ["補助金", "助成金", "支援金", "補助", "支援", "制度"],
-                "template": "補助金"
-            },
-            "資料請求": {
-                "keywords": ["資料", "パンフレット", "カタログ", "送って", "郵送"],
-                "template": "資料請求"
-            },
-            "展示場来場予約": {
-                "keywords": ["見学", "展示場", "予約", "来場", "訪問"],
-                "template": "展示場来場予約"
-            },
-            "資金計画": {
-                "keywords": ["ローン", "資金", "借入", "返済", "金利", "融資"],
-                "template": "資金計画"
-            },
-            "土地探し": {
-                "keywords": ["土地", "敷地", "分譲", "宅地", "建築地"],
-                "template": "土地探し"
-            },
-            "間取り": {
-                "keywords": ["間取り", "プラン", "設計", "レイアウト", "配置"],
-                "template": "間取り"
-            }
-        }
-        
-        for template_name, data in question_templates.items():
-            if any(keyword in query_lower for keyword in data["keywords"]):
-                return self.line_templates.get(data["template"])
-        
-        return None
-    
-    def _generate_line_fallback(self, query: str) -> str:
-        """LINE専用フォールバック（完全性強化版・LLM不使用・更新版）"""
-        q_lower = query.lower()
-        
-        # より具体的なフォールバック応答（更新版）
-        if any(word in q_lower for word in ["家を建てる", "マイホーム", "新築", "建築"]):
-            return """🏗️ 家づくりについてお答えいたします
-
-家づくりは人生で最も大きな買い物の一つです✨
-
-**📋 家づくりの流れ**
-1️⃣ 資金計画・予算確認
-2️⃣ 土地探し・土地選定
-3️⃣ 住宅会社選び
-4️⃣ 間取り・仕様決定
-5️⃣ 契約・着工・完成
-
-**🎯 まずはここから始めませんか？**
-・「資料請求」→ 基本情報の収集
-・「展示場予約」→ 実際の住まいを体感
-・「資金計画」→ 予算の明確化
-
-お客様のご希望をお聞かせください😊"""
-        
-        elif any(word in q_lower for word in ["補助金", "助成", "支援"]):
-            return self.line_templates["補助金"]
-        
-        elif any(word in q_lower for word in ["こんにちは", "はじめまして", "よろしく"]):
-            return """こんにちは！キノエデザインです✨
-
-住まいづくりのことでしたら何でもお気軽にご相談ください😊
-
-**🎯 人気のご相談内容**
-💰 坪単価・価格について
-🏠 住宅性能・仕様について  
-📋 資料請求・展示場見学
-💴 資金計画・住宅ローン
-
-**📞 お問い合わせ方法**
-下記メニューからお選びいただくか、
-直接ご質問をメッセージください！
-
-どのようなことを知りたいですか？"""
-        
-        else:
-            return """ご質問ありがとうございます✨
-
-住まいづくりについて、どのようなことをお知りになりたいでしょうか？
-
-**🎯 よくあるご質問**
-💰 坪単価や費用について
-🏠 住宅性能や仕様について
-📋 資料請求・展示場見学について
-💴 資金計画・住宅ローンについて
-🌐 補助金制度について
-
-**📱 お答え方法**
-具体的にお聞かせいただければ、
-詳しくご案内いたします。
-
-または下記メニューをご利用ください：
-🤖AI相談 / 📍展示場予約 / 📄資料請求
-
-お気軽にお問い合わせください😊"""
-    
-    def _emergency_response(self) -> str:
-        """緊急時応答（完全性保証版）"""
-        return """申し訳ございません。一時的にシステムの不具合が発生しております。
-
-しばらくしてから再度お試しいただくか、下記までお電話でお問い合わせください。
-
-📞 **お電話でのお問い合わせ**
-営業時間：9:00-18:00
-
-ご不便をおかけして申し訳ございません。
-復旧次第、正常にご利用いただけます。"""
-    
-    def get_performance_stats(self) -> Dict:
-        """パフォーマンス統計（LLM回避重視）"""
-        total = self.performance_stats["requests"]
-        template_rate = (self.performance_stats["template_hits"] / total * 100) if total > 0 else 0
-        llm_avoidance_rate = (self.performance_stats["llm_calls_avoided"] / total * 100) if total > 0 else 0
-        
-        return {
-            "total_requests": total,
-            "template_hit_rate": template_rate,
-            "llm_calls_avoided": self.performance_stats["llm_calls_avoided"],
-            "llm_avoidance_rate": llm_avoidance_rate,
-            "ai_consultation_started": self.performance_stats["ai_consultation_started"],
-            "greeting_sent": self.performance_stats["greeting_sent"],
-            "push_fallbacks_used": self.performance_stats["push_fallbacks"],
-            "available_templates": len(self.line_templates),
-            "active_ai_consultations": len(self.ai_consultation_active_users)
-        }
-
 # ==============================================================================
-# LINE Bot設定と初期化（修正版）
+# LINE Bot設定と初期化
 # ==============================================================================
 def get_line_credentials_safe():
     """LINE認証情報を安全に取得"""
@@ -772,7 +477,10 @@ def normalize_line_token(token) -> str:
 LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = get_line_credentials_safe()
 line_bot_api = None
 handler = None
-ultra_responder = LineUltraFastResponder()
+
+# グローバルインスタンス
+smart_router = LineSmartRouter()
+rag_integration = LineRAGIntegration()
 
 if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
     try:
@@ -786,7 +494,7 @@ if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
             with ApiClient(configuration) as api_client:
                 line_bot_api = MessagingApi(api_client)
             
-            logger.info("✅ LINE Ultra Fast Bot initialized successfully")
+            logger.info("✅ LINE Smart Integrated Bot initialized successfully")
         else:
             raise ValueError("Empty normalized credentials")
             
@@ -795,10 +503,10 @@ if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
         line_bot_api, handler = None, None
 
 # ==============================================================================
-# 安全送信関数（reply失効対策付き・修正版）
+# 安全送信関数（reply失効対策付き）
 # ==============================================================================
 def send_line_message_safe(reply_token: str, user_id: str, message: str) -> bool:
-    """安全なLINE送信（reply失効時はPush APIにフォールバック・修正版）"""
+    """安全なLINE送信（reply失効時はPush APIにフォールバック）"""
     if not line_bot_api:
         logger.error("❌ LINE Bot API not initialized")
         return False
@@ -821,14 +529,13 @@ def send_line_message_safe(reply_token: str, user_id: str, message: str) -> bool
                         messages=[TextMessage(text=message)]
                     )
                 )
-                logger.info(f"✅ Reply message sent: {len(message)} chars")
+                logger.info(f"✅ Single reply sent: {len(message)} chars")
                 return True
                 
-            except ApiException as reply_error:  # 修正: LineBotApiError → ApiException
+            except ApiException as reply_error:
                 # Reply失効時はPush APIにフォールバック
                 if "Invalid reply token" in str(reply_error) or getattr(reply_error, "status", None) == 400:
-                    logger.warning(f"⚠️ Reply token expired, using Push API fallback for user: {user_id}")
-                    ultra_responder.performance_stats["push_fallbacks"] += 1
+                    logger.warning(f"⚠️ Reply token expired, using Push API fallback")
                     
                     try:
                         messaging_api.push_message_with_http_info(
@@ -843,23 +550,7 @@ def send_line_message_safe(reply_token: str, user_id: str, message: str) -> bool
                         logger.error(f"❌ Push API also failed: {push_error}")
                         return False
                 else:
-                    logger.error(f"❌ Reply API error (not token expiry): {reply_error}")
-                    return False
-            except Exception as general_error:
-                logger.error(f"❌ Reply API general error: {general_error}")
-                # 一般エラーでもPush APIフォールバックを試行
-                try:
-                    messaging_api.push_message_with_http_info(
-                        PushMessageRequest(
-                            to=user_id,
-                            messages=[TextMessage(text=message)]
-                        )
-                    )
-                    logger.info(f"✅ Push message sent as general fallback: {len(message)} chars")
-                    ultra_responder.performance_stats["push_fallbacks"] += 1
-                    return True
-                except Exception as push_error:
-                    logger.error(f"❌ Push API general fallback failed: {push_error}")
+                    logger.error(f"❌ Reply API error: {reply_error}")
                     return False
         
     except Exception as e:
@@ -870,9 +561,9 @@ def send_line_message_safe(reply_token: str, user_id: str, message: str) -> bool
 # Webhook エンドポイント
 # ==============================================================================
 @router.post("/webhook")
-async def ultra_fast_webhook(request: Request, background_tasks: BackgroundTasks):
-    """超高速Webhook（reply失効対策付き）"""
-    logger.info("🚀 LINE Ultra Fast Webhook called")
+async def smart_integrated_webhook(request: Request, background_tasks: BackgroundTasks):
+    """スマート統合Webhook（単一ハンドラ・複数応答防止）"""
+    logger.info("🚀 LINE Smart Integrated Webhook called")
     
     if not line_bot_api or not handler:
         logger.error("❌ LINE Bot not configured properly")
@@ -887,50 +578,64 @@ async def ultra_fast_webhook(request: Request, background_tasks: BackgroundTasks
             return {"status": "error", "message": "Missing signature"}
         
         body_text = body.decode("utf-8")
-        logger.info(f"📨 Webhook body preview: {body_text[:200]}...")
+        logger.info(f"📨 Single webhook processing: {body_text[:200]}...")
         
         handler.handle(body_text, signature)
         
-        logger.info("✅ Webhook processed successfully")
+        logger.info("✅ Single webhook processed successfully")
         return {"status": "ok", "timestamp": datetime.now().isoformat()}
         
     except InvalidSignatureError as sig_error:
         logger.error(f"❌ Invalid signature: {sig_error}")
         return {"status": "signature_error"}
     except Exception as e:
-        logger.error(f"💥 Ultra fast webhook error: {e}")
+        logger.error(f"💥 Smart integrated webhook error: {e}")
         logger.error(traceback.format_exc())
         return {"status": "error", "error": str(e)}
 
 # ==============================================================================
-# イベントハンドラ（修正版・LLM最小化）
+# イベントハンドラ（スマートルーティング統合版）
 # ==============================================================================
 if LINE_SDK_AVAILABLE and handler:
     
     @handler.add(FollowEvent)
-    def handle_follow_ultra_fast(event):
-        """超高速フォローハンドラ（挨拶送信・更新版）"""
+    def handle_follow_smart_integrated(event):
+        """フォローハンドラ（統合版）"""
         start_time = time.time()
         try:
             user_id = event.source.user_id
             reply_token = event.reply_token
             
-            logger.info(f"👤 New follower (ultra fast): {user_id}")
+            logger.info(f"👤 New follower (smart integrated): {user_id}")
             
-            success = send_line_message_safe(reply_token, user_id, ultra_responder.greeting_message)
-            if success:
-                ultra_responder.performance_stats["greeting_sent"] += 1
+            greeting_message = """こんにちは！キノエデザインです✨
+この度は友だち追加ありがとうございます。
+
+**🎯 目的のボタンをタップ👇**
+🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画 / 🌐サイト / 💬チャット
+
+**⚡ 応答について**
+・AIは24時間対応
+・スタッフは営業日に対応
+・営業時間：9:00-18:00
+
+**🔒 プライバシー**
+取扱い：https://preview.studio.site/live/EjOQljz1WJ/privacy-policy
+
+住まいのことなら何でもお気軽にご相談ください😊"""
+            
+            success = send_line_message_safe(reply_token, user_id, greeting_message)
             
             duration = (time.time() - start_time) * 1000
-            logger.info(f"✅ Ultra fast greeting sent: {duration:.1f}ms, success: {success}")
+            logger.info(f"✅ Single greeting sent: {duration:.1f}ms, success: {success}")
             
         except Exception as e:
-            logger.error(f"❌ Ultra fast follow error: {e}")
+            logger.error(f"❌ Smart follow error: {e}")
             logger.error(traceback.format_exc())
     
     @handler.add(MessageEvent, message=TextMessageContent)
-    def handle_message_ultra_fast(event):
-        """超高速メッセージハンドラ（LLM最小化版・更新版）"""
+    def handle_message_smart_integrated(event):
+        """メッセージハンドラ（スマートルーティング統合版・単一応答保証）"""
         start_time = time.time()
         
         try:
@@ -938,39 +643,92 @@ if LINE_SDK_AVAILABLE and handler:
             message_text = event.message.text
             reply_token = event.reply_token
             
-            logger.info(f"📱 LINE Ultra fast processing: '{message_text[:30]}...' from user: {user_id}")
+            logger.info(f"📱 Smart processing (SINGLE): '{message_text[:30]}...' from user: {user_id}")
             
-            # 超高速応答生成（LLM回避優先）
-            response_text = ultra_responder.process_ultra_fast(message_text, user_id)
-            success = send_line_message_safe(reply_token, user_id, response_text)
+            # スマートルーティング実行
+            routing_result = smart_router.determine_response_route(message_text)
+            route = routing_result["route"]
             
-            duration = (time.time() - start_time) * 1000
-            if success:
-                logger.info(f"✅ LINE Ultra fast complete response: {duration:.1f}ms (LLM avoided)")
-                # 応答の完全性をログ出力
-                is_complete = response_text.endswith(('。', '！', '？', '.', '!', '?'))
-                logger.info(f"🔚 Response completeness: {is_complete}")
+            logger.info(f"🧠 Route selected: {route} - {routing_result['reason']}")
+            
+            # ルート別処理（単一ハンドラ内で完結）
+            if route == "template":
+                # テンプレート即座応答
+                response_text = routing_result["response"]
+                success = send_line_message_safe(reply_token, user_id, response_text)
+                
+                duration = (time.time() - start_time) * 1000
+                logger.info(f"⚡ Template response: {duration:.1f}ms, success: {success}")
+                
+            elif route == "rag":
+                # RAG処理（非同期実行）
+                def process_rag():
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        result = loop.run_until_complete(
+                            rag_integration.process_rag_query(message_text, user_id)
+                        )
+                        loop.close()
+                        return result
+                    except Exception as e:
+                        logger.error(f"RAG processing error: {e}")
+                        return smart_router.templates.get("挨拶", "申し訳ございません。")
+                
+                # タイムアウト付きRAG実行
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(process_rag)
+                    try:
+                        response_text = future.result(timeout=10)  # 10秒タイムアウト
+                    except concurrent.futures.TimeoutError:
+                        logger.error("❌ RAG processing timeout")
+                        response_text = """処理に時間がかかっています。
+
+もう一度お試しいただくか、「展示場予約」で直接ご相談ください😊"""
+                
+                success = send_line_message_safe(reply_token, user_id, response_text)
+                
+                duration = (time.time() - start_time) * 1000
+                logger.info(f"🤖 RAG response: {duration:.1f}ms, success: {success}")
+                
             else:
-                logger.error(f"❌ LINE response failed after {duration:.1f}ms")
+                # フォールバック応答
+                response_text = smart_router.templates.get("挨拶", """ご質問ありがとうございます😊
+
+住まいづくりについて、どのようなことをお知りになりたいでしょうか？
+
+メニューからお選びいただくか、具体的にお聞かせください✨""")
+                
+                success = send_line_message_safe(reply_token, user_id, response_text)
+                
+                duration = (time.time() - start_time) * 1000
+                logger.info(f"🔄 Fallback response: {duration:.1f}ms, success: {success}")
+            
+            # 統計更新
+            total_duration = (time.time() - start_time) * 1000
+            logger.info(f"✅ SINGLE message processed: {total_duration:.1f}ms, route: {route}")
             
         except Exception as e:
-            logger.error(f"❌ Ultra fast message error: {e}")
+            logger.error(f"❌ Smart message handler error: {e}")
             logger.error(traceback.format_exc())
             try:
-                emergency = ultra_responder._emergency_response()  # 完全性保証済み
+                emergency = """申し訳ございません。一時的にシステムの不具合が発生しています。
+
+しばらくしてから再度お試しください😊"""
                 send_line_message_safe(event.reply_token, event.source.user_id, emergency)
+                logger.info("🆘 Emergency response sent")
             except Exception as final_error:
                 logger.error(f"❌ Emergency response failed: {final_error}")
 
     @handler.add(PostbackEvent)
-    def handle_postback_ultra_fast(event):
-        """Postbackハンドラ（修正版・更新版）"""
+    def handle_postback_smart_integrated(event):
+        """Postbackハンドラ（統合版）"""
         try:
             user_id = event.source.user_id
             reply_token = event.reply_token
             postback_data = event.postback.data or ""
             
-            logger.info(f"🔙 Postback from {user_id}: {postback_data}")
+            logger.info(f"🔙 Single postback from {user_id}: {postback_data}")
             
             # Postbackデータの解析
             if "action=" in postback_data:
@@ -980,244 +738,138 @@ if LINE_SDK_AVAILABLE and handler:
                         action_value = part.split("=", 1)[1]
                         break
                 
-                # アクションに対応する応答（更新版テンプレート使用）
-                response_text = ultra_responder.line_templates.get(action_value, "ご利用ありがとうございます。")
+                response_text = smart_router.templates.get(action_value, "ご利用ありがとうございます。")
             else:
                 response_text = "メニューからお選びください。"
             
-            # Postbackも完全性チェック
-            response_text = ultra_responder.ensure_line_response_complete(response_text, postback_data)
             success = send_line_message_safe(reply_token, user_id, response_text)
-            logger.info(f"✅ Postback processed successfully: success={success}")
+            logger.info(f"✅ Single postback processed: success={success}")
             
         except Exception as e:
             logger.error(f"💥 Postback handler error: {e}")
             logger.error(traceback.format_exc())
 
 # ==============================================================================
-# 監視・デバッグエンドポイント（拡張版）
+# 監視・デバッグエンドポイント
 # ==============================================================================
 @router.get("/performance")
-def get_line_performance():
-    """LINE専用パフォーマンス統計（LLM回避重視・更新版）"""
-    stats = ultra_responder.get_performance_stats()
+def get_smart_performance():
+    """スマート統合パフォーマンス統計"""
+    stats = smart_router.get_stats()
     
     return {
-        "line_ultra_fast_stats": stats,
-        "llm_optimization": {
-            "llm_calls_avoided": stats["llm_calls_avoided"],
-            "llm_avoidance_rate": f"{stats['llm_avoidance_rate']:.1f}%",
-            "target_avoidance_rate": "> 90%",
-            "achieved": stats["llm_avoidance_rate"] > 90
-        },
+        "line_smart_integrated_stats": stats,
         "system_info": {
             "line_sdk_available": LINE_SDK_AVAILABLE,
             "line_bot_configured": line_bot_api is not None,
-            "reply_fallback_enabled": True,
-            "push_api_enabled": True,
-            "ai_consultation_optimized": True,
-            "api_exception_fixed": True,
-            "import_error_fixed": True,
-            "richmenu_responses_updated": True,
-        },
-        "performance_targets": {
-            "response_time": "< 200ms",
-            "template_hit_rate": "> 80%",
-            "llm_avoidance_rate": "> 90%",
-            "reply_success_rate": "> 95%"
+            "rag_integration_available": rag_integration.rag_available,
+            "single_handler": True,
+            "duplicate_prevention": True
         },
         "features": [
+            "Single Handler Processing (No Duplicates)",
+            "Smart Route Selection (Template/RAG/Fallback)",
+            "Template Instant Response (< 200ms)",
+            "RAG Integration with Timeout",
             "Reply Token Expiry Protection",
-            "Push API Automatic Fallback", 
-            "AI相談 Specialized Mode",
-            "LINE-Specific Template Responses (Updated)",
-            "Ultra Fast Processing",
-            "LLM/OpenAI API Minimization",
-            "Predefined Response Priority",
-            "Sentence Completeness Guard (LINE)",
-            "Updated Rich Menu Responses",
-            "New URLs and Privacy Policy Links",
+            "Push API Automatic Fallback",
+            "LINE-Specific Response Formatting",
+            "Response Caching"
         ],
-        "ai_consultation": {
-            "active_users": len(ultra_responder.ai_consultation_active_users),
-            "total_started": stats["ai_consultation_started"],
-            "predefined_responses": True,
-            "llm_bypass_enabled": True
+        "performance_targets": {
+            "template_response_time": "< 200ms",
+            "rag_response_time": "< 10s",
+            "duplicate_messages": "0 (prevented)",
+            "success_rate": "> 99%"
         },
-        "richmenu_updates": {
-            "ai_consultation": "Updated with privacy policy links",
-            "ai_site": "Updated with new site URL",
-            "document_request": "Updated with simplified response",
-            "showroom_visit": "Updated with reservation URL",
-            "financial_planning": "Updated with AI diagnosis guide",
-            "chat_consultation": "Updated with business hours only"
+        "routing_efficiency": {
+            "template_rate": f"{stats['template_rate']:.1f}%",
+            "rag_rate": f"{stats['rag_rate']:.1f}%", 
+            "fallback_rate": f"{stats['fallback_rate']:.1f}%"
         },
         "timestamp": datetime.now().isoformat()
     }
 
 @router.get("/debug")
-def line_debug_info():
-    """LINE Bot デバッグ情報（修正版・更新版）"""
+def smart_debug_info():
+    """スマート統合デバッグ情報"""
     return {
         "line_sdk_available": LINE_SDK_AVAILABLE,
         "line_bot_api_initialized": line_bot_api is not None,
         "handler_initialized": handler is not None,
+        "smart_router": {
+            "available_templates": len(smart_router.templates),
+            "template_keywords": len(smart_router.template_keywords),
+            "rag_keywords": len(smart_router.rag_keywords),
+            "single_handler": True,
+            "duplicate_prevention": True
+        },
+        "rag_integration": {
+            "available": rag_integration.rag_available,
+            "cache_entries": len(rag_integration.rag_cache)
+        },
         "credentials_set": {
             "access_token_set": bool(LINE_CHANNEL_ACCESS_TOKEN),
             "channel_secret_set": bool(LINE_CHANNEL_SECRET)
         },
-        "normalized_token_length": len(normalize_line_token(LINE_CHANNEL_ACCESS_TOKEN)) if LINE_CHANNEL_ACCESS_TOKEN else 0,
-        "api_exception_handling": "Fixed - using ApiException instead of LineBotApiError",
-        "import_status": "✅ All imports successful" if LINE_SDK_AVAILABLE else "❌ SDK import failed",
-        "llm_optimization": {
-            "enabled": True,
-            "predefined_responses": len(ultra_responder.line_templates),
-            "ai_consultation_mode": True,
-            "active_ai_users": len(ultra_responder.ai_consultation_active_users)
-        },
         "fixes_applied": [
-            "ApiException import fixed",
-            "LineBotApiError references removed", 
-            "Error handling improved",
-            "Push API fallback enhanced",
-            "Sentence completeness guard (LINE) enabled",
-            "LLM calls minimization implemented",
-            "AI consultation specialized mode added",
-            "Rich menu responses updated to new specifications"
+            "Single webhook handler (no duplicates)",
+            "Smart routing integration",
+            "RAG processing with timeout",
+            "Template instant response",
+            "Reply token expiry handling",
+            "Error recovery with fallback"
         ],
-        "richmenu_response_updates": {
-            "updated_templates": [
-                "AI相談 - Added privacy policy links",
-                "AI住まいサイト - New site description and URL",
-                "資料請求 - Simplified response format",
-                "展示場来場予約 - Direct reservation URL",
-                "資金計画 - AI diagnosis guide",
-                "チャット相談 - Business hours only"
-            ],
-            "new_urls": [
-                "https://preview.studio.site/live/EjOQljz1WJ/",
-                "https://preview.studio.site/live/EjOQljz1WJ/reservation",
-                "https://preview.studio.site/live/EjOQljz1WJ/privacy-policy",
-                "https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service",
-                "https://preview.studio.site/live/EjOQljz1WJ/cookie"
-            ]
-        },
         "timestamp": datetime.now().isoformat()
     }
 
 @router.post("/clear-cache")
-def clear_line_cache():
-    """LINEキャッシュクリア（更新版）"""
-    ultra_responder.performance_stats = {
-        "requests": 0, 
-        "template_hits": 0, 
-        "greeting_sent": 0, 
-        "push_fallbacks": 0,
-        "ai_consultation_started": 0,
-        "llm_calls_avoided": 0
+def clear_smart_cache():
+    """スマート統合キャッシュクリア"""
+    old_stats = smart_router.get_stats()
+    old_rag_cache = len(rag_integration.rag_cache)
+    
+    # 統計リセット
+    smart_router.routing_stats = {
+        "template_responses": 0,
+        "rag_responses": 0,
+        "fallback_responses": 0,
+        "total_requests": 0,
+        "processing_times": []
     }
-    ultra_responder.ai_consultation_active_users.clear()
+    
+    # RAGキャッシュクリア
+    rag_integration.rag_cache = {}
     
     return {
-        "status": "line_cache_cleared",
-        "features_reset": ["performance_stats", "ai_consultation_users"],
-        "fixes_confirmed": [
-            "ApiException handling active",
-            "Import errors resolved",
-            "Template responses updated to new specifications",
-            "Sentence completeness guard reset",
-            "LLM avoidance system reset",
-            "Rich menu responses updated"
-        ],
-        "updated_content": [
-            "All rich menu responses updated",
-            "New privacy policy URLs added",
-            "Site URL updated to preview.studio.site",
-            "Reservation URL updated",
-            "Greeting message updated"
-        ],
+        "status": "smart_integrated_cache_cleared",
+        "previous_stats": old_stats,
+        "previous_rag_cache_size": old_rag_cache,
+        "features_reset": ["routing_stats", "rag_cache"],
+        "single_handler_maintained": True,
+        "duplicate_prevention_active": True,
         "timestamp": datetime.now().isoformat()
     }
 
-@router.get("/templates")
-def get_line_templates():
-    """LINE専用テンプレート一覧（更新版）"""
-    return {
-        "line_templates": list(ultra_responder.line_templates.keys()),
-        "count": len(ultra_responder.line_templates),
-        "ai_consultation_template": "AI相談" in ultra_responder.line_templates,
-        "subsidy_template_added": "補助金" in ultra_responder.line_templates,
-        "greeting_configured": bool(ultra_responder.greeting_message),
-        "platform": "line_optimized",
-        "llm_minimization": {
-            "enabled": True,
-            "predefined_responses": len(ultra_responder.line_templates),
-            "ai_consultation_mode": True,
-            "emergency_responses": True
+@router.get("/health")
+def smart_health_check():
+    """スマート統合ヘルスチェック"""
+    stats = smart_router.get_stats()
+    
+    health_status = {
+        "status": "healthy" if LINE_SDK_AVAILABLE and line_bot_api else "degraded",
+        "components": {
+            "line_sdk": "ok" if LINE_SDK_AVAILABLE else "error",
+            "line_bot_api": "ok" if line_bot_api else "error",
+            "handler": "ok" if handler else "error",
+            "smart_router": "ok",
+            "rag_integration": "ok" if rag_integration.rag_available else "available_fallback",
+            "credentials": "ok" if LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET else "error"
         },
-        "template_updates": {
-            "AI相談": "Added privacy policy, terms of use, and cookie links",
-            "AI住まいサイト": "Updated site description and new preview URL",
-            "資料請求": "Simplified with PDF placeholder and optional survey",
-            "展示場来場予約": "Direct to reservation URL",
-            "資金計画": "AI diagnosis guide with 5-point input",
-            "チャット相談": "Business hours only (9:00-18:00)"
-        },
-        "fixes_applied": [
-            "Rich menu response content updated",
-            "New URLs integrated",
-            "Privacy policy links added",
-            "ApiException error handling fixed",
-            "Sentence completeness guard (LINE) added",
-            "LLM/OpenAI API usage minimized",
-            "Predefined response system enhanced"
-        ],
+        "metrics": stats,
+        "single_handler": True,
+        "duplicate_prevention": True,
         "timestamp": datetime.now().isoformat()
     }
-
-@router.get("/ai-consultation-status")
-def get_ai_consultation_status():
-    """AI相談モードの状態確認（更新版）"""
-    return {
-        "ai_consultation_active": True,
-        "active_users": len(ultra_responder.ai_consultation_active_users),
-        "active_user_list": list(ultra_responder.ai_consultation_active_users),
-        "total_consultations_started": ultra_responder.performance_stats["ai_consultation_started"],
-        "llm_calls_avoided": ultra_responder.performance_stats["llm_calls_avoided"],
-        "predefined_responses_available": len([k for k in ultra_responder.line_templates.keys() if k != "AI相談"]),
-        "features": [
-            "Predefined Response Priority",
-            "LLM/OpenAI API Minimization", 
-            "Staff Escalation Ready",
-            "Template-based Answers",
-            "Updated Rich Menu Responses",
-            "Privacy Policy Compliance"
-        ],
-        "ai_consultation_template_updated": {
-            "privacy_policy": "Added",
-            "terms_of_use": "Added",
-            "cookie_policy": "Added",
-            "consultation_flow": "Enhanced"
-        },
-        "timestamp": datetime.now().isoformat()
-    }
-
-@router.post("/reset-ai-consultation/{user_id}")
-def reset_ai_consultation(user_id: str):
-    """特定ユーザーのAI相談モードをリセット（更新版）"""
-    if user_id in ultra_responder.ai_consultation_active_users:
-        ultra_responder.ai_consultation_active_users.remove(user_id)
-        return {
-            "status": "reset_successful",
-            "user_id": user_id,
-            "remaining_active_users": len(ultra_responder.ai_consultation_active_users),
-            "template_updates_applied": True,
-            "privacy_compliance": True
-        }
-    else:
-        return {
-            "status": "user_not_in_consultation",
-            "user_id": user_id,
-            "active_users": len(ultra_responder.ai_consultation_active_users),
-            "template_updates_applied": True
-        }
+    
+    return health_status
