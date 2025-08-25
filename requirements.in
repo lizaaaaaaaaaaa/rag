@@ -51,3 +51,11 @@ aiofiles
 aioredis
 aiosmtplib
 cryptography
+line-bot-sdk>=3
+numpy
+pandas
+chromadb
+anthropic
+PyJWT[crypto]
+fastapi[all]
+schedule

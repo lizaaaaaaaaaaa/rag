@@ -1,0 +1,34 @@
+# monitoring.yaml
+# Google Cloud Monitoring設定
+
+alertPolicy:
+  displayName: "RAG API Financial Planning Alerts"
+  conditions:
+    # 1. API応答時間監視
+    - displayName: "High Response Time"
+      conditionThreshold:
+        filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="rag-api"'
+        comparison: COMPARISON_GREATER_THAN
+        thresholdValue: 10.0
+        duration: "300s"
+    
+    # 2. エラー率監視
+    - displayName: "High Error Rate"
+      conditionThreshold:
+        filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="rag-api" AND severity="ERROR"'
+        comparison: COMPARISON_GREATER_THAN
+        thresholdValue: 5.0
+        duration: "300s"
+    
+    # 3. 資金計画セッション監視
+    - displayName: "Financial Planning Session Overflow"
+      conditionThreshold:
+        filter: 'textPayload:"Financial planning session"'
+        comparison: COMPARISON_GREATER_THAN
+        thresholdValue: 100.0
+        duration: "600s"
+
+notificationChannels:
+  - type: "email"
+    labels:
+      email_address: "admin@kinoe-design.com"

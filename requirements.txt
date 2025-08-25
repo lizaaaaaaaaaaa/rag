@@ -27,14 +27,20 @@ altair==5.3.0
     # via streamlit
 annotated-types==0.7.0
     # via pydantic
+anthropic==0.40.0
+    # via -r requirements.in
 anyio==3.7.1
     # via
+    #   anthropic
     #   fastapi
     #   httpx
     #   openai
     #   starlette
+    #   watchfiles
 appdirs==1.4.4
     # via ragas
+asgiref==3.9.1
+    # via opentelemetry-instrumentation-asgi
 async-timeout==4.0.3
     # via
     #   aiohttp
@@ -47,14 +53,20 @@ attrs==25.3.0
     #   aiohttp
     #   jsonschema
     #   referencing
+backoff==2.2.1
+    # via posthog
 bcrypt==4.3.0
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   chromadb
 beautifulsoup4==4.13.4
     # via -r requirements.in
 blinker==1.9.0
     # via
     #   flask
     #   streamlit
+build==1.3.0
+    # via chromadb
 cachetools==5.5.2
     # via
     #   google-auth
@@ -63,6 +75,7 @@ certifi==2023.11.17
     # via
     #   httpcore
     #   httpx
+    #   kubernetes
     #   requests
 cffi==1.17.1
     # via cryptography
@@ -70,23 +83,34 @@ charset-normalizer==3.4.3
     # via
     #   aiohttp
     #   requests
+chroma-hnswlib==0.7.3
+    # via chromadb
+chromadb==0.5.0
+    # via -r requirements.in
 click==8.2.1
     # via
     #   flask
     #   functions-framework
     #   streamlit
+    #   typer
     #   uvicorn
 cloudevents==1.12.0
     # via functions-framework
 colorama==0.4.6
     # via
+    #   build
     #   click
     #   pytest
     #   tqdm
+    #   uvicorn
+coloredlogs==15.0.1
+    # via onnxruntime
 contourpy==1.3.2
     # via matplotlib
 cryptography==45.0.6
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   pyjwt
 cycler==0.12.1
     # via matplotlib
 dataclasses-json==0.6.7
@@ -98,7 +122,11 @@ datasets==2.19.1
     #   -r requirements.in
     #   ragas
 deprecated==1.2.18
-    # via line-bot-sdk
+    # via
+    #   line-bot-sdk
+    #   opentelemetry-api
+    #   opentelemetry-exporter-otlp-proto-grpc
+    #   opentelemetry-semantic-conventions
 deprecation==2.1.0
     # via cloudevents
 dill==0.3.8
@@ -108,11 +136,22 @@ dill==0.3.8
 diskcache==5.6.3
     # via ragas
 distro==1.9.0
-    # via openai
+    # via
+    #   anthropic
+    #   openai
+    #   posthog
+dnspython==2.7.0
+    # via email-validator
+durationpy==0.10
+    # via kubernetes
+email-validator==2.2.0
+    # via fastapi
 faiss-cpu==1.7.4
     # via -r requirements.in
-fastapi==0.104.1
-    # via -r requirements.in
+fastapi[all]==0.104.1
+    # via
+    #   -r requirements.in
+    #   chromadb
 feedparser==6.0.11
     # via -r requirements.in
 filelock==3.18.0
@@ -123,6 +162,8 @@ filelock==3.18.0
     #   transformers
 flask==3.1.1
     # via functions-framework
+flatbuffers==25.2.10
+    # via onnxruntime
 fonttools==4.59.0
     # via matplotlib
 frozenlist==1.7.0
@@ -161,6 +202,7 @@ google-auth==2.40.3
     #   google-cloud-scheduler
     #   google-cloud-secret-manager
     #   google-cloud-storage
+    #   kubernetes
 google-cloud-appengine-logging==1.6.2
     # via google-cloud-logging
 google-cloud-audit-log==0.3.2
@@ -190,6 +232,7 @@ googleapis-common-protos[grpc]==1.70.0
     #   google-cloud-audit-log
     #   grpc-google-iam-v1
     #   grpcio-status
+    #   opentelemetry-exporter-otlp-proto-grpc
 greenlet==3.2.4
     # via sqlalchemy
 grpc-google-iam-v1==0.14.2
@@ -198,10 +241,12 @@ grpc-google-iam-v1==0.14.2
     #   google-cloud-secret-manager
 grpcio==1.74.0
     # via
+    #   chromadb
     #   google-api-core
     #   googleapis-common-protos
     #   grpc-google-iam-v1
     #   grpcio-status
+    #   opentelemetry-exporter-otlp-proto-grpc
 grpcio-status==1.62.3
     # via google-api-core
 h11==0.16.0
@@ -210,8 +255,12 @@ h11==0.16.0
     #   uvicorn
 httpcore==1.0.9
     # via httpx
+httptools==0.6.4
+    # via uvicorn
 httpx==0.25.2
     # via
+    #   anthropic
+    #   fastapi
     #   langsmith
     #   openai
 huggingface-hub==0.34.4
@@ -222,24 +271,36 @@ huggingface-hub==0.34.4
     #   sentence-transformers
     #   tokenizers
     #   transformers
+humanfriendly==10.0
+    # via coloredlogs
 idna==3.10
     # via
     #   anyio
+    #   email-validator
     #   httpx
     #   requests
     #   yarl
 importlib-metadata==6.11.0
-    # via streamlit
+    # via
+    #   opentelemetry-api
+    #   streamlit
+importlib-resources==6.5.2
+    # via chromadb
 iniconfig==2.1.0
     # via pytest
 itsdangerous==2.2.0
-    # via flask
+    # via
+    #   fastapi
+    #   flask
 jinja2==3.1.2
     # via
     #   altair
+    #   fastapi
     #   flask
     #   pydeck
     #   torch
+jiter==0.10.0
+    # via anthropic
 joblib==1.5.1
     # via scikit-learn
 jsonpatch==1.33
@@ -252,6 +313,8 @@ jsonschema-specifications==2025.4.1
     # via jsonschema
 kiwisolver==1.4.9
     # via matplotlib
+kubernetes==33.1.0
+    # via chromadb
 langchain==0.1.20
     # via
     #   -r requirements.in
@@ -300,6 +363,8 @@ mdurl==0.1.2
     # via markdown-it-py
 mecab-python3==1.0.10
     # via -r requirements.in
+mmh3==5.2.0
+    # via chromadb
 mpmath==1.3.0
     # via sympy
 multidict==6.6.4
@@ -318,13 +383,17 @@ networkx==3.5
     # via torch
 numpy==1.24.4
     # via
+    #   -r requirements.in
     #   accelerate
     #   altair
+    #   chroma-hnswlib
+    #   chromadb
     #   contourpy
     #   datasets
     #   langchain
     #   langchain-community
     #   matplotlib
+    #   onnxruntime
     #   pandas
     #   pydeck
     #   ragas
@@ -334,28 +403,80 @@ numpy==1.24.4
     #   seaborn
     #   streamlit
     #   transformers
+oauthlib==3.3.1
+    # via
+    #   kubernetes
+    #   requests-oauthlib
+onnxruntime==1.22.1
+    # via chromadb
 openai==1.35.3
     # via
     #   -r requirements.in
     #   langchain-openai
     #   ragas
+opentelemetry-api==1.27.0
+    # via
+    #   chromadb
+    #   opentelemetry-exporter-otlp-proto-grpc
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
+opentelemetry-exporter-otlp-proto-common==1.27.0
+    # via opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-exporter-otlp-proto-grpc==1.27.0
+    # via chromadb
+opentelemetry-instrumentation==0.48b0
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-asgi==0.48b0
+    # via opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-fastapi==0.48b0
+    # via chromadb
+opentelemetry-proto==1.27.0
+    # via
+    #   opentelemetry-exporter-otlp-proto-common
+    #   opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-sdk==1.27.0
+    # via
+    #   chromadb
+    #   opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-semantic-conventions==0.48b0
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+    #   opentelemetry-sdk
+opentelemetry-util-http==0.48b0
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
 orjson==3.11.2
-    # via langsmith
+    # via
+    #   chromadb
+    #   fastapi
+    #   langsmith
+overrides==7.7.0
+    # via chromadb
 packaging==23.2
     # via
     #   accelerate
     #   altair
+    #   build
     #   datasets
     #   deprecation
     #   huggingface-hub
     #   langchain-core
     #   marshmallow
     #   matplotlib
+    #   onnxruntime
     #   pytest
     #   streamlit
     #   transformers
 pandas==2.1.4
     # via
+    #   -r requirements.in
     #   altair
     #   datasets
     #   seaborn
@@ -367,6 +488,8 @@ pillow==10.4.0
     #   streamlit
 pluggy==1.6.0
     # via pytest
+posthog==6.6.1
+    # via chromadb
 propcache==0.3.2
     # via yarl
 proto-plus==1.26.1
@@ -390,6 +513,8 @@ protobuf==4.25.8
     #   googleapis-common-protos
     #   grpc-google-iam-v1
     #   grpcio-status
+    #   onnxruntime
+    #   opentelemetry-proto
     #   proto-plus
     #   streamlit
 psutil==5.9.6
@@ -415,51 +540,76 @@ pycparser==2.22
 pydantic==2.5.0
     # via
     #   -r requirements.in
+    #   anthropic
+    #   chromadb
     #   fastapi
     #   langchain
     #   langchain-core
     #   langsmith
     #   line-bot-sdk
     #   openai
+    #   pydantic-extra-types
+    #   pydantic-settings
     #   ragas
 pydantic-core==2.14.1
     # via pydantic
+pydantic-extra-types==2.2.0
+    # via fastapi
+pydantic-settings==2.2.1
+    # via fastapi
 pydeck==0.9.1
     # via streamlit
 pygments==2.19.2
     # via
     #   pytest
     #   rich
-pyjwt==2.10.1
+pyjwt[crypto]==2.10.1
     # via -r requirements.in
 pyparsing==3.2.3
     # via matplotlib
 pypdf==3.17.1
     # via -r requirements.in
+pypika==0.48.9
+    # via chromadb
+pyproject-hooks==1.2.0
+    # via build
+pyreadline3==3.5.4
+    # via humanfriendly
 pytest==8.4.1
     # via -r requirements.in
 python-dateutil==2.9.0.post0
     # via
+    #   kubernetes
     #   line-bot-sdk
     #   matplotlib
     #   pandas
+    #   posthog
     #   streamlit
 python-dotenv==1.0.0
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   pydantic-settings
+    #   uvicorn
 python-multipart==0.0.6
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   fastapi
 pytz==2025.2
     # via pandas
 pyyaml==6.0.2
     # via
     #   -r requirements.in
     #   accelerate
+    #   chromadb
     #   datasets
+    #   fastapi
     #   huggingface-hub
+    #   kubernetes
     #   langchain
     #   langchain-community
     #   langchain-core
     #   transformers
+    #   uvicorn
 ragas==0.3.1
     # via -r requirements.in
 rank-bm25==0.2.2
@@ -477,22 +627,30 @@ regex==2025.7.34
 requests==2.31.0
     # via
     #   -r requirements.in
+    #   chromadb
     #   datasets
     #   google-api-core
     #   google-cloud-storage
     #   huggingface-hub
+    #   kubernetes
     #   langchain
     #   langchain-community
     #   langsmith
     #   line-bot-sdk
+    #   posthog
+    #   requests-oauthlib
     #   requests-toolbelt
     #   streamlit
     #   tiktoken
     #   transformers
+requests-oauthlib==2.0.0
+    # via kubernetes
 requests-toolbelt==1.0.0
     # via langsmith
 rich==13.9.4
-    # via streamlit
+    # via
+    #   streamlit
+    #   typer
 rpds-py==0.27.0
     # via
     #   jsonschema
@@ -503,6 +661,8 @@ safetensors==0.6.2
     # via
     #   accelerate
     #   transformers
+schedule==1.2.2
+    # via -r requirements.in
 scikit-learn==1.7.1
     # via sentence-transformers
 scipy==1.15.3
@@ -517,12 +677,18 @@ sentencepiece==0.2.1
     # via -r requirements.in
 sgmllib3k==1.0.0
     # via feedparser
+shellingham==1.5.4
+    # via typer
 six==1.17.0
-    # via python-dateutil
+    # via
+    #   kubernetes
+    #   posthog
+    #   python-dateutil
 smmap==5.0.2
     # via gitdb
 sniffio==1.3.1
     # via
+    #   anthropic
     #   anyio
     #   httpx
     #   openai
@@ -538,9 +704,12 @@ starlette==0.27.0
 streamlit==1.28.1
     # via -r requirements.in
 sympy==1.13.1
-    # via torch
+    # via
+    #   onnxruntime
+    #   torch
 tenacity==8.5.0
     # via
+    #   chromadb
     #   langchain
     #   langchain-community
     #   langchain-core
@@ -554,6 +723,7 @@ tiktoken==0.11.0
 tokenizers==0.21.4
     # via
     #   -r requirements.in
+    #   chromadb
     #   transformers
 toml==0.10.2
     # via streamlit
@@ -568,6 +738,7 @@ tornado==6.5.2
     # via streamlit
 tqdm==4.67.1
     # via
+    #   chromadb
     #   datasets
     #   huggingface-hub
     #   openai
@@ -577,14 +748,20 @@ transformers==4.55.2
     # via
     #   -r requirements.in
     #   sentence-transformers
+typer==0.16.1
+    # via chromadb
 typing-extensions==4.8.0
     # via
     #   aioredis
     #   aiosignal
+    #   anthropic
     #   beautifulsoup4
+    #   chromadb
     #   fastapi
     #   huggingface-hub
     #   openai
+    #   opentelemetry-sdk
+    #   posthog
     #   pydantic
     #   pydantic-core
     #   referencing
@@ -592,6 +769,7 @@ typing-extensions==4.8.0
     #   sqlalchemy
     #   streamlit
     #   torch
+    #   typer
     #   typing-inspect
 typing-inspect==0.9.0
     # via dataclasses-json
@@ -601,25 +779,43 @@ tzdata==2025.2
     #   tzlocal
 tzlocal==5.3.1
     # via streamlit
+ujson==5.11.0
+    # via fastapi
 urllib3==2.5.0
-    # via requests
-uvicorn==0.24.0
-    # via -r requirements.in
+    # via
+    #   kubernetes
+    #   requests
+uvicorn[standard]==0.24.0
+    # via
+    #   -r requirements.in
+    #   chromadb
+    #   fastapi
 validators==0.35.0
     # via streamlit
 watchdog==6.0.0
     # via
     #   functions-framework
     #   streamlit
+watchfiles==1.1.0
+    # via uvicorn
+websocket-client==1.8.0
+    # via kubernetes
+websockets==15.0.1
+    # via uvicorn
 werkzeug==3.1.3
     # via
     #   flask
     #   functions-framework
 wrapt==1.17.3
-    # via deprecated
+    # via
+    #   deprecated
+    #   opentelemetry-instrumentation
 xxhash==3.5.0
     # via datasets
 yarl==1.20.1
     # via aiohttp
 zipp==3.23.0
     # via importlib-metadata
+
+# The following packages are considered to be unsafe in a requirements file:
+# setuptools
