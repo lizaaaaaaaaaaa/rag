@@ -1,0 +1,48 @@
+# prometheus.yml - Prometheus設定（メトリクス収集用）
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Prometheusアプリケーション自体の監視
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # 統合チャットシステムの監視
+  - job_name: 'unified-chat'
+    static_configs:
+      - targets: ['unified-chat:8080']
+    metrics_path: '/monitoring/metrics'  # メトリクス専用エンドポイント
+    scrape_interval: 30s
+
+  # Redis監視
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+
+  # Nginx監視（nginx-prometheus-exporterが必要）
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx:9113']
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# アラートルール（例）
+# - alert: HighCPUUsage
+#   expr: cpu_usage_percent > 80
+#   for: 5m
+#   labels:
+#     severity: warning
+#   annotations:
+#     summary: "High CPU usage detected"
+#     description: "CPU usage is {{ $value }}% for more than 5 minutes"

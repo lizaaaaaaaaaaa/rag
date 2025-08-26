@@ -59,3 +59,10 @@ anthropic
 PyJWT[crypto]
 fastapi[all]
 schedule
+httpx
+tiktoken
+structlog
+python-docx
+PyPDF2
+openpyxl
+click
