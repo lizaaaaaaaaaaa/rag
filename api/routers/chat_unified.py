@@ -1,4 +1,4 @@
-# api/routers/chat_unified.py - 高速化版（RAG呼び出し最小化）
+# api/routers/chat_unified.py - 高速化版（RAG呼び出し最小化） - 修正版
 
 import logging
 import os
@@ -177,6 +177,49 @@ class OptimizedCacheSystem:
             logger.info(f"🧹 Cleared {len(expired_keys)} expired cache entries")
         
         return len(expired_keys)
+
+    def get_stats(self) -> Dict[str, Any]:
+        """キャッシュ統計取得"""
+        total_requests = self.stats["total_requests"]
+        hit_rate = (self.stats["hits"] / total_requests * 100) if total_requests > 0 else 0
+        
+        return {
+            "cache_sizes": {
+                "web": len(self.web_cache),
+                "line": len(self.line_cache),
+                "rag": len(self.rag_cache),
+                "total": self._total_cache_size(),
+                "max_size": self.max_size
+            },
+            "hit_rates": {
+                "web": (self.stats["web_hits"] / (self.stats["web_hits"] + self.stats["web_misses"]) * 100) if (self.stats["web_hits"] + self.stats["web_misses"]) > 0 else 0,
+                "line": (self.stats["line_hits"] / (self.stats["line_hits"] + self.stats["line_misses"]) * 100) if (self.stats["line_hits"] + self.stats["line_misses"]) > 0 else 0,
+                "rag": (self.stats["rag_hits"] / (self.stats["rag_hits"] + self.stats["rag_misses"]) * 100) if (self.stats["rag_hits"] + self.stats["rag_misses"]) > 0 else 0,
+                "overall": hit_rate
+            },
+            "total_stats": self.stats,
+            "cache_expire_time": self.cache_expire_time
+        }
+
+    def clear_all(self) -> Dict[str, int]:
+        """全キャッシュクリア"""
+        old_sizes = {
+            "web": len(self.web_cache),
+            "line": len(self.line_cache),
+            "rag": len(self.rag_cache)
+        }
+        
+        self.web_cache.clear()
+        self.line_cache.clear()
+        self.rag_cache.clear()
+        self.access_times.clear()
+        
+        # 統計リセット
+        for key in self.stats:
+            if key != "total_requests":  # total_requestsは保持
+                self.stats[key] = 0
+        
+        return old_sizes
 
 # ============================================================================
 # 🚀 拡張テンプレートシステム（RAG回避強化）
@@ -883,6 +926,16 @@ class OptimizedResponseGenerator:
 # グローバルインスタンス
 # ============================================================================
 optimized_generator = OptimizedResponseGenerator()
+
+# ============================================================================
+# 🔧 修正1: unified_generatorをmain.pyからインポートできるように公開
+# ============================================================================
+try:
+    unified_generator = OptimizedResponseGenerator()
+    logger.info("✅ unified_generator initialized for unified chat")
+except Exception as e:
+    logger.error(f"❌ Failed to initialize unified_generator: {e}")
+    unified_generator = None
 
 # ============================================================================
 # リクエストモデル

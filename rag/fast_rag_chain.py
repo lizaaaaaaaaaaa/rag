@@ -1,4 +1,4 @@
-# rag/fast_rag_chain.py - 超高速版（応答速度最優先）
+# rag/fast_rag_chain.py - 超高速版（応答速度最優先） - 修正版
 
 from __future__ import annotations
 import os
@@ -376,6 +376,20 @@ def preload_faq_cache():
     for key, response in _faq_cache.items():
         logger.debug(f"   - {key}: {response[:30]}...")
 
+# ============================================================================
+# 🔧 修正2: main.pyとの互換性のためのエイリアス関数を追加
+# ============================================================================
+
+def load_ultra_fast_vectorstore():
+    """互換性維持のためのエイリアス - main.pyからの呼び出しに対応"""
+    logger.info("🔄 Using alias: load_ultra_fast_vectorstore -> load_super_fast_vectorstore")
+    return load_super_fast_vectorstore()
+
+def get_ultra_fast_rag_chain(vectorstore, return_source: bool = False):
+    """互換性維持のためのエイリアス - main.pyからの呼び出しに対応"""
+    logger.info("🔄 Using alias: get_ultra_fast_rag_chain -> get_super_fast_rag_chain")
+    return get_super_fast_rag_chain(vectorstore, return_source)
+
 # 起動時FAQ初期化
 preload_faq_cache()
 
@@ -416,6 +430,19 @@ if __name__ == "__main__":
         print(f"   Hit Rate: {stats['hit_rate']:.1f}%")
         print(f"   Cache Size: {stats['cache_size']}")
         print(f"   FAQ Entries: {stats['faq_cache_size']}")
+        
+        # 互換性テスト
+        print(f"\n🔄 Compatibility Test:")
+        print("Testing alias functions...")
+        alias_vectorstore = load_ultra_fast_vectorstore()
+        print("✅ load_ultra_fast_vectorstore alias works")
+        
+        alias_rag_chain = get_ultra_fast_rag_chain(alias_vectorstore)
+        print("✅ get_ultra_fast_rag_chain alias works")
+        
+        # エイリアス経由でテスト
+        test_response = alias_rag_chain.invoke({"query": "坪単価"})
+        print(f"✅ Alias chain response: {test_response.get('result', '')[:50]}...")
         
     except Exception as e:
         print(f"❌ Test error: {e}")
