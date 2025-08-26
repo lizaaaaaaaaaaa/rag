@@ -1,4 +1,4 @@
-# Dockerfile - 統合チャットシステム用
+# Dockerfile - 統合チャットシステム用 (fixed to use Cloud Run's $PORT)
 
 FROM python:3.11-slim
 
@@ -26,17 +26,17 @@ RUN mkdir -p data logs templates/chat
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# ポートの公開
+# ポートの公開（Cloud Run のデフォルト8080を利用）
 EXPOSE 8080
 
-# ヘルスチェック設定
+# ヘルスチェック設定：$PORT 環境変数を利用してヘルスチェック
 HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/healthz || exit 1
+    CMD curl -f http://localhost:${PORT:-8080}/healthz || exit 1
 
 # 環境変数の設定
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV LOG_LEVEL=INFO
 
-# 起動コマンド
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+# 起動コマンド：bashを介して$PORTを展開
+CMD ["bash", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1"]
