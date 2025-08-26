@@ -1,144 +1,230 @@
-# integration/anti_hallucination_integration.py - 統合システム
+# integration/anti_hallucination_integration.py - 最適化版（条件厳格化・応答速度優先）
 
 import logging
 import asyncio
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-# ハルチネーション対策システムをインポート
-from utils.housing_subsidy_anti_hallucination import (
-    process_housing_subsidy_query,
-    AntiHallucinationResult
-)
+# ハルチネーション対策システムをインポート（条件付き）
+try:
+    from utils.housing_subsidy_anti_hallucination import (
+        process_housing_subsidy_query,
+        AntiHallucinationResult
+    )
+    ANTI_HALLUCINATION_MODULE_AVAILABLE = True
+except ImportError:
+    ANTI_HALLUCINATION_MODULE_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.info("ℹ️ Anti-hallucination module not available, using basic filtering")
 
 logger = logging.getLogger(__name__)
 
-class AntiHallucinationIntegration:
-    """ハルチネーション対策統合クラス"""
+class OptimizedAntiHallucinationIntegration:
+    """最適化ハルチネーション対策統合クラス（条件厳格化・速度重視）"""
     
     def __init__(self):
-        # 補助金関連キーワードの判定用
-        self.subsidy_keywords = [
-            "補助金", "助成金", "支援金", "給付金", "控除", "減税",
-            "ZEH", "省エネ", "断熱", "耐震", "リフォーム", "改修",
-            "住宅ローン", "フラット35", "こどもエコ", "子育て世帯",
-            "若年夫婦", "新婚", "長期優良", "認定住宅",
-            "2024", "2025", "令和6", "令和7", "最新", "現在"
+        # 🚀 厳格化：補助金関連キーワードを限定
+        self.strict_subsidy_keywords = [
+            # 明確な補助金制度名のみ
+            "zeh補助金", "zeh支援事業", "ネット・ゼロ・エネルギー・ハウス支援事業",
+            "こどもエコすまい支援事業", "子どもエコすまい", "子育てエコホーム支援事業",
+            "住宅ローン控除", "住宅ローン減税", "住宅借入金等特別控除",
+            "長期優良住宅化リフォーム推進事業",
+            "既存住宅における断熱リフォーム支援事業"
         ]
         
-        # 地域キーワードの判定用
-        self.location_keywords = [
-            "兵庫", "大阪", "京都", "奈良", "和歌山", "滋賀",
-            "加東", "明石", "三木", "加古川", "寝屋川", "関西"
+        # 🚀 年度限定キーワード（より厳格）
+        self.temporal_keywords = [
+            "2024年度", "2025年度", "令和6年度", "令和7年度",
+            "2024年最新", "2025年最新", "現在実施中の",
+            "今年度の補助金", "最新の補助金制度"
         ]
+        
+        # 🚀 地域キーワード（特定地域のみ）
+        self.specific_location_keywords = [
+            "兵庫県", "大阪府", "京都府", "奈良県", "和歌山県", "滋賀県",
+            "加東市", "明石市", "三木市", "加古川市", "神戸市", "姫路市"
+        ]
+        
+        # 🚀 処理統計（最適化監視用）
+        self.processing_stats = {
+            "should_use_calls": 0,
+            "should_use_approved": 0,
+            "processing_attempts": 0,
+            "processing_successes": 0,
+            "processing_timeouts": 0,
+            "processing_errors": 0,
+            "sync_fallbacks": 0
+        }
     
-    def should_use_anti_hallucination(self, query: str) -> bool:
-        """ハルチネーション対策を使用すべきかの判定"""
+    def should_use_anti_hallucination_strict(self, query: str) -> bool:
+        """🚀 厳格なハルチネーション対策使用判定（大幅条件削減）"""
+        self.processing_stats["should_use_calls"] += 1
         
-        query_lower = query.lower()
+        if not ANTI_HALLUCINATION_MODULE_AVAILABLE:
+            return False
         
-        # 補助金関連キーワードの存在確認
-        has_subsidy_keyword = any(
-            keyword in query_lower for keyword in self.subsidy_keywords
+        query_lower = query.lower().strip()
+        
+        # 🚀 厳格条件1: 明確な補助金制度名が含まれる
+        has_specific_subsidy = any(
+            keyword in query_lower for keyword in self.strict_subsidy_keywords
         )
         
-        # 最新情報を求めるキーワード
-        needs_current_info = any(
-            keyword in query_lower 
-            for keyword in ["最新", "現在", "今", "2024", "2025"]
+        # 🚀 厳格条件2: 最新情報を明示的に求めている
+        has_temporal_request = any(
+            keyword in query_lower for keyword in self.temporal_keywords
         )
         
-        return has_subsidy_keyword or needs_current_info
-    
-    def extract_user_location(self, query: str, user_context: Dict = None) -> str:
-        """ユーザーの地域情報を抽出"""
+        # 🚀 厳格条件3: 特定地域の情報を求めている
+        has_specific_location = any(
+            keyword in query_lower for keyword in self.specific_location_keywords
+        )
         
-        # クエリから地域を抽出
-        for location in self.location_keywords:
+        # 🚀 すべての条件のうち、2つ以上満たす場合のみ適用
+        conditions_met = sum([has_specific_subsidy, has_temporal_request, has_specific_location])
+        
+        # 🚀 更に厳格：質問の長さも考慮（短文は除外）
+        is_substantial_query = len(query) > 30
+        
+        should_use = conditions_met >= 2 and is_substantial_query
+        
+        if should_use:
+            self.processing_stats["should_use_approved"] += 1
+            logger.info(f"🛡️ Anti-hallucination approved: conditions={conditions_met}/3, length={len(query)}")
+        else:
+            logger.debug(f"🚫 Anti-hallucination skipped: conditions={conditions_met}/3, length={len(query)}")
+        
+        return should_use
+    
+    def extract_user_location_fast(self, query: str, user_context: Dict = None) -> str:
+        """🚀 高速地域抽出（最小限処理）"""
+        # 明確な地域名のみ抽出
+        for location in self.specific_location_keywords:
             if location in query:
                 return location
         
-        # ユーザーコンテキストから地域を取得
-        if user_context:
-            return user_context.get("location", "関西")
+        # ユーザーコンテキストから取得（簡素化）
+        if user_context and "location" in user_context:
+            return user_context["location"]
         
-        return "関西"  # デフォルト
+        return "兵庫県"  # デフォルト（最も可能性の高い地域）
     
-    async def process_with_anti_hallucination(
+    async def process_with_anti_hallucination_optimized(
         self,
         query: str,
         platform: str,
         user_context: Dict = None,
-        original_rag_response: str = None
+        original_rag_response: str = None,
+        timeout: float = 8.0  # 🔧 短縮：デフォルト8秒
     ) -> Dict[str, Any]:
-        """ハルチネーション対策付きの統合処理"""
+        """🚀 最適化ハルチネーション対策処理（タイムアウト・エラー処理強化）"""
         
-        logger.info(f"🛡️ Anti-hallucination processing: platform={platform}, query={query[:50]}...")
+        self.processing_stats["processing_attempts"] += 1
+        
+        logger.info(f"🛡️ Anti-hallucination processing (optimized): {query[:40]}...")
+        
+        if not ANTI_HALLUCINATION_MODULE_AVAILABLE:
+            return self._create_basic_filter_response(query, original_rag_response, platform)
         
         try:
-            # 地域情報の抽出
-            user_location = self.extract_user_location(query, user_context)
+            # 🚀 地域情報の高速抽出
+            user_location = self.extract_user_location_fast(query, user_context)
             
-            # ハルチネーション対策システムで処理
-            result = await process_housing_subsidy_query(
-                query=query,
-                user_location=user_location,
-                platform=platform
-            )
-            
-            # 結果の統合処理
-            integrated_response = self._integrate_responses(
-                result, original_rag_response, platform
-            )
-            
-            return integrated_response
-            
+            # 🚀 タイムアウト付きハルチネーション対策実行
+            try:
+                result = await asyncio.wait_for(
+                    process_housing_subsidy_query(
+                        query=query,
+                        user_location=user_location,
+                        platform=platform
+                    ),
+                    timeout=timeout
+                )
+                
+                self.processing_stats["processing_successes"] += 1
+                
+                # 結果の統合処理
+                integrated_response = self._integrate_responses_optimized(
+                    result, original_rag_response, platform
+                )
+                
+                return integrated_response
+                
+            except asyncio.TimeoutError:
+                self.processing_stats["processing_timeouts"] += 1
+                logger.warning(f"⏰ Anti-hallucination timeout ({timeout}s), using basic filter")
+                return self._create_basic_filter_response(query, original_rag_response, platform)
+                
         except Exception as e:
-            logger.error(f"❌ Anti-hallucination integration error: {e}")
-            return self._create_fallback_response(query, platform, str(e))
+            self.processing_stats["processing_errors"] += 1
+            logger.error(f"❌ Anti-hallucination error: {e}")
+            return self._create_basic_filter_response(query, original_rag_response, platform)
     
-    def _integrate_responses(
+    def _create_basic_filter_response(self, query: str, original_response: str, platform: str) -> Dict[str, Any]:
+        """🚀 基本フィルタ応答（軽量版ハルチネーション対策）"""
+        self.processing_stats["sync_fallbacks"] += 1
+        
+        if not original_response:
+            basic_answer = "お尋ねの補助金制度について、最新情報は制度運営機関の公式サイトでご確認いただくことをお勧めいたします。"
+        else:
+            # 🚀 基本的な注意書き追加（軽量処理）
+            if any(keyword in query.lower() for keyword in ["補助金", "助成金", "支援金"]):
+                notice = "\n\n※補助金制度は年度ごとに変更される可能性があります。最新情報については公式サイトでご確認ください。"
+                basic_answer = original_response + notice
+            else:
+                basic_answer = original_response
+        
+        return {
+            "answer": self._adjust_for_platform_fast(basic_answer, platform),
+            "confidence_level": 0.6,
+            "verification_method": "basic_filter",
+            "verification_note": "⚠️ 基本フィルタリング適用",
+            "last_updated": datetime.now().strftime("%Y-%m-%d"),
+            "sources": [],
+            "warnings": ["簡易処理のため最新情報は公式確認推奨"],
+            "anti_hallucination_used": True,
+            "processing_method": "lightweight"
+        }
+    
+    def _integrate_responses_optimized(
         self,
         anti_hallucination_result: AntiHallucinationResult,
         original_rag_response: Optional[str],
         platform: str
     ) -> Dict[str, Any]:
-        """回答の統合処理"""
+        """🚀 最適化応答統合処理（速度重視）"""
         
-        # 信頼性レベルに基づく統合戦略
-        if anti_hallucination_result.confidence_level >= 0.7:
-            # 高信頼性：ハルチネーション対策結果を主回答として使用
+        # 🚀 信頼性レベルに基づく高速統合戦略
+        confidence = anti_hallucination_result.confidence_level
+        
+        if confidence >= 0.8:
+            # 高信頼性：そのまま使用
             primary_answer = anti_hallucination_result.answer
-            verification_note = "✅ 最新情報で確認済み"
+            verification_note = "✅ 高信頼性で確認済み"
             
-        elif anti_hallucination_result.confidence_level >= 0.4:
-            # 中信頼性：両方の情報を併用
-            primary_answer = self._merge_answers(
-                anti_hallucination_result.answer,
-                original_rag_response,
-                platform
-            )
-            verification_note = "⚠️ 最新情報で補完済み（要確認）"
+        elif confidence >= 0.5:
+            # 中信頼性：簡易マージ
+            if original_rag_response and len(original_rag_response) > 20:
+                primary_answer = f"{anti_hallucination_result.answer}\n\n【参考】{original_rag_response[:150]}..."
+            else:
+                primary_answer = anti_hallucination_result.answer
+            verification_note = "⚠️ 中程度の信頼性（要確認推奨）"
             
         else:
-            # 低信頼性：元のRAG回答をベースに注意書きを追加
+            # 低信頼性：元回答ベース
             if original_rag_response:
                 primary_answer = original_rag_response + "\n\n※最新情報については公式サイトでご確認ください。"
             else:
                 primary_answer = anti_hallucination_result.answer
-            verification_note = "ℹ️ 一般的な情報です（最新確認推奨）"
+            verification_note = "ℹ️ 低信頼性（公式確認必須）"
         
-        # 最終更新日の付加
-        if anti_hallucination_result.last_updated:
-            update_note = f"\n\n📅 最終更新: {anti_hallucination_result.last_updated}"
-            primary_answer += update_note
-        
-        # プラットフォーム別の最終調整
-        final_answer = self._adjust_for_platform(primary_answer, platform)
+        # 🚀 最終調整（プラットフォーム別・高速）
+        final_answer = self._adjust_for_platform_fast(primary_answer, platform)
         
         return {
             "answer": final_answer,
-            "confidence_level": anti_hallucination_result.confidence_level,
+            "confidence_level": confidence,
             "verification_method": anti_hallucination_result.verification_method,
             "verification_note": verification_note,
             "last_updated": anti_hallucination_result.last_updated,
@@ -146,115 +232,103 @@ class AntiHallucinationIntegration:
                 {
                     "title": source.title,
                     "url": source.url,
-                    "domain": source.source_domain,
-                    "reliability": source.reliability_score,
-                    "current": source.is_current
+                    "reliability": source.reliability_score
                 }
-                for source in anti_hallucination_result.sources[:3]
+                for source in anti_hallucination_result.sources[:2]  # 🔧 削減：3→2
             ],
-            "warnings": anti_hallucination_result.warnings,
-            "anti_hallucination_used": True
+            "warnings": anti_hallucination_result.warnings[:3],  # 🔧 削減
+            "anti_hallucination_used": True,
+            "processing_method": "optimized"
         }
     
-    def _merge_answers(
-        self,
-        anti_hallucination_answer: str,
-        original_rag_answer: Optional[str],
-        platform: str
-    ) -> str:
-        """回答のマージ"""
-        
-        if not original_rag_answer:
-            return anti_hallucination_answer
-        
-        # プラットフォーム別の文字数制限
-        max_length = 400 if platform == "line" else 800
-        
-        # マージ戦略：ハルチネーション対策回答をメインとし、RAG回答で補完
-        merged = f"{anti_hallucination_answer}\n\n【参考情報】\n{original_rag_answer[:200]}..."
-        
-        if len(merged) > max_length:
-            merged = anti_hallucination_answer
-        
-        return merged
-    
-    def _adjust_for_platform(self, answer: str, platform: str) -> str:
-        """プラットフォーム別調整"""
+    def _adjust_for_platform_fast(self, answer: str, platform: str) -> str:
+        """🚀 高速プラットフォーム別調整"""
         
         if platform == "line":
-            # LINE用：簡潔で読みやすく
-            max_length = 500
-            if len(answer) > max_length:
-                # 重要な情報を保持しながら短縮
+            # LINE用：400文字制限
+            if len(answer) > 400:
+                # 重要部分を保持しつつ短縮
                 lines = answer.split('\n')
-                condensed_lines = []
+                condensed = []
                 current_length = 0
                 
                 for line in lines:
-                    if current_length + len(line) < max_length - 50:
-                        condensed_lines.append(line)
+                    if current_length + len(line) < 350:
+                        condensed.append(line)
                         current_length += len(line)
                     else:
                         break
                 
-                answer = '\n'.join(condensed_lines) + "\n\n詳細は公式サイトをご確認ください。"
+                answer = '\n'.join(condensed) + "\n\n詳細は公式サイトをご確認ください。"
             
-            # 改行の調整
-            answer = answer.replace('\n\n', '\n')
+            # 改行調整
+            answer = answer.replace('\n\n\n', '\n\n')
             
         else:
-            # Web用：詳細で包括的
-            max_length = 1000
-            if len(answer) > max_length:
-                answer = answer[:max_length-50] + "...\n\n詳細については公式サイトをご確認ください。"
+            # Web用：800文字制限
+            if len(answer) > 800:
+                answer = answer[:750] + "...\n\n詳細については公式サイトをご確認ください。"
         
         return answer
     
-    def _create_fallback_response(
-        self, 
-        query: str, 
-        platform: str, 
-        error_msg: str
-    ) -> Dict[str, Any]:
-        """フォールバック回答の作成"""
-        
-        fallback_answer = f"申し訳ございません。『{query}』についての最新情報の確認中にエラーが発生しました。住宅補助金の制度は年度ごとに変更される可能性がありますので、最新情報については直接管轄の行政機関にお問い合わせいただくことをお勧めいたします。"
+    def get_processing_stats(self) -> Dict[str, Any]:
+        """🚀 処理統計取得（最適化監視用）"""
+        total_calls = self.processing_stats["should_use_calls"]
+        total_attempts = self.processing_stats["processing_attempts"]
         
         return {
-            "answer": fallback_answer,
-            "confidence_level": 0.0,
-            "verification_method": "error_fallback",
-            "verification_note": "❌ 検索エラー",
-            "last_updated": None,
-            "sources": [],
-            "warnings": [f"検索エラー: {error_msg}"],
-            "anti_hallucination_used": True
+            "anti_hallucination_optimization_stats": self.processing_stats,
+            "efficiency_metrics": {
+                "approval_rate": (self.processing_stats["should_use_approved"] / total_calls * 100) if total_calls > 0 else 0,
+                "success_rate": (self.processing_stats["processing_successes"] / total_attempts * 100) if total_attempts > 0 else 0,
+                "timeout_rate": (self.processing_stats["processing_timeouts"] / total_attempts * 100) if total_attempts > 0 else 0,
+                "sync_fallback_rate": (self.processing_stats["sync_fallbacks"] / total_attempts * 100) if total_attempts > 0 else 0
+            },
+            "optimization_features": [
+                "🚀 Strict keyword filtering (reduced triggers)",
+                "⏰ 8s timeout (reduced from default)",
+                "🔧 Basic filter fallback",
+                "📏 Platform-specific length limits",
+                "🎯 2/3 condition requirement"
+            ],
+            "performance_targets": {
+                "approval_rate": "< 20% (strict filtering)",
+                "success_rate": "> 80%",
+                "timeout_rate": "< 15%",
+                "processing_time": "< 8s average"
+            }
         }
 
-# Webチャット用の統合関数
-async def enhance_web_chat_response(
+# ==============================================================================
+# 🚀 最適化統合関数（高速版）
+# ==============================================================================
+
+# グローバルインスタンス
+_optimized_integration = OptimizedAntiHallucinationIntegration()
+
+async def enhance_web_chat_response_optimized(
     query: str,
     original_response: str,
-    user_context: Dict = None
+    user_context: Dict = None,
+    timeout: float = 8.0
 ) -> Dict[str, Any]:
-    """Webチャット回答の強化"""
+    """🚀 Webチャット回答の最適化強化（条件厳格化）"""
     
-    integration = AntiHallucinationIntegration()
-    
-    # ハルチネーション対策が必要かチェック
-    if integration.should_use_anti_hallucination(query):
-        logger.info("🛡️ Using anti-hallucination for web chat")
+    # 🚀 厳格な条件チェック
+    if _optimized_integration.should_use_anti_hallucination_strict(query):
+        logger.info("🛡️ Using strict anti-hallucination for web chat")
         
-        enhanced_response = await integration.process_with_anti_hallucination(
+        enhanced_response = await _optimized_integration.process_with_anti_hallucination_optimized(
             query=query,
             platform="web",
             user_context=user_context,
-            original_rag_response=original_response
+            original_rag_response=original_response,
+            timeout=timeout
         )
         
         return enhanced_response
     else:
-        # 通常のRAG応答をそのまま返す
+        # 🚀 通常のRAG応答をそのまま返す（高速パス）
         return {
             "answer": original_response,
             "confidence_level": 0.8,
@@ -263,344 +337,93 @@ async def enhance_web_chat_response(
             "last_updated": None,
             "sources": [],
             "warnings": [],
-            "anti_hallucination_used": False
+            "anti_hallucination_used": False,
+            "processing_method": "fast_pass"
         }
 
-# LINEチャット用の統合関数
-async def enhance_line_chat_response(
+async def enhance_line_chat_response_optimized(
     query: str,
     user_id: str,
-    original_response: str = None
+    original_response: str = None,
+    timeout: float = 6.0  # 🔧 LINE用はより短く
 ) -> Dict[str, Any]:
-    """LINEチャット回答の強化"""
+    """🚀 LINEチャット回答の最適化強化（厳格条件・短時間）"""
     
-    integration = AntiHallucinationIntegration()
-    
-    # ハルチネーション対策が必要かチェック
-    if integration.should_use_anti_hallucination(query):
-        logger.info("🛡️ Using anti-hallucination for LINE chat")
+    # 🚀 厳格な条件チェック
+    if _optimized_integration.should_use_anti_hallucination_strict(query):
+        logger.info("🛡️ Using strict anti-hallucination for LINE chat")
         
-        # ユーザーコンテキストは簡易版
         user_context = {"user_id": user_id, "platform": "line"}
         
-        enhanced_response = await integration.process_with_anti_hallucination(
+        enhanced_response = await _optimized_integration.process_with_anti_hallucination_optimized(
             query=query,
             platform="line",
             user_context=user_context,
-            original_rag_response=original_response
+            original_rag_response=original_response,
+            timeout=timeout
         )
         
         return enhanced_response
     else:
-        # 通常のRAG応答をそのまま返す
+        # 🚀 通常応答（高速パス）
         return {
-            "answer": original_response or "申し訳ございません。お答えできませんでした。",
+            "answer": original_response or "申し訳ございません。詳しくはお問い合わせください。",
             "confidence_level": 0.8,
             "verification_method": "standard_rag",
             "verification_note": "📚 社内データ",
             "last_updated": None,
             "sources": [],
             "warnings": [],
-            "anti_hallucination_used": False
+            "anti_hallucination_used": False,
+            "processing_method": "fast_pass"
         }
 
 # ==============================================================================
-# 既存システムへの統合パッチ
+# 🚀 同期版関数（イベントループエラー対策・最適化版）
 # ==============================================================================
 
-# 1. chat.py用の統合パッチ
-"""
-api/routers/chat.py に以下のコードを追加：
-
-# ファイル先頭にインポート追加
-from integration.anti_hallucination_integration import enhance_web_chat_response
-
-# chat_endpoint 関数内でRAG処理後に以下を追加：
-if rag_chain_template:
-    result = rag_chain_template.invoke({"query": query})
-    raw_answer = result.get("result", "")
-    
-    # ハルチネーション対策の適用
-    enhanced_result = await enhance_web_chat_response(
-        query=query,
-        original_response=raw_answer,
-        user_context={"username": user}
-    )
-    
-    answer = enhanced_result["answer"]
-    
-    # 追加情報をレスポンスに含める
-    response = {
-        "answer": answer,
-        "sources": enhanced_result.get("sources", []),
-        "verification": {
-            "method": enhanced_result.get("verification_method"),
-            "note": enhanced_result.get("verification_note"),
-            "confidence": enhanced_result.get("confidence_level"),
-            "last_updated": enhanced_result.get("last_updated"),
-            "warnings": enhanced_result.get("warnings", [])
-        },
-        "status": "ok"
-    }
-"""
-
-# 2. line_bot_fixed.py用の統合パッチ
-"""
-api/routers/line_bot_fixed.py に以下のコードを追加：
-
-# ファイル先頭にインポート追加
-from integration.anti_hallucination_integration import enhance_line_chat_response
-
-# process_general_question 関数を以下のように修正：
-async def process_general_question(message_text: str, user_id: str) -> str:
-    try:
-        globals_dict = get_app_globals()
-        original_response = None
-        
-        if globals_dict.get('rag_chain_template'):
-            result = globals_dict['rag_chain_template'].invoke({"query": message_text})
-            original_response = result.get("result", "")
-        
-        # ハルチネーション対策の適用
-        enhanced_result = await enhance_line_chat_response(
-            query=message_text,
-            user_id=user_id,
-            original_response=original_response
-        )
-        
-        return enhanced_result["answer"]
-        
-    except Exception as e:
-        logger.error(f"Error processing question: {e}")
-        return "申し訳ございません。エラーが発生しました。"
-
-# handle_text_message_ultimate 関数内で user_id を process_general_question に渡すように修正
-"""
-
-# 3. chat_ultra_fast.py用の統合パッチ
-"""
-api/routers/chat_ultra_fast.py に以下のコードを追加：
-
-# ファイル先頭にインポート追加
-from integration.anti_hallucination_integration import enhance_web_chat_response
-
-# UnifiedResponseGenerator クラスの generate_unified_response メソッド内に追加：
-async def generate_unified_response(self, query: str, user: str) -> Dict[str, Any]:
-    start_time = time.time()
-    
-    try:
-        # 既存のキャッシュチェック
-        cached_response = self.cache.get(query)
-        if cached_response:
-            return cached_response
-        
-        # テンプレートマッチング
-        template_response = self._match_unified_template(query)
-        if template_response:
-            result = {
-                "answer": template_response,
-                "processing_time": time.time() - start_time,
-                "source": "template",
-                "status": "ok"
-            }
-            self.cache.set(query, result)
-            return result
-        
-        # RAG処理
-        rag_response = await self._unified_rag_processing(query)
-        if rag_response:
-            # ハルチネーション対策の適用
-            enhanced_result = await enhance_web_chat_response(
-                query=query,
-                original_response=rag_response,
-                user_context={"username": user}
-            )
-            
-            result = {
-                "answer": enhanced_result["answer"],
-                "processing_time": time.time() - start_time,
-                "source": "rag_enhanced",
-                "verification": enhanced_result.get("verification_note"),
-                "last_updated": enhanced_result.get("last_updated"),
-                "status": "ok"
-            }
-            self.cache.set(query, result)
-            return result
-        
-        # フォールバック処理...
-"""
-
-# テスト用の統合テストクラス
-class AntiHallucinationIntegrationTest:
-    """統合テスト用クラス"""
-    
-    def __init__(self):
-        self.integration = AntiHallucinationIntegration()
-    
-    async def test_web_integration(self):
-        """Web統合テスト"""
-        test_cases = [
-            ("住宅ローン控除 2025年度について教えて", "住宅ローン控除の基本情報..."),
-            ("ZEH補助金 兵庫県", "ZEH補助金の概要..."),
-            ("最新の省エネ住宅支援制度", "省エネ住宅の支援制度...")
-        ]
-        
-        for query, original_response in test_cases:
-            print(f"\n=== Web統合テスト: {query} ===")
-            
-            result = await enhance_web_chat_response(
-                query=query,
-                original_response=original_response,
-                user_context={"username": "test_user"}
-            )
-            
-            print(f"回答: {result['answer'][:100]}...")
-            print(f"信頼性: {result['confidence_level']:.2f}")
-            print(f"検証方法: {result['verification_method']}")
-            print(f"ハルチネーション対策: {result['anti_hallucination_used']}")
-    
-    async def test_line_integration(self):
-        """LINE統合テスト"""
-        test_cases = [
-            ("こどもエコすまい支援事業", "test_user_1"),
-            ("加東市の住宅補助金", "test_user_2"),
-            ("最新の断熱リフォーム補助金", "test_user_3")
-        ]
-        
-        for query, user_id in test_cases:
-            print(f"\n=== LINE統合テスト: {query} ===")
-            
-            result = await enhance_line_chat_response(
-                query=query,
-                user_id=user_id,
-                original_response="一般的な住宅情報です。"
-            )
-            
-            print(f"回答: {result['answer'][:100]}...")
-            print(f"信頼性: {result['confidence_level']:.2f}")
-            print(f"最終更新日: {result['last_updated']}")
-            print(f"警告: {result['warnings']}")
-
-# ==============================================================================
-# 同期版の統合関数（イベントループエラー対策）
-# ==============================================================================
-
-def enhance_line_chat_response_sync(
+def enhance_line_chat_response_sync_optimized(
     query: str,
     user_id: str,
     original_response: str = None
 ) -> Dict[str, Any]:
-    """LINEチャット回答の強化（同期版）- イベントループエラー対策"""
+    """🚀 LINEチャット回答の同期版強化（条件厳格化・高速）"""
     
-    integration = AntiHallucinationIntegration()
-    
-    # ハルチネーション対策が必要かチェック
-    if integration.should_use_anti_hallucination(query):
-        logger.info("🛡️ Using sync anti-hallucination for LINE chat")
+    # 🚀 厳格条件チェック（同期版）
+    if _optimized_integration.should_use_anti_hallucination_strict(query):
+        logger.info("🛡️ Using sync strict anti-hallucination for LINE chat")
         
-        try:
-            # 基本的なフィルタリング処理（非同期検索は行わない）
-            if original_response:
-                # 簡易的な品質チェック
-                if len(original_response.strip()) < 10:
-                    enhanced_answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
-                elif "エラー" in original_response or "申し訳" in original_response:
-                    enhanced_answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
-                else:
-                    # 補助金・最新情報に関する注意書きを追加
-                    if any(keyword in query.lower() for keyword in ["補助金", "助成金", "最新", "2024", "2025"]):
-                        enhanced_answer = original_response + "\n\n※補助金制度は年度ごとに変更される可能性があります。最新情報については公式サイトでご確認ください。"
-                    else:
-                        enhanced_answer = original_response
-            else:
-                enhanced_answer = "お尋ねの件について、詳しくは直接お問い合わせください。"
-            
-            return {
-                "answer": enhanced_answer,
-                "confidence_level": 0.6,
-                "verification_method": "sync_basic_filtering",
-                "verification_note": "⚠️ 基本的な品質チェック済み（同期処理）",
-                "last_updated": datetime.now().strftime("%Y-%m-%d"),
-                "sources": [],
-                "warnings": ["同期処理のため限定的な検証"],
-                "anti_hallucination_used": True
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Sync anti-hallucination error: {e}")
-            return {
-                "answer": "お尋ねの件について、詳しくは直接お問い合わせください。",
-                "confidence_level": 0.0,
-                "verification_method": "error_fallback",
-                "verification_note": "❌ 処理エラー",
-                "last_updated": None,
-                "sources": [],
-                "warnings": [f"処理エラー: {str(e)}"],
-                "anti_hallucination_used": True
-            }
+        # 🚀 同期版基本フィルタリング（軽量処理）
+        return _optimized_integration._create_basic_filter_response(query, original_response, "line")
     else:
-        # 通常のRAG応答をそのまま返す
+        # 🚀 高速パス（処理なし）
         return {
-            "answer": original_response or "申し訳ございません。お答えできませんでした。",
+            "answer": original_response or "申し訳ございません。詳しくはお問い合わせください。",
             "confidence_level": 0.8,
             "verification_method": "standard_rag",
             "verification_note": "📚 社内データ",
             "last_updated": None,
             "sources": [],
             "warnings": [],
-            "anti_hallucination_used": False
+            "anti_hallucination_used": False,
+            "processing_method": "sync_fast_pass"
         }
 
-
-def enhance_web_chat_response_sync(
+def enhance_web_chat_response_sync_optimized(
     query: str,
     original_response: str,
     user_context: Dict = None
 ) -> Dict[str, Any]:
-    """Webチャット回答の強化（同期版）"""
+    """🚀 Webチャット回答の同期版強化（最適化）"""
     
-    integration = AntiHallucinationIntegration()
-    
-    # ハルチネーション対策が必要かチェック
-    if integration.should_use_anti_hallucination(query):
-        logger.info("🛡️ Using sync anti-hallucination for web chat")
+    # 🚀 厳格条件チェック（同期版）
+    if _optimized_integration.should_use_anti_hallucination_strict(query):
+        logger.info("🛡️ Using sync strict anti-hallucination for web chat")
         
-        try:
-            # 基本的なフィルタリング処理
-            if original_response and len(original_response.strip()) >= 10:
-                # 補助金・最新情報に関する注意書きを追加
-                if any(keyword in query.lower() for keyword in ["補助金", "助成金", "最新", "2024", "2025"]):
-                    enhanced_answer = original_response + "\n\n※制度は年度ごとに変更される可能性があります。最新情報については公式サイトでご確認ください。"
-                else:
-                    enhanced_answer = original_response
-            else:
-                enhanced_answer = "申し訳ございません。お尋ねの件について、詳しくは直接お問い合わせください。"
-            
-            return {
-                "answer": enhanced_answer,
-                "confidence_level": 0.7,
-                "verification_method": "sync_web_filtering",
-                "verification_note": "📚 社内データ + 基本検証",
-                "last_updated": datetime.now().strftime("%Y-%m-%d"),
-                "sources": [],
-                "warnings": [],
-                "anti_hallucination_used": True
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Sync web anti-hallucination error: {e}")
-            return {
-                "answer": "申し訳ございません。エラーが発生しました。",
-                "confidence_level": 0.0,
-                "verification_method": "error_fallback",
-                "verification_note": "❌ 処理エラー",
-                "last_updated": None,
-                "sources": [],
-                "warnings": [f"処理エラー: {str(e)}"],
-                "anti_hallucination_used": True
-            }
+        # 🚀 同期版基本フィルタリング
+        return _optimized_integration._create_basic_filter_response(query, original_response, "web")
     else:
-        # 通常のRAG応答をそのまま返す
+        # 🚀 高速パス
         return {
             "answer": original_response,
             "confidence_level": 0.8,
@@ -609,15 +432,68 @@ def enhance_web_chat_response_sync(
             "last_updated": None,
             "sources": [],
             "warnings": [],
-            "anti_hallucination_used": False
+            "anti_hallucination_used": False,
+            "processing_method": "sync_fast_pass"
         }
 
+# ==============================================================================
+# 統計取得関数
+# ==============================================================================
 
-# メイン実行（テスト用）
+def get_anti_hallucination_optimization_stats() -> Dict[str, Any]:
+    """🚀 最適化統計取得"""
+    return _optimized_integration.get_processing_stats()
+
+# ==============================================================================
+# 旧関数名の互換性維持（既存コードとの互換性のため）
+# ==============================================================================
+
+# 最適化版を優先使用するが、旧関数名でもアクセス可能
+enhance_web_chat_response = enhance_web_chat_response_optimized
+enhance_line_chat_response = enhance_line_chat_response_optimized
+enhance_line_chat_response_sync = enhance_line_chat_response_sync_optimized
+enhance_web_chat_response_sync = enhance_web_chat_response_sync_optimized
+
+# ==============================================================================
+# テスト・デバッグ用
+# ==============================================================================
+
+class OptimizedAntiHallucinationTest:
+    """最適化統合テスト用クラス"""
+    
+    def __init__(self):
+        self.integration = OptimizedAntiHallucinationIntegration()
+    
+    async def test_strict_conditions(self):
+        """厳格条件テスト"""
+        test_cases = [
+            # 承認されるべきケース
+            ("兵庫県の2024年度ZEH補助金について教えてください", True),
+            ("加東市のこどもエコすまい支援事業2024年最新情報", True),
+            ("現在実施中の住宅ローン控除制度について神戸市での適用例", True),
+            
+            # 拒否されるべきケース
+            ("住宅ローン控除について", False),
+            ("補助金", False),
+            ("ZEH補助金", False),
+            ("坪単価について教えて", False),
+            ("標準仕様はどんな感じ？", False)
+        ]
+        
+        print("🧪 Strict Condition Test Results:")
+        print("=" * 50)
+        
+        for query, expected in test_cases:
+            result = self.integration.should_use_anti_hallucination_strict(query)
+            status = "✅ PASS" if result == expected else "❌ FAIL"
+            print(f"{status} '{query[:40]}...' -> {result} (expected: {expected})")
+        
+        stats = self.integration.get_processing_stats()
+        print(f"\nApproval rate: {stats['efficiency_metrics']['approval_rate']:.1f}%")
+
 if __name__ == "__main__":
     async def main():
-        tester = AntiHallucinationIntegrationTest()
-        await tester.test_web_integration()
-        await tester.test_line_integration()
+        tester = OptimizedAntiHallucinationTest()
+        await tester.test_strict_conditions()
     
     asyncio.run(main())
