@@ -1,5 +1,4 @@
-# main.py - RAG初期化診断強化版（完全修正版）
-
+# main.py - Unified RAG API (Diagnostics Enhanced) - importlib-based resolver
 import logging
 import os
 import asyncio
@@ -8,27 +7,40 @@ from datetime import datetime
 from typing import Dict, Any, List
 from uuid import uuid4
 import traceback
+import sys
+import pathlib
+import importlib
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-# ログ設定
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# ---------------------------------
+# パス（ローカル実行の安定化）
+# ---------------------------------
+ROOT = pathlib.Path(__file__).resolve().parent  # D:/RAG-LLM-Project
+for p in [ROOT, ROOT / "services", ROOT / "llm", ROOT / "rag", ROOT / "api"]:
+    p_str = str(p)
+    if p_str not in sys.path:
+        sys.path.insert(0, p_str)
+
+# ---------------------------------
+# 基本ログ
+# ---------------------------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# FastAPI アプリケーションインスタンス
+# ---------------------------------
+# FastAPI
+# ---------------------------------
 app = FastAPI(
-    title="Unified RAG API - Complete Integration System (Diagnostics Enhanced)",
+    title="Unified RAG API - Diagnostics Enhanced",
     description="High-Performance Unified AI Chat API with Enhanced RAG Diagnostics",
-    version="7.2.0-diagnostics-enhanced"
+    version="7.2.2",
 )
 
-# CORS設定
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,17 +49,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# グローバル変数（RAG機能）
+# ---------------------------------
+# グローバル（RAG）
+# ---------------------------------
 vectorstore = None
-rag_chain_template = None
+rag_chain_template = None  # .invoke({"query": ...}) を持つ想定
 llm_instance = None
 initialization_lock = asyncio.Lock()
 is_initialized = False
-
-# RAGインスタンス共有フラグ
 RAG_SHARED_GLOBALLY = False
 
-# 🚀 RAG診断情報（詳細追跡）
+# 便利フラグ
+ENABLE_RAG_INITIALIZATION = True
+ENABLE_UNIFIED_CHAT = True
+ENABLE_LINE_INTEGRATION = True
+
+UNIFIED_CHAT_MODE = os.getenv("UNIFIED_CHAT_MODE", "complete")
+DEFAULT_PLATFORM = "web"
+DEFAULT_RESPONSE_MODE = "auto"
+
+# 出典制御（UIでは非表示だが念のため）
+INCLUDE_SOURCES = os.getenv("INCLUDE_SOURCES", "false").lower() == "true"
+
+# 起動時刻
+startup_time = time.time()
+
+# 診断情報
 rag_diagnostics = {
     "initialization_attempts": 0,
     "initialization_success": False,
@@ -56,1037 +83,407 @@ rag_diagnostics = {
     "component_status": {
         "llm_instance": {"loaded": False, "error": None, "load_time": 0.0},
         "vectorstore": {"loaded": False, "error": None, "load_time": 0.0, "file_path": None, "file_size": 0},
-        "rag_chain": {"loaded": False, "error": None, "load_time": 0.0}
+        "rag_chain": {"loaded": False, "error": None, "load_time": 0.0},
     },
-    "fallback_info": {
-        "used_fallback": False,
-        "fallback_type": None,
-        "fallback_reason": None
-    },
-    "health_checks": {
-        "last_check": None,
-        "vectorstore_test": False,
-        "rag_query_test": False,
-        "llm_response_test": False
-    }
+    "fallback_info": {"used_fallback": False, "fallback_type": None, "fallback_reason": None},
+    "health_checks": {"last_check": None, "vectorstore_test": False, "rag_query_test": False, "llm_response_test": False},
 }
 
-# 起動時刻を記録
-startup_time = time.time()
-
-# 完全統合システム設定
-ENABLE_RAG_INITIALIZATION = True
-ENABLE_UNIFIED_CHAT = True
-ENABLE_LINE_INTEGRATION = True
-ENABLE_FINANCIAL_PLANNING = True
-ENABLE_DUPLICATE_PREVENTION = True
-ENABLE_LEGACY_COMPATIBILITY = True
-
-# エンドポイント統一設定
-ENDPOINT_MIGRATION_COMPLETE = True
-OLD_CHAT_ENDPOINT_REDIRECT = True
-UNIFIED_CHAT_PRIMARY_PATH = "/chat"
-
-# LINE統合設定
-LINE_BOT_MODE = os.getenv("LINE_BOT_MODE", "ultra_fast_financial")
-SINGLE_LINE_INTEGRATION = True
-
-# 完全統合チャット設定
-UNIFIED_CHAT_MODE = os.getenv("UNIFIED_CHAT_MODE", "complete")
-DEFAULT_PLATFORM = "web"
-DEFAULT_RESPONSE_MODE = "auto"
-
-# 統合完了フラグ
-INTEGRATION_COMPLETE = {
-    "chat_py_integrated": True,
-    "chat_ultra_fast_integrated": True,
-    "template_system_unified": True,
-    "cache_system_unified": True,
-    "performance_optimized": True,
-    "platform_separation_complete": True,
-    "endpoint_migration_complete": True,
-    "rag_sharing_complete": True,
-    "log_optimization_complete": True,
-    "diagnostics_enhanced": True
-}
-
-# ==============================================================================
-# 🚀 RAG初期化（診断強化版）
-# ==============================================================================
+# ---------------------------------
+# RAG 初期化（Diagnostics 強化・動的 import）
+# ---------------------------------
 async def initialize_rag_components():
-    """RAG コンポーネントの非同期初期化（診断大幅強化版）"""
+    """RAG コンポーネントの非同期初期化（fast優先→servicesフロントドアへフォールバック）"""
     global vectorstore, rag_chain_template, llm_instance, is_initialized, RAG_SHARED_GLOBALLY, rag_diagnostics
 
     if is_initialized:
-        logger.info("✅ RAG components already initialized and shared globally")
+        logger.info("✅ RAG components already initialized")
         return
 
     async with initialization_lock:
         if is_initialized:
             return
 
-        initialization_start = time.time()
+        t0 = time.time()
         rag_diagnostics["initialization_attempts"] += 1
         rag_diagnostics["last_initialization_time"] = datetime.now().isoformat()
 
-        logger.info("🚀 Starting RAG initialization with enhanced diagnostics...")
-        logger.info(f"   - Attempt #{rag_diagnostics['initialization_attempts']}")
-        logger.info(f"   - Environment: {os.getenv('ENVIRONMENT', 'local')}")
-        logger.info(f"   - Working directory: {os.getcwd()}")
+        logger.info("🚀 Initializing RAG components (fast first, then services front-door) ...")
 
         try:
-            # 🚀 STEP 1: LLM初期化
-            logger.info("🔧 Step 1: Loading LLM instance...")
-            llm_start = time.time()
-
+            # ---- STEP 1: LLM ----
+            llm_t = time.time()
             try:
-                from llm.llm_runner import load_llm
-                llm_result = load_llm()
-
-                if isinstance(llm_result, tuple) and len(llm_result) >= 1:
-                    llm_instance = llm_result[0]
-                    rag_diagnostics["component_status"]["llm_instance"]["loaded"] = True
-                    rag_diagnostics["component_status"]["llm_instance"]["load_time"] = time.time() - llm_start
-                    logger.info(f"✅ LLM loaded: {type(llm_instance).__name__} ({rag_diagnostics['component_status']['llm_instance']['load_time']:.2f}s)")
-                else:
-                    raise ValueError(f"Unexpected LLM load result: {type(llm_result)}")
-
-            except Exception as llm_error:
-                rag_diagnostics["component_status"]["llm_instance"]["error"] = str(llm_error)
-                logger.error(f"❌ LLM loading failed: {llm_error}")
-                raise
-
-            # 🚀 STEP 2: ベクトルストア初期化
-            logger.info("🔧 Step 2: Loading vectorstore...")
-            vectorstore_start = time.time()
-
-            try:
-                vector_dir = "rag/vectorstore"
-                index_path = os.path.join(vector_dir, "index.faiss")
-
-                logger.info(f"   - Vector directory: {vector_dir}")
-                logger.info(f"   - Index file path: {index_path}")
-                logger.info(f"   - Exists: {os.path.exists(index_path)}")
-
-                if os.path.exists(index_path):
-                    file_size = os.path.getsize(index_path)
-                    logger.info(f"   - File size: {file_size} bytes")
-                    rag_diagnostics["component_status"]["vectorstore"]["file_path"] = index_path
-                    rag_diagnostics["component_status"]["vectorstore"]["file_size"] = file_size
-
-                # 高速RAGチェーン優先
+                llm_instance = None
+                # 最優先：llm/llm_runner.py
                 try:
-                    from rag.fast_rag_chain import load_ultra_fast_vectorstore, get_ultra_fast_rag_chain
-                    vectorstore = load_ultra_fast_vectorstore()
-
-                    if vectorstore:
-                        if hasattr(vectorstore, 'index') and hasattr(vectorstore.index, 'ntotal'):
-                            try:
-                                _ = vectorstore.similarity_search("テスト住宅", k=1)
-                                rag_diagnostics["health_checks"]["vectorstore_test"] = True
-                            except Exception as test_error:
-                                logger.warning(f"   - Test search failed: {test_error}")
-
-                        rag_chain_template = get_ultra_fast_rag_chain(vectorstore)
-                        logger.info("✅ Ultra fast RAG chain loaded successfully")
-
+                    mod = importlib.import_module("llm.llm_runner")
+                    get_cached = getattr(mod, "get_cached_llm_instance", None)
+                    if callable(get_cached):
+                        llm_instance = get_cached()
                     else:
-                        raise ValueError("Vectorstore is None")
-
-                except Exception as fast_error:
-                    logger.warning(f"⚠️ Ultra fast RAG failed: {fast_error}")
-                    logger.info("🔄 Trying standard RAG chain...")
-
-                    # 標準RAGチェーンフォールバック
+                        load_llm = getattr(mod, "load_llm", None)
+                        if callable(load_llm):
+                            res = load_llm()
+                            llm_instance = res[0] if isinstance(res, tuple) else res
+                except Exception:
+                    # 互換：ルート直下 llm_runner.py
                     try:
-                        import importlib.util as _il_spec, pathlib as _pl
-                        _rag_chain_path = _pl.Path(__file__).resolve().parent / "rag" / "rag_chain.py"
+                        mod = importlib.import_module("llm_runner")
+                        get_cached = getattr(mod, "get_cached_llm_instance", None)
+                        if callable(get_cached):
+                            llm_instance = get_cached()
+                    except Exception:
+                        pass
 
-                        if _rag_chain_path.exists():
-                            logger.info(f"   - Loading from: {_rag_chain_path}")
-                            _spec = _il_spec.spec_from_file_location("rag.rag_chain", _rag_chain_path)
-                            _mod = _il_spec.module_from_spec(_spec)
-                            assert _spec and _spec.loader
-                            _spec.loader.exec_module(_mod)
+                rag_diagnostics["component_status"]["llm_instance"]["loaded"] = bool(llm_instance)
+                rag_diagnostics["component_status"]["llm_instance"]["load_time"] = time.time() - llm_t
+                if llm_instance:
+                    logger.info(f"✅ LLM ready ({rag_diagnostics['component_status']['llm_instance']['load_time']:.2f}s)")
+                else:
+                    logger.info("ℹ️ LLM runner not found. Using chain-side LLMs.")
+            except Exception as e:
+                rag_diagnostics["component_status"]["llm_instance"]["error"] = str(e)
+                logger.warning(f"⚠️ LLM load failed (continue without): {e}")
 
-                            vectorstore = _mod.load_vectorstore()
-                            rag_chain_template = _mod.get_rag_chain(vectorstore)
-                            logger.info("✅ Standard RAG chain loaded as fallback")
+            # ---- STEP 2: Vectorstore + Chain ----
+            vs_t = time.time()
+            try:
+                # まず fast 版（rag/fast_rag_chain.py）を優先
+                try:
+                    fast_mod = importlib.import_module("rag.fast_rag_chain")
+                    load_vs = getattr(fast_mod, "load_super_fast_vectorstore")
+                    get_chain = getattr(fast_mod, "get_super_fast_rag_chain")
+                    vectorstore = load_vs()
+                    rag_chain_template = get_chain(vectorstore, return_source=INCLUDE_SOURCES)
+                    logger.info("✅ Fast RAG chain loaded")
+                except Exception as e_fast:
+                    logger.warning(f"⚠️ Fast RAG init failed: {e_fast}")
+                    logger.info("🔄 Falling back to services.rag_chain front-door")
 
-                            rag_diagnostics["fallback_info"]["used_fallback"] = True
-                            rag_diagnostics["fallback_info"]["fallback_type"] = "standard_rag"
-                            rag_diagnostics["fallback_info"]["fallback_reason"] = str(fast_error)
-                        else:
-                            raise FileNotFoundError("Standard rag_chain.py not found")
+                    # フロントドア：services/rag_chain を invoke 互換でラップ
+                    svc_mod = importlib.import_module("services.rag_chain")
+                    get_rag_response = getattr(svc_mod, "get_rag_response")
 
-                    except Exception as standard_error:
-                        logger.error(f"❌ Standard RAG fallback failed: {standard_error}")
+                    class _FrontDoorChain:
+                        def __init__(self, include_sources: bool):
+                            self.include_sources = include_sources
 
-                        # 🚀 最終フォールバック：ingested_text
-                        try:
-                            logger.info("🔄 Trying ingested_text fallback...")
-                            from rag.ingested_text import load_vectorstore, get_rag_chain
-                            vectorstore = load_vectorstore()
-                            rag_chain_template = get_rag_chain(vectorstore)
-                            logger.info("✅ Ingested_text RAG loaded as final fallback")
+                        def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+                            q = (inputs.get("query") or inputs.get("question") or "").strip()
+                            ans, srcs = get_rag_response(q)
+                            if not self.include_sources:
+                                return {"result": ans, "source_documents": []}
+                            docs = [{"metadata": {"source": s}} for s in srcs]
+                            return {"result": ans, "source_documents": docs}
 
-                            rag_diagnostics["fallback_info"]["used_fallback"] = True
-                            rag_diagnostics["fallback_info"]["fallback_type"] = "ingested_text"
-                            rag_diagnostics["fallback_info"]["fallback_reason"] = f"fast_rag: {fast_error}, standard: {standard_error}"
+                    vectorstore = None  # services 側に隠蔽
+                    rag_chain_template = _FrontDoorChain(include_sources=INCLUDE_SOURCES)
+                    rag_diagnostics["fallback_info"].update(
+                        {"used_fallback": True, "fallback_type": "services_front_door", "fallback_reason": str(e_fast)}
+                    )
 
-                        except Exception as final_error:
-                            logger.error(f"❌ All RAG fallbacks failed: {final_error}")
-                            vectorstore = None
-                            rag_chain_template = None
-                            raise
+                # 最低限テスト
+                try:
+                    _ = rag_chain_template.invoke({"query": "テスト"})
+                    rag_diagnostics["health_checks"]["rag_query_test"] = True
+                except Exception as test_e:
+                    logger.warning(f"⚠️ RAG quick test failed: {test_e}")
 
-                rag_diagnostics["component_status"]["vectorstore"]["loaded"] = vectorstore is not None
-                rag_diagnostics["component_status"]["vectorstore"]["load_time"] = time.time() - vectorstore_start
+                # Vectorstoreメタ
+                if vectorstore is not None:
+                    idx_path = os.path.join(os.getenv("VECTOR_DIR", "rag/vectorstore"), "index.faiss")
+                    if os.path.exists(idx_path):
+                        rag_diagnostics["component_status"]["vectorstore"]["file_path"] = idx_path
+                        rag_diagnostics["component_status"]["vectorstore"]["file_size"] = os.path.getsize(idx_path)
+                    rag_diagnostics["component_status"]["vectorstore"]["loaded"] = True
+
+                rag_diagnostics["component_status"]["vectorstore"]["load_time"] = time.time() - vs_t
                 rag_diagnostics["component_status"]["rag_chain"]["loaded"] = rag_chain_template is not None
-                rag_diagnostics["component_status"]["rag_chain"]["load_time"] = time.time() - vectorstore_start
+                rag_diagnostics["component_status"]["rag_chain"]["load_time"] = time.time() - vs_t
 
-            except Exception as vectorstore_error:
-                rag_diagnostics["component_status"]["vectorstore"]["error"] = str(vectorstore_error)
-                rag_diagnostics["component_status"]["rag_chain"]["error"] = str(vectorstore_error)
-                logger.error(f"❌ Vectorstore/RAG chain loading failed: {vectorstore_error}")
+            except Exception as e_vs:
+                rag_diagnostics["component_status"]["vectorstore"]["error"] = str(e_vs)
+                rag_diagnostics["component_status"]["rag_chain"]["error"] = str(e_vs)
                 raise
 
-            # 🚀 STEP 3: 統合テスト
-            logger.info("🔧 Step 3: Running integration tests...")
-
+            # ---- STEP 3: LLM 単体テスト（任意） ----
             try:
-                if llm_instance and rag_chain_template:
-                    test_response = rag_chain_template.invoke({"query": "テスト"})
-                    if test_response and test_response.get("result"):
-                        logger.info("✅ RAG integration test passed")
-                        rag_diagnostics["health_checks"]["rag_query_test"] = True
-                    else:
-                        logger.warning("⚠️ RAG integration test returned empty result")
+                if hasattr(llm_instance, "invoke"):
+                    _r = llm_instance.invoke("テスト")
+                    rag_diagnostics["health_checks"]["llm_response_test"] = bool(_r)
+            except Exception as e:
+                logger.warning(f"LLM test failed: {e}")
 
-                if llm_instance:
-                    try:
-                        test_llm_response = llm_instance.invoke("テスト")
-                        if test_llm_response:
-                            logger.info("✅ LLM test passed")
-                            rag_diagnostics["health_checks"]["llm_response_test"] = True
-                        else:
-                            logger.warning("⚠️ LLM test returned empty result")
-                    except Exception as llm_test_error:
-                        logger.warning(f"⚠️ LLM test failed: {llm_test_error}")
-
-            except Exception as test_error:
-                logger.warning(f"⚠️ Integration tests failed: {test_error}")
-
-            # 🚀 初期化完了
             is_initialized = True
             RAG_SHARED_GLOBALLY = True
             rag_diagnostics["initialization_success"] = True
-            rag_diagnostics["initialization_duration"] = time.time() - initialization_start
+            rag_diagnostics["initialization_duration"] = time.time() - t0
             rag_diagnostics["health_checks"]["last_check"] = datetime.now().isoformat()
 
-            logger.info("🎉 RAG initialization completed successfully!")
-            logger.info(f"   - Total time: {rag_diagnostics['initialization_duration']:.2f}s")
-            logger.info(f"   - Vectorstore: {'✅ Ready' if vectorstore else '❌ Failed'}")
-            logger.info(f"   - RAG Chain: {'✅ Ready' if rag_chain_template else '❌ Failed'}")
-            logger.info(f"   - LLM Instance: {'✅ Ready' if llm_instance else '❌ Failed'}")
-            logger.info(f"   - Global Sharing: {'✅ ENABLED' if RAG_SHARED_GLOBALLY else '❌ FAILED'}")
-            logger.info(f"   - Fallback Used: {'Yes (' + rag_diagnostics['fallback_info']['fallback_type'] + ')' if rag_diagnostics['fallback_info']['used_fallback'] else 'No'}")
+            logger.info(
+                f"🎉 RAG init OK in {rag_diagnostics['initialization_duration']:.2f}s "
+                f"(fallback={rag_diagnostics['fallback_info']['fallback_type']})"
+            )
 
         except Exception as e:
             rag_diagnostics["initialization_success"] = False
-            rag_diagnostics["initialization_duration"] = time.time() - initialization_start
-
-            logger.error("💥 RAG initialization failed!")
-            logger.error(f"   - Error: {e}")
-            logger.error(f"   - Duration: {rag_diagnostics['initialization_duration']:.2f}s")
-            logger.error(f"   - Stack trace: {traceback.format_exc()}")
-
+            rag_diagnostics["initialization_duration"] = time.time() - t0
             is_initialized = False
             RAG_SHARED_GLOBALLY = False
+            logger.error(f"💥 RAG init failed: {e}")
+            logger.error(traceback.format_exc())
 
 
 def get_shared_rag_components():
-    """共有RAGコンポーネント取得関数（診断情報付き）"""
     return {
         "vectorstore": vectorstore,
         "rag_chain_template": rag_chain_template,
         "llm_instance": llm_instance,
         "is_initialized": is_initialized,
         "shared_globally": RAG_SHARED_GLOBALLY,
-        "diagnostics": rag_diagnostics
+        "diagnostics": rag_diagnostics,
     }
 
-# ==============================================================================
-# 🚀 診断エンドポイント群
-# ==============================================================================
+# ---------------------------------
+# 診断系 API
+# ---------------------------------
 @app.get("/debug/rag-status")
 async def get_rag_detailed_status():
-    """RAGコンポーネントの詳細状態確認"""
-    current_time = datetime.now().isoformat()
-
     live_health = {
         "vectorstore_accessible": vectorstore is not None,
         "rag_chain_accessible": rag_chain_template is not None,
         "llm_accessible": llm_instance is not None,
-        "can_process_query": False
+        "can_process_query": False,
     }
-
     if rag_chain_template:
         try:
-            quick_test = rag_chain_template.invoke({"query": "健全性テスト"})
-            live_health["can_process_query"] = bool(quick_test and quick_test.get("result"))
-        except Exception as test_error:
-            live_health["test_error"] = str(test_error)
+            quick = rag_chain_template.invoke({"query": "健全性テスト"})
+            live_health["can_process_query"] = bool(quick and quick.get("result"))
+        except Exception as e:
+            live_health["test_error"] = str(e)
 
     return {
-        "timestamp": current_time,
+        "timestamp": datetime.now().isoformat(),
         "initialization_status": {
             "is_initialized": is_initialized,
             "globally_shared": RAG_SHARED_GLOBALLY,
             "attempts": rag_diagnostics["initialization_attempts"],
             "success": rag_diagnostics["initialization_success"],
             "last_attempt": rag_diagnostics["last_initialization_time"],
-            "duration": rag_diagnostics["initialization_duration"]
+            "duration": rag_diagnostics["initialization_duration"],
         },
         "component_details": rag_diagnostics["component_status"],
         "fallback_info": rag_diagnostics["fallback_info"],
         "health_checks": rag_diagnostics["health_checks"],
-        "live_health": live_health,
-        "recommendations": _generate_rag_recommendations()
-    }
-
-@app.get("/debug/performance")
-async def get_realtime_performance():
-    """リアルタイムパフォーマンス監視"""
-    from api.routers.chat_unified import optimized_generator
-
-    try:
-        unified_stats = optimized_generator.get_performance_stats()
-    except Exception as e:
-        unified_stats = {"error": f"Failed to get unified stats: {e}"}
-
-    system_health = {
-        "rag_components": is_initialized,
-        "global_sharing": RAG_SHARED_GLOBALLY,
-        "uptime": time.time() - startup_time,
-        "memory_usage": _get_memory_usage(),
-        "active_endpoints": len(app.routes)
-    }
-
-    return {
-        "timestamp": datetime.now().isoformat(),
-        "system_health": system_health,
-        "unified_chat_performance": unified_stats,
-        "rag_diagnostics_summary": {
-            "initialization_success": rag_diagnostics["initialization_success"],
-            "component_status": {k: v["loaded"] for k, v in rag_diagnostics["component_status"].items()},
-            "fallback_used": rag_diagnostics["fallback_info"]["used_fallback"]
-        }
     }
 
 @app.post("/debug/fix-rag")
 async def attempt_rag_auto_fix():
-    """RAG問題の自動修復試行（修正版：globalを先頭に宣言）"""
-    # ★★★ ここが修正点：関数冒頭で global 宣言 ★★★
     global is_initialized, RAG_SHARED_GLOBALLY
-
-    fix_start = time.time()
-    fix_log = []
-
+    t0 = time.time()
+    log: List[str] = []
     try:
-        fix_log.append("🔍 Diagnosing current RAG status...")
-
-        if is_initialized and vectorstore and rag_chain_template:
-            fix_log.append("✅ RAG components appear healthy, running extended tests...")
-            try:
-                test_queries = ["住宅", "坪単価", "標準仕様"]
-                for query in test_queries:
-                    result = rag_chain_template.invoke({"query": query})
-                    if result and result.get("result"):
-                        fix_log.append(f"✅ Test query '{query}': OK")
-                    else:
-                        fix_log.append(f"⚠️ Test query '{query}': Empty result")
-            except Exception as test_error:
-                fix_log.append(f"❌ Extended test failed: {test_error}")
-
+        if is_initialized and rag_chain_template:
+            log.append("✅ Components look healthy. Running smoke queries...")
+            for q in ["住宅", "坪単価", "標準仕様"]:
+                try:
+                    r = rag_chain_template.invoke({"query": q})
+                    ok = bool(r and r.get("result"))
+                    log.append(f" - {q}: {'OK' if ok else 'EMPTY'}")
+                except Exception as e:
+                    log.append(f" - {q}: ERROR {e}")
         else:
-            fix_log.append("❌ RAG components not properly initialized, attempting reinitialization...")
-
-            # 強制再初期化（global は既に先頭で宣言済み）
+            log.append("❌ Not initialized. Re-initializing ...")
             is_initialized = False
             RAG_SHARED_GLOBALLY = False
-
             await initialize_rag_components()
-
-            if is_initialized:
-                fix_log.append("✅ Reinitialization successful!")
-            else:
-                fix_log.append("❌ Reinitialization failed")
-
-        # キャッシュクリア
-        try:
-            from rag.fast_rag_chain import clear_super_fast_cache
-            cleared_entries = clear_super_fast_cache()
-            fix_log.append(f"🧹 Cache cleared: {cleared_entries} entries")
-        except Exception as cache_error:
-            fix_log.append(f"⚠️ Cache clear failed: {cache_error}")
-
-        fix_duration = time.time() - fix_start
+            log.append(" - reinit: " + ("OK" if is_initialized else "FAILED"))
 
         return {
             "fix_attempted": True,
-            "fix_duration": fix_duration,
-            "fix_log": fix_log,
+            "fix_duration": time.time() - t0,
+            "fix_log": log,
             "final_status": {
                 "is_initialized": is_initialized,
                 "globally_shared": RAG_SHARED_GLOBALLY,
                 "components_ready": {
                     "vectorstore": vectorstore is not None,
                     "rag_chain": rag_chain_template is not None,
-                    "llm": llm_instance is not None
-                }
+                    "llm": llm_instance is not None,
+                },
             },
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-
-    except Exception as fix_error:
-        fix_duration = time.time() - fix_start
-        fix_log.append(f"💥 Auto-fix failed: {fix_error}")
-
+    except Exception as e:
         return {
             "fix_attempted": True,
             "fix_successful": False,
-            "fix_duration": fix_duration,
-            "fix_log": fix_log,
-            "error": str(fix_error),
-            "timestamp": datetime.now().isoformat()
+            "fix_duration": time.time() - t0,
+            "fix_log": log + [f"💥 Auto-fix failed: {e}"],
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
         }
 
-def _generate_rag_recommendations() -> List[str]:
-    """RAG問題の改善提案生成"""
-    recommendations = []
-
-    if not rag_diagnostics["initialization_success"]:
-        recommendations.append("🔧 RAG initialization failed - check vectorstore files and dependencies")
-
-    for component, status in rag_diagnostics["component_status"].items():
-        if not status["loaded"]:
-            if component == "vectorstore":
-                recommendations.append("🔍 Vectorstore not loaded - check rag/vectorstore directory and files")
-            elif component == "llm_instance":
-                recommendations.append("🤖 LLM not loaded - check llm configuration and API keys")
-            elif component == "rag_chain":
-                recommendations.append("⛓️ RAG chain not loaded - check dependencies and prompt templates")
-
-    if rag_diagnostics["initialization_duration"] > 30:
-        recommendations.append("ⱏ️ Slow initialization - consider optimizing vectorstore size or using faster embedding model")
-
-    if rag_diagnostics["fallback_info"]["used_fallback"]:
-        recommendations.append(f"🔄 Using fallback ({rag_diagnostics['fallback_info']['fallback_type']}) - consider fixing primary RAG system")
-
-    if not rag_diagnostics["health_checks"]["vectorstore_test"]:
-        recommendations.append("🔍 Vectorstore test failed - check vector database integrity")
-    if not rag_diagnostics["health_checks"]["rag_query_test"]:
-        recommendations.append("❓ RAG query test failed - check RAG chain configuration")
-
-    if not recommendations:
-        recommendations.append("✅ RAG system appears healthy - no specific recommendations")
-
-    return recommendations
-
-def _get_memory_usage() -> Dict[str, Any]:
-    """メモリ使用量取得（概算）"""
-    try:
-        import psutil
-        process = psutil.Process()
-        memory_info = process.memory_info()
-
-        return {
-            "rss_mb": memory_info.rss / 1024 / 1024,
-            "vms_mb": memory_info.vms / 1024 / 1024,
-            "percent": process.memory_percent()
-        }
-    except ImportError:
-        return {"error": "psutil not available"}
-    except Exception as e:
-        return {"error": str(e)}
-
-class CompletePerformanceMonitor:
+# ---------------------------------
+# パフォーマンスモニタ（簡略）
+# ---------------------------------
+class PerfMon:
     def __init__(self):
+        self.start_time = time.time()
         self.metrics = {
             "chat_requests": 0,
-            "line_requests": 0,
             "web_requests": 0,
+            "line_requests": 0,
             "rag_requests": 0,
             "template_requests": 0,
-            "cache_hits": 0,
-            "cache_misses": 0,
-            "average_response_time": 0.0,
             "total_response_time": 0.0,
             "errors": 0,
-            "anti_hallucination_uses": 0,
-            "sentence_completions": 0,
-            "endpoint_redirects": 0,
-            "rag_diagnostics_requests": 0
         }
-        self.start_time = time.time()
-        self.response_times = []
-        self.error_log = []
 
-    def record_request(self, platform: str, mode: str, response_time: float,
-                      cache_hit: bool = False, anti_hallucination_used: bool = False,
-                      sentence_complete: bool = True, endpoint_redirected: bool = False,
-                      diagnostics_used: bool = False):
+    def record(self, platform: str, mode: str, rt: float):
         self.metrics["chat_requests"] += 1
-
         if platform == "line":
             self.metrics["line_requests"] += 1
         else:
             self.metrics["web_requests"] += 1
-
-        if mode in ["rag", "rag_enhanced"]:
+        if mode in ("rag", "rag_enhanced"):
             self.metrics["rag_requests"] += 1
-        elif mode in ["template", "template_enhanced"]:
+        if mode in ("template", "template_enhanced"):
             self.metrics["template_requests"] += 1
+        self.metrics["total_response_time"] += rt
 
-        if cache_hit:
-            self.metrics["cache_hits"] += 1
-        else:
-            self.metrics["cache_misses"] += 1
-
-        if anti_hallucination_used:
-            self.metrics["anti_hallucination_uses"] += 1
-
-        if sentence_complete:
-            self.metrics["sentence_completions"] += 1
-
-        if endpoint_redirected:
-            self.metrics["endpoint_redirects"] += 1
-
-        if diagnostics_used:
-            self.metrics["rag_diagnostics_requests"] += 1
-
-        self.metrics["total_response_time"] += response_time
-        self.response_times.append({
-            "timestamp": time.time(),
-            "platform": platform,
-            "mode": mode,
-            "response_time": response_time,
-            "cache_hit": cache_hit,
-            "endpoint_redirected": endpoint_redirected,
-            "diagnostics_used": diagnostics_used
-        })
-
-        if len(self.response_times) > 100:
-            self.response_times = self.response_times[-100:]
-
-        if self.metrics["chat_requests"] > 0:
-            self.metrics["average_response_time"] = self.metrics["total_response_time"] / self.metrics["chat_requests"]
-
-    def record_error(self, error_type: str = "unknown", error_details: str = ""):
+    def error(self):
         self.metrics["errors"] += 1
-        self.error_log.append({
-            "timestamp": time.time(),
-            "error_type": error_type,
-            "error_details": error_details[:200]
-        })
 
-        if len(self.error_log) > 20:
-            self.error_log = self.error_log[-20:]
-
-    def get_stats(self) -> Dict[str, Any]:
+    def stats(self) -> Dict[str, Any]:
+        total = self.metrics["chat_requests"]
         uptime = time.time() - self.start_time
-        total_requests = self.metrics["chat_requests"]
-
-        recent_response_times = [r["response_time"] for r in self.response_times[-50:]]
-        avg_recent_response_time = sum(recent_response_times) / len(recent_response_times) if recent_response_times else 0
-
+        avg = (self.metrics["total_response_time"] / total) if total else 0
         return {
-            "system_overview": {
-                "uptime_seconds": uptime,
-                "total_requests": total_requests,
-                "requests_per_minute": (total_requests / (uptime / 60)) if uptime > 60 else total_requests,
-                "integration_status": "complete_diagnostics_enhanced",
-                "endpoint_redirects": self.metrics["endpoint_redirects"],
-                "diagnostics_requests": self.metrics["rag_diagnostics_requests"]
-            },
-            "platform_distribution": {
-                "web": self.metrics["web_requests"],
-                "line": self.metrics["line_requests"],
-                "web_percentage": (self.metrics["web_requests"] / total_requests * 100) if total_requests > 0 else 0,
-                "line_percentage": (self.metrics["line_requests"] / total_requests * 100) if total_requests > 0 else 0
-            },
-            "mode_distribution": {
-                "rag": self.metrics["rag_requests"],
-                "template": self.metrics["template_requests"],
-                "other": total_requests - self.metrics["rag_requests"] - self.metrics["template_requests"],
-                "rag_percentage": (self.metrics["rag_requests"] / total_requests * 100) if total_requests > 0 else 0,
-                "template_percentage": (self.metrics["template_requests"] / total_requests * 100) if total_requests > 0 else 0
-            },
-            "cache_performance": {
-                "hits": self.metrics["cache_hits"],
-                "misses": self.metrics["cache_misses"],
-                "hit_rate": (self.metrics["cache_hits"] / (self.metrics["cache_hits"] + self.metrics["cache_misses"]) * 100) if (self.metrics["cache_hits"] + self.metrics["cache_misses"]) > 0 else 0,
-                "efficiency": "optimized" if self.metrics["cache_hits"] > self.metrics["cache_misses"] else "needs_improvement"
-            },
-            "response_performance": {
-                "average_response_time": self.metrics["average_response_time"],
-                "recent_average_response_time": avg_recent_response_time,
-                "performance_trend": "improving" if avg_recent_response_time < self.metrics["average_response_time"] else "stable"
-            },
-            "advanced_features": {
-                "anti_hallucination_uses": self.metrics["anti_hallucination_uses"],
-                "anti_hallucination_rate": (self.metrics["anti_hallucination_uses"] / total_requests * 100) if total_requests > 0 else 0,
-                "sentence_completions": self.metrics["sentence_completions"],
-                "sentence_completion_rate": (self.metrics["sentence_completions"] / total_requests * 100) if total_requests > 0 else 0
-            },
-            "error_tracking": {
-                "total_errors": self.metrics["errors"],
-                "error_rate": (self.metrics["errors"] / total_requests * 100) if total_requests > 0 else 0,
-                "recent_errors": len(self.error_log),
-                "error_trend": "stable" if self.metrics["errors"] < 5 else "needs_attention"
-            },
-            "diagnostics_tracking": {
-                "diagnostics_requests": self.metrics["rag_diagnostics_requests"],
-                "diagnostics_rate": (self.metrics["rag_diagnostics_requests"] / total_requests * 100) if total_requests > 0 else 0,
-                "rag_health_status": is_initialized and RAG_SHARED_GLOBALLY
-            }
+            "uptime_seconds": uptime,
+            "total_requests": total,
+            "avg_response_time": avg,
+            "web": self.metrics["web_requests"],
+            "line": self.metrics["line_requests"],
+            "rag": self.metrics["rag_requests"],
+            "template": self.metrics["template_requests"],
+            "errors": self.metrics["errors"],
         }
 
-performance_monitor = CompletePerformanceMonitor()
+perf = PerfMon()
 
-# ==============================================================================
-# 完全統合チャットリクエストモデル
-# ==============================================================================
-class CompleteUnifiedChatRequest(BaseModel):
+# ---------------------------------
+# リクエストモデル
+# ---------------------------------
+class UnifiedChatRequest(BaseModel):
     question: str
     username: str | None = None
-    platform: str | None = DEFAULT_PLATFORM
-    mode: str | None = DEFAULT_RESPONSE_MODE
-    enable_anti_hallucination: bool | None = True
-    enable_cache: bool | None = True
+    platform: str | None = "web"
+    mode: str | None = "auto"
     debug_mode: bool | None = False
 
-# ==============================================================================
-# エンドポイント統一処理（診断強化版）
-# ==============================================================================
+# ---------------------------------
+# メインチャット
+# ---------------------------------
 @app.post("/chat")
 @app.post("/chat/")
-async def unified_chat_endpoint_diagnostics_enhanced(req: CompleteUnifiedChatRequest, request: Request):
-    """統一メインチャットエンドポイント（診断強化版）"""
-
-    overall_start = time.time()
-    platform = req.platform or DEFAULT_PLATFORM
+async def unified_chat(req: UnifiedChatRequest, request: Request):
+    t0 = time.time()
+    platform = req.platform or "web"
     username = req.username or f"{platform}-user"
-    mode = req.mode or DEFAULT_RESPONSE_MODE
-
-    logger.info(f"🌟 Unified Chat (diagnostics enhanced): {req.question[:50]}...")
+    mode = req.mode or "auto"
 
     try:
         if not is_initialized:
-            logger.warning("⚠️ RAG not initialized, attempting auto-fix...")
-            try:
-                await initialize_rag_components()
-            except Exception as init_error:
-                logger.error(f"❌ Auto-fix failed: {init_error}")
+            await initialize_rag_components()
 
-        if ENABLE_UNIFIED_CHAT and UNIFIED_CHAT_MODE in ["complete", "enabled"]:
-            try:
-                from api.routers.chat_unified import unified_generator
+        # chat_unified の場所が repo により変わるので動的 import で吸収
+        try:
+            mod = importlib.import_module("api.routers.chat_unified")
+            unified_generator = getattr(mod, "unified_generator", mod)
+        except Exception:
+            mod = importlib.import_module("chat_unified")
+            unified_generator = getattr(mod, "unified_generator", mod)
 
-                response = await unified_generator.generate_response(
-                    req.question, platform, username, mode
-                )
+        # 統一の generate_response を想定
+        response = await unified_generator.generate_response(req.question, platform, username, mode)
 
-                total_time = time.time() - overall_start
+        rt = time.time() - t0
+        perf.record(platform, response.get("source", mode), rt)
 
-                cache_hit = response.get("source") == "cache"
-                anti_hallucination_used = response.get("anti_hallucination_used", False)
-                sentence_complete = response.get("sentence_complete", True)
-                diagnostics_used = req.debug_mode or False
-
-                performance_monitor.record_request(
-                    platform=platform,
-                    mode=response.get("source", mode),
-                    response_time=total_time,
-                    cache_hit=cache_hit,
-                    anti_hallucination_used=anti_hallucination_used,
-                    sentence_complete=sentence_complete,
-                    endpoint_redirected=False,
-                    diagnostics_used=diagnostics_used
-                )
-
-                logger.info(
-                    f"✅ Unified response (diagnostics): {total_time:.3f}s, "
-                    f"source={response.get('source')}, "
-                    f"length={len(response['answer'])}"
-                )
-
-                result = {
-                    "answer": response["answer"],
-                    "sources": response.get("sources", []),
-                    "status": response.get("status", "ok"),
-                    "performance": {
-                        "total_time": total_time,
-                        "processing_time": response.get("processing_time", 0),
-                        "source": response.get("source"),
-                        "platform": platform,
-                        "mode": mode,
-                        "unified_system": True,
-                        "integration_version": "diagnostics_enhanced",
-                        "router_used": "chat_unified_diagnostics_enhanced",
-                        "endpoint_used": "/chat",
-                        "cache_hit": cache_hit,
-                        "anti_hallucination_used": anti_hallucination_used,
-                        "sentence_complete": sentence_complete,
-                        "rag_health": is_initialized
-                    },
-                    "system_info": {
-                        "version": "7.2.0-diagnostics-enhanced",
-                        "integration_mode": "complete_unified_chat_diagnostics",
-                        "rag_status": "initialized" if is_initialized else "failed",
-                        "global_sharing": RAG_SHARED_GLOBALLY,
-                        "features_integrated": [
-                            "Enhanced RAG diagnostics",
-                            "Auto-fix capabilities",
-                            "Detailed component monitoring",
-                            "Performance tracking",
-                            "Health check automation"
-                        ]
-                    }
-                }
-
-                if req.debug_mode:
-                    result["debug_info"] = {
-                        "rag_diagnostics": rag_diagnostics,
-                        "raw_response_length": len(response.get("answer", "")),
-                        "processing_steps": response.get("processing_steps", []),
-                        "cache_key_used": response.get("cache_key"),
-                        "template_matched": response.get("template_matched"),
-                        "rag_documents_found": len(response.get("sources", []))
-                    }
-
-                return result
-
-            except Exception as e:
-                logger.error(f"Unified chat router error: {e}")
-                logger.error(traceback.format_exc())
-                performance_monitor.record_error("unified_chat_router", str(e))
-                return await legacy_chat_fallback(req, request, overall_start)
-        else:
-            return await legacy_chat_fallback(req, request, overall_start)
+        result = {
+            "answer": response.get("answer", ""),
+            "sources": response.get("sources", []),
+            "status": response.get("status", "ok"),
+            "performance": {"total_time": rt, "platform": platform, "mode": mode, "source": response.get("source")},
+            "system_info": {"version": "7.2.2", "rag_status": "initialized" if is_initialized else "failed"},
+        }
+        if req.debug_mode:
+            result["debug_info"] = {"rag_diagnostics": rag_diagnostics}
+        return result
 
     except Exception as e:
-        total_time = time.time() - overall_start
-        error_id = str(uuid4())[:8]
-
-        logger.error(f"❌ Main chat error [{error_id}]: {e}")
+        rt = time.time() - t0
+        perf.error()
+        err_id = str(uuid4())[:8]
+        logger.error(f"❌ Main chat error [{err_id}]: {e}")
         logger.error(traceback.format_exc())
-
-        performance_monitor.record_error("main_endpoint", f"[{error_id}] {str(e)}")
-
-        error_answer = f"システムエラーが発生しました。診断エンドポイント /debug/rag-status で詳細をご確認ください。（エラーID: {error_id}）"
-
         return JSONResponse(
             status_code=200,
-            content={
-                "answer": error_answer,
-                "sources": [],
-                "status": "error",
-                "error_id": error_id,
-                "performance": {
-                    "total_time": total_time,
-                    "platform": platform,
-                    "mode": mode,
-                    "unified_system": True,
-                    "integration_version": "diagnostics_enhanced",
-                    "router_used": "error_fallback",
-                    "endpoint_used": "/chat"
-                },
-                "diagnostic_help": {
-                    "rag_status_endpoint": "/debug/rag-status",
-                    "performance_endpoint": "/debug/performance",
-                    "auto_fix_endpoint": "/debug/fix-rag"
-                }
-            }
+            content={"answer": f"システムエラーが発生しました。（エラーID: {err_id}）", "sources": [], "status": "error",
+                     "performance": {"total_time": rt, "platform": platform, "mode": mode}},
         )
 
-# 旧エンドポイントリダイレクト
-@app.post("/chat-unified")
-@app.post("/chat-unified/")
-async def legacy_chat_unified_redirect(req: CompleteUnifiedChatRequest, request: Request):
-    logger.warning("⚠️ /chat-unified is deprecated, redirecting to /chat")
-
-    performance_monitor.record_request(
-        platform=req.platform or "web",
-        mode="redirect",
-        response_time=0.001,
-        endpoint_redirected=True
-    )
-
-    return await unified_chat_endpoint_diagnostics_enhanced(req, request)
-
-async def legacy_chat_fallback(req: CompleteUnifiedChatRequest, request: Request, start_time: float) -> Dict[str, Any]:
-    try:
-        logger.info("🔄 Using legacy chat fallback with diagnostics...")
-
-        if ENABLE_LEGACY_COMPATIBILITY:
-            try:
-                from api.routers.chat_unified import unified_generator
-
-                response = await unified_generator.generate_response(
-                    req.question, req.platform or "web", req.username or "user", "auto"
-                )
-
-                total_time = time.time() - start_time
-                performance_monitor.record_request(req.platform or "web", "legacy", total_time)
-
-                return {
-                    "answer": response["answer"],
-                    "sources": response.get("sources", []),
-                    "status": response.get("status", "ok"),
-                    "performance": {
-                        "total_time": total_time,
-                        "processing_time": response.get("processing_time", 0),
-                        "platform": req.platform or "web",
-                        "mode": "legacy_fallback",
-                        "unified_system": False,
-                        "integration_version": "fallback_diagnostics_enhanced",
-                        "router_used": "chat_ultra_fast_fallback"
-                    },
-                    "diagnostic_info": {
-                        "rag_initialized": is_initialized,
-                        "global_sharing": RAG_SHARED_GLOBALLY,
-                        "fallback_reason": "legacy_compatibility"
-                    }
-                }
-            except ImportError:
-                logger.warning("Legacy chat_ultra_fast not available")
-
-        total_time = time.time() - start_time
-        performance_monitor.record_error("legacy_fallback", "all_routers_unavailable")
-
-        return {
-            "answer": "申し訳ございません。システム診断中です。/debug/rag-status で詳細をご確認ください。",
-            "sources": [],
-            "status": "emergency_fallback",
-            "performance": {
-                "total_time": total_time,
-                "platform": req.platform or "web",
-                "mode": "emergency",
-                "unified_system": False,
-                "integration_version": "emergency_diagnostics_enhanced",
-                "router_used": "emergency_fallback"
-            }
-        }
-
-    except Exception as e:
-        logger.error(f"Legacy fallback error: {e}")
-        total_time = time.time() - start_time
-        performance_monitor.record_error("legacy_fallback_error", str(e))
-
-        return {
-            "answer": "重大なシステムエラーが発生しています。/debug/fix-rag で自動修復をお試しください。",
-            "sources": [],
-            "status": "critical_error",
-            "performance": {
-                "total_time": total_time,
-                "platform": req.platform or "web",
-                "mode": "critical_error",
-                "unified_system": False,
-                "integration_version": "error_diagnostics_enhanced",
-                "router_used": "none"
-            }
-        }
-
-# ==============================================================================
-# システム状態エンドポイント（診断強化版）
-# ==============================================================================
+# ---------------------------------
+# ルート/ヘルス
+# ---------------------------------
 @app.get("/")
 async def root():
-    performance_stats = performance_monitor.get_stats()
-
     return {
-        "message": "Complete Unified RAG API - Diagnostics Enhanced System",
-        "version": "7.2.0-diagnostics-enhanced",
-        "timestamp": datetime.now().isoformat(),
-        "enhancements_applied": [
-            "✅ 詳細RAG診断システム",
-            "✅ リアルタイム健全性監視",
-            "✅ 自動修復機能",
-            "✅ コンポーネント別状態追跡",
-            "✅ パフォーマンス診断強化"
-        ],
-        "integration_status": {
-            **INTEGRATION_COMPLETE,
-            "diagnostics_enhanced": True,
-            "rag_health_monitoring": "✅ リアルタイム監視",
-            "auto_fix_capability": "✅ 自動修復対応",
-            "integration_completeness": "100% (Diagnostics Enhanced)"
-        },
-        "features": [
-            "📄 完全統合チャットシステム（診断強化）",
-            "⚡ 3層分離キャッシュ（監視付き）",
-            "🤖 RAG処理診断・自動修復",
-            "🛡️ ハルシネーション対策統合",
-            "🚫 重複メッセージ防止",
-            "📊 リアルタイム診断システム",
-            "🔧 自動修復機能",
-            "🌐 健全性監視強化"
-        ],
-        "system_status": {
-            "unified_chat_enabled": ENABLE_UNIFIED_CHAT,
-            "rag_initialized": is_initialized,
-            "rag_shared_globally": RAG_SHARED_GLOBALLY,
-            "diagnostics_available": True,
-            "auto_fix_available": True,
-            "line_integration": ENABLE_LINE_INTEGRATION,
-            "financial_planning": ENABLE_FINANCIAL_PLANNING
-        },
-        "performance": performance_stats,
+        "message": "Unified RAG API - Diagnostics Enhanced",
+        "version": "7.2.2",
+        "rag_initialized": is_initialized,
         "diagnostic_endpoints": {
-            "rag_detailed_status": "/debug/rag-status",
-            "realtime_performance": "/debug/performance",
-            "auto_fix": "/debug/fix-rag",
-            "main_chat": "/chat",
+            "rag_status": "/debug/rag-status",
+            "fix_rag": "/debug/fix-rag",
+            "chat": "/chat",
             "line_webhook": "/line/webhook",
-            "system_stats": "/system-status"
         },
-        "rag_health_summary": {
-            "initialization_success": rag_diagnostics["initialization_success"],
-            "components_loaded": sum(1 for comp in rag_diagnostics["component_status"].values() if comp["loaded"]),
-            "fallback_used": rag_diagnostics["fallback_info"]["used_fallback"],
-            "last_health_check": rag_diagnostics["health_checks"]["last_check"]
-        }
     }
 
 @app.get("/healthz")
 async def health_check():
     uptime = time.time() - startup_time
-    performance_stats = performance_monitor.get_stats()
-
-    quick_health_check = {
-        "rag_quick_test": False,
-        "component_accessibility": {
-            "vectorstore": vectorstore is not None,
-            "rag_chain": rag_chain_template is not None,
-            "llm": llm_instance is not None
-        }
-    }
-
+    quick = False
     if rag_chain_template:
         try:
-            quick_result = rag_chain_template.invoke({"query": "ヘルスチェック"})
-            quick_health_check["rag_quick_test"] = bool(quick_result and quick_result.get("result"))
+            r = rag_chain_template.invoke({"query": "ヘルスチェック"})
+            quick = bool(r and r.get("result"))
         except Exception:
-            quick_health_check["rag_quick_test"] = False
+            quick = False
+    return {"status": "healthy" if is_initialized else "degraded", "uptime": uptime, "rag_quick_test": quick}
 
-    return {
-        "status": "healthy_diagnostics_enhanced",
-        "uptime": uptime,
-        "timestamp": datetime.now().isoformat(),
-        "version": "7.2.0-diagnostics-enhanced",
-        "message": "Diagnostics Enhanced Unified Chat System Operational",
-        "diagnostic_capabilities": {
-            "detailed_rag_status": True,
-            "auto_fix_available": True,
-            "realtime_monitoring": True,
-            "component_tracking": True
-        },
-        "system_health": {
-            "unified_chat": ENABLE_UNIFIED_CHAT and UNIFIED_CHAT_MODE in ["complete", "enabled"],
-            "rag_components": is_initialized,
-            "rag_sharing": RAG_SHARED_GLOBALLY,
-            "vectorstore_ready": vectorstore is not None,
-            "llm_ready": llm_instance is not None,
-            "line_integration": ENABLE_LINE_INTEGRATION,
-            "financial_planning": ENABLE_FINANCIAL_PLANNING
-        },
-        "quick_health_check": quick_health_check,
-        "performance_summary": {
-            "total_requests": performance_stats["system_overview"]["total_requests"],
-            "average_response_time": performance_stats["response_performance"]["average_response_time"],
-            "cache_hit_rate": performance_stats["cache_performance"]["hit_rate"],
-            "error_rate": performance_stats["error_tracking"]["error_rate"],
-            "diagnostics_requests": performance_stats["system_overview"]["diagnostics_requests"]
-        },
-        "diagnostic_endpoints": {
-            "detailed_status": "/debug/rag-status",
-            "performance": "/debug/performance",
-            "auto_fix": "/debug/fix-rag"
-        }
-    }
-
-# ==============================================================================
-# 起動時処理（診断強化版）
-# ==============================================================================
+# ---------------------------------
+# 起動時処理
+# ---------------------------------
 @app.on_event("startup")
 async def startup_event():
-    logger.info("🚀 Starting Diagnostics Enhanced Unified RAG System...")
-    logger.info("🔧 Enhanced Capabilities:")
-    logger.info("   - ✅ Detailed RAG component diagnostics")
-    logger.info("   - ✅ Real-time health monitoring")
-    logger.info("   - ✅ Auto-fix and recovery mechanisms")
-    logger.info("   - ✅ Performance tracking enhancements")
-    logger.info("   - ✅ Component-level status tracking")
-
+    logger.info("🚀 Starting Unified RAG System (Diagnostics Enhanced)")
     if ENABLE_RAG_INITIALIZATION:
         await initialize_rag_components()
-        logger.info(f"🤖 RAG Diagnostics Status:")
-        logger.info(f"   - Initialization Success: {'✅ YES' if rag_diagnostics['initialization_success'] else '❌ NO'}")
-        logger.info(f"   - Global Sharing: {'✅ ENABLED' if RAG_SHARED_GLOBALLY else '❌ FAILED'}")
-        logger.info(f"   - Components Loaded: {sum(1 for comp in rag_diagnostics['component_status'].values() if comp['loaded'])}/3")
-        logger.info(f"   - Fallback Used: {'Yes (' + rag_diagnostics['fallback_info']['fallback_type'] + ')' if rag_diagnostics['fallback_info']['used_fallback'] else 'No'}")
 
-    if ENABLE_UNIFIED_CHAT:
+    # LINE ルーター読み込み（存在すれば）
+    if ENABLE_LINE_INTEGRATION:
         try:
-            logger.info("📦 Loading Unified Chat Router (Diagnostics Enhanced)...")
-            logger.info("✅ Unified Chat Router integrated with diagnostic capabilities")
-            logger.info("   - Primary Endpoint: /chat (with diagnostics)")
-            logger.info("   - Debug Endpoints: /debug/* (detailed monitoring)")
-            logger.info("   - Auto-fix: /debug/fix-rag")
+            mod = importlib.import_module("api.routers.line_bot_ultra_fast")
+            line_router = getattr(mod, "router")
+            app.include_router(line_router, prefix="", tags=["line"])  # prefix二重回避
+            logger.info("✅ LINE router included")
         except Exception as e:
-            logger.error(f"❌ Failed to configure Unified Chat: {e}")
-
-    if ENABLE_LINE_INTEGRATION and SINGLE_LINE_INTEGRATION:
-        try:
-            logger.info(f"📦 Loading LINE Bot with Diagnostics ({LINE_BOT_MODE})...")
-            from api.routers.line_bot_ultra_fast import router as line_router
-            app.include_router(line_router, prefix="/line", tags=["line"])
-            logger.info("✅ LINE Bot loaded with diagnostic information access")
-            logger.info(f"   - RAG Access: {'✅ AVAILABLE' if RAG_SHARED_GLOBALLY else '⚠️ LIMITED'}")
-        except Exception as e:
-            logger.error(f"❌ Failed to load LINE Bot: {e}")
-
-    routers = [
-        ("financial_api", "/financial", "financial"),
-        ("upload", "/upload", "upload"),
-        ("line_login", "/line-login", "line-login"),
-        ("line_proxy", "/line-proxy", "line-proxy")
-    ]
-
-    for router_name, prefix, tag in routers:
-        try:
-            if router_name == "financial_api":
-                from api.routers.financial_api import router as financial_router
-                app.include_router(financial_router, prefix=prefix, tags=[tag])
-            else:
-                module = __import__(f"api.routers.{router_name}", fromlist=[router_name])
-                router = getattr(module, "router")
-                app.include_router(router, prefix=prefix, tags=[tag])
-            logger.info(f"✅ {router_name} router added")
-        except Exception as e:
-            logger.debug(f"ℹ️ {router_name} router not added: {e}")
-
-    startup_duration = time.time() - startup_time
-
-    logger.info("🎉 Diagnostics Enhanced Unified RAG System startup completed")
-    logger.info(f"⚡ Startup time: {startup_duration:.2f} seconds")
-    logger.info("🌟 System Ready for Production (Diagnostics Enhanced)")
+            logger.error(f"ℹ️ LINE router not included: {e}")
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("🚀 Starting Diagnostics Enhanced System via uvicorn...")
-    # ★ Cloud Run 互換のため PORT 環境変数を優先
     port = int(os.getenv("PORT", "8080"))
     uvicorn.run(app, host="0.0.0.0", port=port)

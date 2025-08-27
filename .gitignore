@@ -16,4 +16,4 @@ OPENAI_API_KEY.txt
 *.db
 rag/vectorstore/
 uploads/
-.env.example
+!.env.example

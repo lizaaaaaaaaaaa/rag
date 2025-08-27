@@ -1,193 +1,177 @@
-# cloudbuild.yaml - 安全なビルド成功版（スタートアップタイムアウト対策）
-
+# cloudbuild.yaml (build & deploy both API and Frontend)
 options:
-  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
   logging: CLOUD_LOGGING_ONLY
-  machineType: 'E2_HIGHCPU_8'
-  substitutionOption: ALLOW_LOOSE
-
-timeout: '3600s'
-
-steps:
-  # 1. 依存関係のキャッシュとインストール
-  - name: 'python:3.11-slim'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        pip install --upgrade pip
-        if [ -f "requirements.txt" ]; then
-          pip install -r requirements.txt
-          python -m pytest tests/ --tb=short || echo "Tests completed with warnings"
-        else
-          echo "No requirements.txt found, skipping tests"
-        fi
-    id: 'test-and-validate'
-    timeout: '600s'
-
-  # 2. 高速APIサーバー用イメージビルド
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'build',
-      '--no-cache',
-      '--build-arg', 'ULTRA_FAST_MODE=true',
-      '--build-arg', 'ANTI_HALLUCINATION_MODE=true',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest',
-      '-f', 'Dockerfile.api',
-      '.'
-    ]
-    timeout: '900s'
-    id: 'build-enhanced-api'
-    waitFor: ['test-and-validate']
-
-  # 3. APIサーバーイメージをArtifact Registryにプッシュ
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
-    ]
-    timeout: '600s'
-    id: 'push-enhanced-api'
-    waitFor: ['build-enhanced-api']
-
-  # 4. 修正版APIサーバーをCloud Runにデプロイ（安全なスタートアップタイムアウト対策）
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - rag-api
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest
-      - --region=asia-northeast1
-      - --platform=managed
-      - --allow-unauthenticated
-      - --memory=16Gi
-      - --cpu=6
-      - --timeout=600s
-      - --min-instances=0
-      - --max-instances=20
-      - --concurrency=1000
-      - --port=8080
-      # ===== 安全なスタートアップタイムアウト対策 =====
-      - --cpu-throttling
-      - --execution-environment=gen2
-      # ===== 環境変数でスタートアップ時間を制御（安全な設定） =====
-      - --set-env-vars=DISABLE_RAG_INIT=true,STARTUP_TIMEOUT=300,HEALTH_CHECK_TIMEOUT=60
-      - --set-env-vars=ULTRA_FAST_MODE=true,ANTI_HALLUCINATION_MODE=true,ENABLE_AUTO_UPDATE=true,MAX_NEW_TOKENS=150,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,OPENAI_TEMPERATURE=0.1,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app,RAG_SEARCH_K=2,RAG_CHUNK_SIZE=300,RAG_TIMEOUT=2,LINE_RESPONSE_TIMEOUT=3,WEB_SEARCH_TIMEOUT=3,ENABLE_RESPONSE_CACHE=true,CACHE_SIZE=500,CACHE_TTL=3600,CONFIDENCE_THRESHOLD=0.7
-      - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest,GOOGLE_SEARCH_API_KEY=GOOGLE_SEARCH_API_KEY:latest,GOOGLE_SEARCH_ENGINE_ID=GOOGLE_SEARCH_ENGINE_ID:latest,LINE_CHANNEL_ID=LINE_CHANNEL_ID:latest,LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,LINE_LOGIN_CHANNEL_ID=LINE_LOGIN_CHANNEL_ID:latest,LINE_LOGIN_CHANNEL_SECRET=LINE_LOGIN_CHANNEL_SECRET:latest,LINE_LOGIN_REDIRECT_URI=LINE_LOGIN_REDIRECT_URI:latest,LIFF_ID=LIFF_ID:latest,JWT_SECRET=JWT_SECRET:latest
-      - --service-account=190389115361-compute@developer.gserviceaccount.com
-      - --vpc-egress=all-traffic
-    timeout: '1800s'
-    id: 'deploy-enhanced-api'
-    waitFor: ['push-enhanced-api']
-
-  # 5. フロントエンドビルド
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'build',
-      '--no-cache',
-      '--build-arg', 'API_URL=https://rag-api-190389115361.asia-northeast1.run.app',
-      '-t', 'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest',
-      '-f', 'Dockerfile.front',
-      '.'
-    ]
-    timeout: '900s'
-    id: 'build-enhanced-frontend'
-    waitFor: ['deploy-enhanced-api']
-
-  # 6. フロントエンドイメージをプッシュ
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'push',
-      'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest'
-    ]
-    timeout: '600s'
-    id: 'push-enhanced-frontend'
-    waitFor: ['build-enhanced-frontend']
-
-  # 7. フロントエンドをCloud Runにデプロイ
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - rag-frontend
-      - --image=asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest
-      - --region=asia-northeast1
-      - --platform=managed
-      - --allow-unauthenticated
-      - --memory=4Gi
-      - --cpu=2
-      - --timeout=300s
-      - --min-instances=0
-      - --max-instances=10
-      - --concurrency=500
-      - --port=8080
-      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,ENV=production
-      - --service-account=190389115361-compute@developer.gserviceaccount.com
-    timeout: '600s'
-    id: 'deploy-enhanced-frontend'
-    waitFor: ['push-enhanced-frontend']
-
-  # 8. デプロイ確認（安全版）
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        echo "=== デプロイ完了確認（安全版） ==="
-        echo "API URL: https://rag-api-190389115361.asia-northeast1.run.app"
-        echo "Frontend URL: https://rag-frontend-190389115361.asia-northeast1.run.app"
-        echo "デプロイ時刻: $(date)"
-       
-        # APIの起動を待つ（120秒 - 安全な時間）
-        echo "⏳ APIの起動を待機中（120秒）..."
-        sleep 120
-       
-        # ヘルスチェック（リトライ機能付き）
-        for i in {1..15}; do
-          echo "🔍 API Health Check... (${i}/15)"
-          if curl -f --max-time 30 "https://rag-api-190389115361.asia-northeast1.run.app/healthz" 2>/dev/null; then
-            echo "✅ API Health Check OK"
-           
-            # システム状態もチェック
-            echo "🔍 System Status Check..."
-            if curl -f --max-time 30 "https://rag-api-190389115361.asia-northeast1.run.app/system-status" 2>/dev/null; then
-              echo "✅ System Status OK"
-            else
-              echo "⚠️ System status endpoint might need more time"
-            fi
-           
-            # LINE Bot デバッグもチェック
-            echo "🔍 LINE Bot Debug Check..."
-            if curl -f --max-time 30 "https://rag-api-190389115361.asia-northeast1.run.app/line-debug" 2>/dev/null; then
-              echo "✅ LINE Bot Debug OK"
-            else
-              echo "⚠️ LINE Bot debug endpoint might need more time"
-            fi
-            break
-          else
-            echo "⏳ API starting... waiting 20s more"
-            sleep 20
-          fi
-        done
-       
-        echo "🚀 デプロイが完了しました！"
-        echo "📍 重要なエンドポイント:"
-        echo "  - Health: https://rag-api-190389115361.asia-northeast1.run.app/healthz"
-        echo "  - Chat: https://rag-api-190389115361.asia-northeast1.run.app/chat"
-        echo "  - System Status: https://rag-api-190389115361.asia-northeast1.run.app/system-status"
-        echo "  - LINE Debug: https://rag-api-190389115361.asia-northeast1.run.app/line-debug"
-        echo "  - LINE Webhook: https://rag-api-190389115361.asia-northeast1.run.app/line/webhook"
-        echo "  - LINE Debug Ultimate: https://rag-api-190389115361.asia-northeast1.run.app/line/debug-ultimate"
-    timeout: '600s'
-    id: 'deployment-verification'
-    waitFor: ['deploy-enhanced-frontend']
-
-serviceAccount: 'projects/rag-cloud-project/serviceAccounts/190389115361-compute@developer.gserviceaccount.com'
 
 substitutions:
-  _PROJECT_ID: 'rag-cloud-project'
-  _REGION: 'asia-northeast1'
-  _REGISTRY: 'asia-northeast1-docker.pkg.dev'
-  _REPOSITORY: 'rag-chat-pro'
+  # ===== 共通 =====
+  _REGION: asia-northeast1
+  _PLATFORM: managed
+
+  # ===== API（RAG） =====
+  _SERVICE_API: rag-api
+  _REPO_API: rag
+  _DOCKERFILE_API: Dockerfile
+  _ALLOW_UNAUTH_API: "true"
+  _EXEC_ENV_API: gen2
+  _MIN_INSTANCES_API: "1"
+  _CPU_API: "2"          # 重いなら 2 に上げる
+  _MEMORY_API: "2Gi"     # OOM が出るなら 2Gi へ
+  _CONCURRENCY_API: "4"
+  _TIMEOUT_API: "30s"
+  _SVC_ACCOUNT_API: 190389115361-compute@developer.gserviceaccount.com
+
+  # ===== Frontend =====
+  _SERVICE_FRONT: rag-frontend
+  _REPO_FRONT: rag
+  _DOCKERFILE_FRONT: Dockerfile.front
+  _ALLOW_UNAUTH_FRONT: "true"
+  _EXEC_ENV_FRONT: gen2
+  _MIN_INSTANCES_FRONT: "1"   # UX重視で 1（費用重いなら 0 でも可）
+  _CPU_FRONT: "1"
+  _MEMORY_FRONT: "512Mi"
+  _CONCURRENCY_FRONT: "80"
+  _TIMEOUT_FRONT: "30s"
+
+  # ===== デプロイモード（必要なら yaml に切替）=====
+  _DEPLOY_MODE: gcloud   # gcloud | yaml
+
+images:
+  - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REPO_API}/${_SERVICE_API}:$COMMIT_SHA'
+  - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REPO_FRONT}/${_SERVICE_FRONT}:$COMMIT_SHA'
+
+steps:
+  # ===== Build API =====
+  - name: gcr.io/cloud-builders/docker
+    id: Build API image
+    args: [ 'build','-f','${_DOCKERFILE_API}','-t','asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REPO_API}/${_SERVICE_API}:$COMMIT_SHA','.' ]
+
+  - name: gcr.io/cloud-builders/docker
+    id: Push API image
+    args: [ 'push','asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REPO_API}/${_SERVICE_API}:$COMMIT_SHA' ]
+
+  # ===== Build Frontend =====
+  - name: gcr.io/cloud-builders/docker
+    id: Build Front image
+    args: [ 'build','-f','${_DOCKERFILE_FRONT}','-t','asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REPO_FRONT}/${_SERVICE_FRONT}:$COMMIT_SHA','.' ]
+
+  - name: gcr.io/cloud-builders/docker
+    id: Push Front image
+    args: [ 'push','asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REPO_FRONT}/${_SERVICE_FRONT}:$COMMIT_SHA' ]
+
+  # ===== Render API YAML（yaml デプロイ用）=====
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: Render rag-api-config.yaml
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        sed -e "s|__IMAGE__|asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REPO_API}/${_SERVICE_API}:$COMMIT_SHA|g" \
+            -e "s|__SERVICE__|${_SERVICE_API}|g" \
+            -e "s|__PROJECT_ID__|$PROJECT_ID|g" \
+            -e "s|__REGION__|${_REGION}|g" \
+            rag-api-config.yaml > rag-api-config.rendered.yaml
+
+  # ===== Deploy API =====
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: Deploy API to Cloud Run
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        AR_IMAGE="asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REPO_API}/${_SERVICE_API}:$COMMIT_SHA"
+        AUTH_FLAG="--no-allow-unauthenticated"
+        if [ "${_ALLOW_UNAUTH_API}" = "true" ]; then AUTH_FLAG="--allow-unauthenticated"; fi
+
+        # VPC（run-connector をフルパスで指定、egress=all-traffic）
+        VPC_FLAGS="--vpc-connector=projects/$PROJECT_ID/locations/${_REGION}/connectors/run-connector --vpc-egress=all-traffic"
+
+        if [ "${_DEPLOY_MODE}" = "yaml" ]; then
+          gcloud run services replace rag-api-config.rendered.yaml --region ${_REGION}
+          if [ "${_ALLOW_UNAUTH_API}" = "true" ]; then
+            gcloud run services add-iam-policy-binding ${_SERVICE_API} \
+              --region ${_REGION} --member="allUsers" --role="roles/run.invoker" || true
+          fi
+        else
+          gcloud run deploy ${_SERVICE_API} \
+            --image="${AR_IMAGE}" \
+            --region=${_REGION} \
+            --platform=${_PLATFORM} \
+            ${AUTH_FLAG} \
+            --execution-environment=${_EXEC_ENV_API} \
+            --min-instances=${_MIN_INSTANCES_API} \
+            --no-cpu-throttling \
+            --concurrency=${_CONCURRENCY_API} \
+            --timeout=${_TIMEOUT_API} \
+            --memory=${_MEMORY_API} \
+            --cpu=${_CPU_API} \
+            --service-account=${_SVC_ACCOUNT_API} \
+            ${VPC_FLAGS} \
+            # ---- set-env-vars（基本既定）----
+            --set-env-vars=ENV=production,LOG_LEVEL=INFO,INCLUDE_SOURCES=false \
+            # ---- set-env-vars（ご指定①）----
+            --set-env-vars=DISABLE_RAG_INIT=true,STARTUP_TIMEOUT=300,HEALTH_CHECK_TIMEOUT=60 \
+            # ---- set-env-vars（ご指定②）----
+            --set-env-vars=ULTRA_FAST_MODE=true,ANTI_HALLUCINATION_MODE=true,ENABLE_AUTO_UPDATE=true,MAX_NEW_TOKENS=150,DB_HOST=127.0.0.1,DB_PORT=5432,GCS_BUCKET_NAME=run-sources-rag-cloud-project-asia-northeast1,ENV=production,OPENAI_MODEL_NAME=gpt-3.5-turbo,OPENAI_TEMPERATURE=0.1,FRONTEND_URL=https://rag-frontend-190389115361.asia-northeast1.run.app,RAG_SEARCH_K=2,RAG_CHUNK_SIZE=300,RAG_TIMEOUT=2,LINE_RESPONSE_TIMEOUT=3,WEB_SEARCH_TIMEOUT=3,ENABLE_RESPONSE_CACHE=true,CACHE_SIZE=500,CACHE_TTL=3600,CONFIDENCE_THRESHOLD=0.7 \
+            # ---- set-secrets（ご指定＋LIFF_ID_FINANCIAL は LIFF_ID を流用）----
+            --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest,GOOGLE_SEARCH_API_KEY=GOOGLE_SEARCH_API_KEY:latest,GOOGLE_SEARCH_ENGINE_ID=GOOGLE_SEARCH_ENGINE_ID:latest,LINE_CHANNEL_ID=LINE_CHANNEL_ID:latest,LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,LINE_LOGIN_CHANNEL_ID=LINE_LOGIN_CHANNEL_ID:latest,LINE_LOGIN_CHANNEL_SECRET=LINE_LOGIN_CHANNEL_SECRET:latest,LINE_LOGIN_REDIRECT_URI=LINE_LOGIN_REDIRECT_URI:latest,LIFF_ID=LIFF_ID:latest,JWT_SECRET=JWT_SECRET:latest,LIFF_ID_FINANCIAL=LIFF_ID:latest
+        fi
+
+  # ===== Get API URL =====
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: Get API URL
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run services describe ${_SERVICE_API} --region ${_REGION} --format='value(status.url)' > api_url.txt
+        echo "API URL: $(cat api_url.txt)"
+
+  # ===== Warm RAG（API）=====
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: Warm RAG chain
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        URL=$(cat api_url.txt)
+        echo "Warming API: $${URL}"
+        if command -v curl >/dev/null 2>&1; then
+          curl -sS -m 20 "$${URL}/debug/fix-rag" || true
+        else
+          wget -qO- "$${URL}/debug/fix-rag" >/dev/null 2>&1 || true
+        fi
+
+  # ===== Deploy Frontend =====
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: Deploy Frontend to Cloud Run
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        AR_IMAGE_FRONT="asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REPO_FRONT}/${_SERVICE_FRONT}:$COMMIT_SHA"
+        AUTH_FLAG_FRONT="--no-allow-unauthenticated"
+        if [ "${_ALLOW_UNAUTH_FRONT}" = "true" ]; then AUTH_FLAG_FRONT="--allow-unauthenticated"; fi
+        API_URL=$(cat api_url.txt)
+
+        gcloud run deploy ${_SERVICE_FRONT} \
+          --image="${AR_IMAGE_FRONT}" \
+          --region=${_REGION} \
+          --platform=${_PLATFORM} \
+          ${AUTH_FLAG_FRONT} \
+          --execution-environment=${_EXEC_ENV_FRONT} \
+          --min-instances=${_MIN_INSTANCES_FRONT} \
+          --concurrency=${_CONCURRENCY_FRONT} \
+          --timeout=${_TIMEOUT_FRONT} \
+          --memory=${_MEMORY_FRONT} \
+          --cpu=${_CPU_FRONT} \
+          --set-env-vars=ENV=production,API_URL=${API_URL}
+
+  # ===== Get Front URL（ログ用）=====
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: Get Frontend URL
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run services describe ${_SERVICE_FRONT} --region ${_REGION} --format='value(status.url)' > front_url.txt
+        echo "Frontend URL: $(cat front_url.txt)"
