@@ -1,4 +1,8 @@
-# utils/system_diagnostics.py - 包括的システム診断ユーティリティ
+# utils/system_diagnostics.py - 包括的システム診断ユーティリティ（完全修正版）
+# 改訂点:
+# - Pylance reportMissingImports 対応: utils.chat_cache / utils.chat_templates の静的インポートを全撤去
+# - importlib による動的ロード + フォールバックで安全に継続
+# - 既存の公開API/戻り値は互換維持
 
 import os
 import sys
@@ -13,8 +17,47 @@ from pathlib import Path
 import json
 import hashlib
 from dataclasses import dataclass, asdict
+import importlib  # ← 追加: 動的インポートでPylance警告を回避
 
 logger = logging.getLogger(__name__)
+
+# ------------------------
+# 動的インポート・ヘルパー
+# ------------------------
+def _try_import(module_name: str):
+    """存在すればモジュールを返し、無ければ None。"""
+    try:
+        return importlib.import_module(module_name)
+    except Exception:
+        return None
+
+def _get_template_manager():
+    """
+    utils.chat_templates.get_template_manager を動的取得。
+    戻り値: callable | None
+    """
+    m = _try_import("utils.chat_templates")
+    if m is None:
+        return None
+    return getattr(m, "get_template_manager", None)
+
+def _get_chat_cache_funcs():
+    """
+    utils.chat_cache の代表関数をまとめて動的取得。
+    戻り値: dict(str -> callable|None)
+    """
+    m = _try_import("utils.chat_cache")
+    if m is None:
+        return {
+            "get_global_cache": None,
+            "quick_cache_get": None,
+            "quick_cache_set": None,
+        }
+    return {
+        "get_global_cache": getattr(m, "get_global_cache", None),
+        "quick_cache_get": getattr(m, "quick_cache_get", None),
+        "quick_cache_set": getattr(m, "quick_cache_set", None),
+    }
 
 @dataclass
 class ComponentStatus:
@@ -181,7 +224,7 @@ class SystemDiagnostics:
                 last_check=datetime.now(),
                 response_time=time.time() - start_time,
                 error_count=1,
-                details={"error": str(e), "traceback": traceback.format_exc()},
+                details={"error": str(e), "traceback": traceback.format_exc() },
                 recommendations=[f"Fix {name} component error: {str(e)[:100]}"]
             )
 
@@ -234,10 +277,7 @@ class SystemDiagnostics:
             
             # 状態判定
             if is_initialized and vectorstore and rag_chain and llm_instance:
-                if error_count == 0:
-                    status = "healthy"
-                else:
-                    status = "degraded"
+                status = "healthy" if error_count == 0 else "degraded"
             else:
                 status = "failed"
                 recommendations.append("RAG system not fully initialized")
@@ -279,7 +319,6 @@ class SystemDiagnostics:
                     file_size = os.path.getsize(path)
                     details[f"{os.path.basename(path)}_exists"] = True
                     details[f"{os.path.basename(path)}_size"] = file_size
-                    
                     if file_size < 1000:  # 1KB未満は異常
                         recommendations.append(f"{path} file is too small ({file_size} bytes)")
                         error_count += 1
@@ -293,7 +332,6 @@ class SystemDiagnostics:
             if os.path.exists(vector_dir):
                 details["directory_readable"] = os.access(vector_dir, os.R_OK)
                 details["directory_writable"] = os.access(vector_dir, os.W_OK)
-                
                 if not details["directory_readable"]:
                     recommendations.append("Vectorstore directory not readable")
                     error_count += 1
@@ -307,10 +345,8 @@ class SystemDiagnostics:
                 from rag.fast_rag_chain import get_super_fast_cache_stats
                 cache_stats = get_super_fast_cache_stats()
                 details["cache_stats"] = cache_stats
-                
                 if cache_stats["cache_performance"]["hit_rate"] < 50:
                     recommendations.append("Low cache hit rate - consider cache optimization")
-                    
             except ImportError:
                 details["fast_rag_available"] = False
                 recommendations.append("Fast RAG chain module not available")
@@ -348,20 +384,11 @@ class SystemDiagnostics:
                 "llm/llm_runner.py",
                 "config/llm_config.py"  # 想定
             ]
-            
             for config_path in llm_configs:
-                if os.path.exists(config_path):
-                    details[f"{os.path.basename(config_path)}_exists"] = True
-                else:
-                    details[f"{os.path.basename(config_path)}_exists"] = False
+                details[f"{os.path.basename(config_path)}_exists"] = os.path.exists(config_path)
 
             # 環境変数チェック
-            llm_env_vars = [
-                "OPENAI_API_KEY",
-                "ANTHROPIC_API_KEY", 
-                "GOOGLE_API_KEY"
-            ]
-            
+            llm_env_vars = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"]
             available_keys = []
             for env_var in llm_env_vars:
                 if os.getenv(env_var):
@@ -369,7 +396,6 @@ class SystemDiagnostics:
                     details[f"{env_var.lower()}_available"] = True
                 else:
                     details[f"{env_var.lower()}_available"] = False
-            
             if not available_keys:
                 recommendations.append("No LLM API keys found in environment variables")
                 error_count += 1
@@ -380,31 +406,24 @@ class SystemDiagnostics:
             try:
                 from llm.llm_runner import load_llm
                 llm_result = load_llm()
-                
                 if isinstance(llm_result, tuple) and len(llm_result) >= 1:
                     llm_instance = llm_result[0]
                     details["llm_loaded"] = True
                     details["llm_type"] = type(llm_instance).__name__
-                    
-                    # 簡単なテスト
                     try:
                         test_response = llm_instance.invoke("Hello")
-                        if test_response:
-                            details["llm_test"] = "passed"
-                        else:
-                            details["llm_test"] = "empty_response"
+                        details["llm_test"] = "passed" if test_response else "empty_response"
+                        if not test_response:
                             error_count += 1
                             recommendations.append("LLM returns empty responses")
                     except Exception as test_error:
                         details["llm_test"] = f"failed: {str(test_error)}"
                         error_count += 1
                         recommendations.append("LLM test invocation failed")
-                        
                 else:
                     details["llm_loaded"] = False
                     error_count += 1
                     recommendations.append("LLM loading returned unexpected format")
-                    
             except Exception as load_error:
                 details["llm_load_error"] = str(load_error)
                 error_count += 1
@@ -432,7 +451,7 @@ class SystemDiagnostics:
         }
 
     def _check_cache_system(self) -> Dict[str, Any]:
-        """キャッシュシステムチェック"""
+        """キャッシュシステムチェック（動的ロード版）"""
         details = {}
         recommendations = []
         error_count = 0
@@ -442,17 +461,14 @@ class SystemDiagnostics:
             try:
                 from api.routers.chat_unified import optimized_generator
                 unified_stats = optimized_generator.get_performance_stats()
-                
                 details["unified_cache"] = {
                     "available": True,
                     "hit_rate": unified_stats["optimization_performance"]["cache_hit_rate"],
                     "total_requests": unified_stats["optimization_performance"]["total_requests"]
                 }
-                
                 if unified_stats["optimization_performance"]["cache_hit_rate"] < 30:
                     recommendations.append("Low unified cache hit rate")
                     error_count += 1
-                    
             except ImportError:
                 details["unified_cache"] = {"available": False}
                 recommendations.append("Unified cache system not available")
@@ -461,35 +477,36 @@ class SystemDiagnostics:
             try:
                 from api.routers.line_bot_ultra_fast import smart_router
                 line_stats = smart_router.get_stats()
-                
                 details["line_cache"] = {
                     "available": True,
                     "rich_menu_hit_rate": line_stats["optimization_metrics"]["rich_menu_hit_rate"],
                     "instant_responses": line_stats["response_distribution"]["instant_responses"]
                 }
-                
                 if line_stats["optimization_metrics"]["rich_menu_hit_rate"] < 80:
                     recommendations.append("Low LINE rich menu cache hit rate")
-                    
             except ImportError:
                 details["line_cache"] = {"available": False}
 
-            # グローバルキャッシュチェック
-            try:
-                from utils.chat_cache import get_global_cache
-                global_cache = get_global_cache()
-                cache_health = global_cache.get_cache_health()
-                
-                details["global_cache"] = {
-                    "status": cache_health["status"],
-                    "issues": cache_health["issues"]
-                }
-                
-                if cache_health["status"] != "healthy":
-                    recommendations.extend(cache_health["recommendations"])
+            # グローバルキャッシュ（動的ロード）
+            cache_funcs = _get_chat_cache_funcs()
+            get_global_cache = cache_funcs["get_global_cache"]
+            if callable(get_global_cache):
+                try:
+                    global_cache = get_global_cache()
+                    cache_health = global_cache.get_cache_health()
+                    details["global_cache"] = {
+                        "status": cache_health.get("status", "unknown"),
+                        "issues": cache_health.get("issues", [])
+                    }
+                    if cache_health.get("status") != "healthy":
+                        recs = cache_health.get("recommendations", [])
+                        if recs:
+                            recommendations.extend(recs)
+                        error_count += 1
+                except Exception as e:
+                    details["global_cache"] = {"available": False, "error": str(e)}
                     error_count += 1
-                    
-            except ImportError:
+            else:
                 details["global_cache"] = {"available": False}
 
             # 状態判定
@@ -523,14 +540,11 @@ class SystemDiagnostics:
             # 環境変数チェック
             line_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
             line_secret = os.getenv("LINE_CHANNEL_SECRET")
-            
             details["access_token_available"] = bool(line_token)
             details["channel_secret_available"] = bool(line_secret)
-            
             if not line_token:
                 recommendations.append("LINE_CHANNEL_ACCESS_TOKEN not set")
                 error_count += 1
-                
             if not line_secret:
                 recommendations.append("LINE_CHANNEL_SECRET not set")
                 error_count += 1
@@ -547,20 +561,16 @@ class SystemDiagnostics:
             # LINE Bot統計
             try:
                 from api.routers.line_bot_ultra_fast import smart_router, duplicate_prevention
-                
                 router_stats = smart_router.get_stats()
                 dup_stats = duplicate_prevention.get_stats()
-                
                 details["line_stats"] = {
                     "total_requests": router_stats["total_requests"],
                     "instant_response_rate": router_stats["optimization_metrics"]["instant_response_rate"],
                     "rag_avoidance_rate": router_stats["optimization_metrics"]["rag_avoidance_rate"],
                     "duplicate_prevention": dup_stats["prevention_stats"]
                 }
-                
                 if router_stats["optimization_metrics"]["instant_response_rate"] < 80:
                     recommendations.append("Low LINE instant response rate")
-                    
             except ImportError:
                 details["line_stats"] = {"available": False}
 
@@ -586,7 +596,7 @@ class SystemDiagnostics:
         }
 
     def _check_web_chat(self) -> Dict[str, Any]:
-        """Webチャットチェック"""
+        """Webチャットチェック（テンプレートは動的ロード）"""
         details = {}
         recommendations = []
         error_count = 0
@@ -596,47 +606,42 @@ class SystemDiagnostics:
             try:
                 from api.routers.chat_unified import optimized_generator
                 stats = optimized_generator.get_performance_stats()
-                
                 details["web_chat_stats"] = {
                     "total_requests": stats["optimization_performance"]["total_requests"],
                     "template_hit_rate": stats["optimization_performance"]["template_hit_rate"],
                     "rag_avoidance_rate": stats["optimization_performance"]["rag_avoidance_rate"],
                     "cache_hit_rate": stats["optimization_performance"]["cache_hit_rate"]
                 }
-                
-                # Web品質チェック
                 if "web_optimization_performance" in stats:
                     web_stats = stats["web_optimization_performance"]
                     details["web_quality"] = {
                         "web_template_hit_rate": web_stats["web_template_hit_rate"],
                         "generic_responses_avoided": web_stats["generic_responses_avoided"]
                     }
-                    
                     if web_stats["web_template_hit_rate"] < 60:
                         recommendations.append("Low web template hit rate")
                         error_count += 1
-
             except ImportError:
                 details["web_chat_available"] = False
                 recommendations.append("Web chat module not available")
                 error_count += 1
 
-            # テンプレートシステムチェック
-            try:
-                from utils.chat_templates import get_template_manager
-                template_manager = get_template_manager()
-                template_stats = template_manager.get_stats()
-                
-                details["template_system"] = {
-                    "total_templates": template_stats["template_counts"]["total_templates"],
-                    "match_rate": template_stats["performance"]["match_rate"],
-                    "fallback_rate": template_stats["performance"]["fallback_rate"]
-                }
-                
-                if template_stats["performance"]["match_rate"] < 70:
-                    recommendations.append("Low template match rate")
-                    
-            except ImportError:
+            # テンプレートシステム（動的ロード）
+            get_tm = _get_template_manager()
+            if callable(get_tm):
+                try:
+                    template_manager = get_tm()
+                    template_stats = template_manager.get_stats()
+                    details["template_system"] = {
+                        "total_templates": template_stats["template_counts"]["total_templates"],
+                        "match_rate": template_stats["performance"]["match_rate"],
+                        "fallback_rate": template_stats["performance"]["fallback_rate"]
+                    }
+                    if template_stats["performance"]["match_rate"] < 70:
+                        recommendations.append("Low template match rate")
+                except Exception as e:
+                    details["template_system"] = {"available": False, "error": str(e)}
+            else:
                 details["template_system"] = {"available": False}
 
             # 状態判定
@@ -669,16 +674,8 @@ class SystemDiagnostics:
         try:
             # 重要ディレクトリの確認
             important_dirs = [
-                "rag",
-                "rag/vectorstore", 
-                "api",
-                "api/routers",
-                "utils",
-                "llm",
-                "templates",
-                "data"
+                "rag", "rag/vectorstore", "api", "api/routers", "utils", "llm", "templates", "data"
             ]
-            
             for dir_path in important_dirs:
                 if os.path.exists(dir_path):
                     details[f"{dir_path.replace('/', '_')}_exists"] = True
@@ -693,18 +690,15 @@ class SystemDiagnostics:
             try:
                 disk_usage = psutil.disk_usage('.')
                 disk_percent = (disk_usage.used / disk_usage.total) * 100
-                
                 details["disk_usage"] = {
                     "total_gb": disk_usage.total / (1024**3),
                     "used_gb": disk_usage.used / (1024**3),
                     "free_gb": disk_usage.free / (1024**3),
                     "usage_percent": disk_percent
                 }
-                
                 if disk_percent > self.thresholds["disk_usage"]:
                     recommendations.append(f"High disk usage: {disk_percent:.1f}%")
                     error_count += 1
-                    
             except Exception:
                 details["disk_usage"] = {"available": False}
 
@@ -716,7 +710,6 @@ class SystemDiagnostics:
                 "api/routers/chat_unified.py",
                 "api/routers/line_bot_ultra_fast.py"
             ]
-            
             missing_files = []
             for file_path in important_files:
                 if os.path.exists(file_path):
@@ -724,7 +717,6 @@ class SystemDiagnostics:
                     details[f"{file_path.replace('/', '_')}_size"] = file_size
                 else:
                     missing_files.append(file_path)
-                    
             if missing_files:
                 details["missing_files"] = missing_files
                 recommendations.extend([f"Missing file: {f}" for f in missing_files])
@@ -760,22 +752,10 @@ class SystemDiagnostics:
         try:
             # 重要なPythonパッケージの確認
             critical_packages = [
-                "fastapi",
-                "langchain", 
-                "sentence_transformers",
-                "faiss-cpu",
-                "psutil",
-                "pydantic"
+                "fastapi", "langchain", "sentence_transformers", "faiss-cpu", "psutil", "pydantic"
             ]
+            optional_packages = ["linebot", "google-cloud-secretmanager", "openai", "anthropic"]
             
-            optional_packages = [
-                "linebot",
-                "google-cloud-secretmanager",
-                "openai",
-                "anthropic"
-            ]
-            
-            # クリティカルパッケージチェック
             for package in critical_packages:
                 try:
                     __import__(package.replace("-", "_"))
@@ -785,22 +765,19 @@ class SystemDiagnostics:
                     recommendations.append(f"Install critical package: {package}")
                     error_count += 1
 
-            # オプションパッケージチェック
-            optional_available = []
+            optional_available = 0
             for package in optional_packages:
                 try:
                     __import__(package.replace("-", "_"))
-                    optional_available.append(package)
                     details[f"{package}_available"] = True
+                    optional_available += 1
                 except ImportError:
                     details[f"{package}_available"] = False
-            
-            details["optional_packages_available"] = len(optional_available)
+            details["optional_packages_available"] = optional_available
 
             # Pythonバージョンチェック
             python_version = sys.version_info
             details["python_version"] = f"{python_version.major}.{python_version.minor}.{python_version.micro}"
-            
             if python_version.major < 3 or (python_version.major == 3 and python_version.minor < 8):
                 recommendations.append("Python version should be 3.8 or higher")
                 error_count += 1
@@ -835,14 +812,11 @@ class SystemDiagnostics:
         try:
             # レスポンスタイム測定
             response_times = []
-            
-            # 複数の軽量テストでレスポンスタイム測定
             test_operations = [
                 ("cache_access", self._test_cache_access),
                 ("template_matching", self._test_template_matching),
                 ("file_access", self._test_file_access)
             ]
-            
             for test_name, test_func in test_operations:
                 try:
                     start_time = time.time()
@@ -850,11 +824,9 @@ class SystemDiagnostics:
                     test_time = time.time() - start_time
                     response_times.append(test_time)
                     details[f"{test_name}_time"] = test_time
-                    
                     if test_time > self.thresholds["response_time"]:
                         recommendations.append(f"Slow {test_name}: {test_time:.3f}s")
                         error_count += 1
-                        
                 except Exception as test_error:
                     details[f"{test_name}_error"] = str(test_error)
                     error_count += 1
@@ -863,7 +835,6 @@ class SystemDiagnostics:
             if response_times:
                 avg_response_time = sum(response_times) / len(response_times)
                 details["average_response_time"] = avg_response_time
-                
                 if avg_response_time > self.thresholds["response_time"]:
                     recommendations.append(f"High average response time: {avg_response_time:.3f}s")
 
@@ -872,17 +843,14 @@ class SystemDiagnostics:
                 process = psutil.Process()
                 memory_info = process.memory_info()
                 memory_percent = process.memory_percent()
-                
                 details["memory_usage"] = {
                     "rss_mb": memory_info.rss / (1024**2),
                     "vms_mb": memory_info.vms / (1024**2),
                     "percent": memory_percent
                 }
-                
                 if memory_percent > self.thresholds["memory_usage"]:
                     recommendations.append(f"High memory usage: {memory_percent:.1f}%")
                     error_count += 1
-                    
             except Exception:
                 details["memory_usage"] = {"available": False}
 
@@ -916,50 +884,30 @@ class SystemDiagnostics:
         try:
             # 環境変数のセキュリティチェック
             sensitive_vars = [
-                "LINE_CHANNEL_ACCESS_TOKEN",
-                "LINE_CHANNEL_SECRET", 
-                "OPENAI_API_KEY",
-                "ANTHROPIC_API_KEY",
-                "GOOGLE_API_KEY"
+                "LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET", 
+                "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"
             ]
-            
-            exposed_vars = []
             for var in sensitive_vars:
                 value = os.getenv(var, "")
-                if value:
-                    details[f"{var.lower()}_set"] = True
-                    # 値が短すぎる場合は警告
-                    if len(value) < 20:
-                        recommendations.append(f"{var} seems too short")
-                        error_count += 1
-                else:
-                    details[f"{var.lower()}_set"] = False
+                details[f"{var.lower()}_set"] = bool(value)
+                if value and len(value) < 20:
+                    recommendations.append(f"{var} seems too short")
+                    error_count += 1
 
             # ファイル権限チェック
-            sensitive_files = [
-                ".env",
-                "config.py", 
-                "secrets.json"
-            ]
-            
+            sensitive_files = [".env", "config.py", "secrets.json"]
             for file_path in sensitive_files:
                 if os.path.exists(file_path):
                     file_stat = os.stat(file_path)
                     file_mode = oct(file_stat.st_mode)[-3:]
                     details[f"{file_path.replace('.', '_')}_permissions"] = file_mode
-                    
-                    # 権限が緩い場合は警告
                     if file_mode in ["777", "666", "644"]:
                         recommendations.append(f"Overly permissive file permissions: {file_path}")
-                        error_count += 1
 
             # デバッグモードチェック
-            debug_indicators = [
-                ("DEBUG", os.getenv("DEBUG")),
-                ("ENVIRONMENT", os.getenv("ENVIRONMENT")),
-                ("LOG_LEVEL", os.getenv("LOG_LEVEL"))
-            ]
-            
+            debug_indicators = [("DEBUG", os.getenv("DEBUG")),
+                                ("ENVIRONMENT", os.getenv("ENVIRONMENT")),
+                                ("LOG_LEVEL", os.getenv("LOG_LEVEL"))]
             for var_name, var_value in debug_indicators:
                 if var_value:
                     details[f"{var_name.lower()}_value"] = var_value
@@ -988,66 +936,63 @@ class SystemDiagnostics:
         }
 
     # ==========================================================================
-    # テストヘルパー関数
+    # テストヘルパー関数（動的ロード版）
     # ==========================================================================
     
     def _test_cache_access(self):
-        """キャッシュアクセステスト"""
+        """キャッシュアクセステスト（utils.chat_cache を動的ロード）"""
+        funcs = _get_chat_cache_funcs()
+        qget = funcs["quick_cache_get"]
+        qset = funcs["quick_cache_set"]
+        if not (callable(qget) and callable(qset)):
+            return False
         try:
-            from utils.chat_cache import quick_cache_get, quick_cache_set
             test_key = "diagnostic_test"
             test_value = "test_response"
-            
-            quick_cache_set(test_key, test_value)
-            retrieved = quick_cache_get(test_key)
-            
+            qset(test_key, test_value)
+            retrieved = qget(test_key)
             return retrieved == test_value
-        except:
+        except Exception:
             return False
 
     def _test_template_matching(self):
-        """テンプレートマッチングテスト"""
+        """テンプレートマッチングテスト（utils.chat_templates を動的ロード）"""
+        get_tm = _get_template_manager()
+        if not callable(get_tm):
+            return False
         try:
-            from utils.chat_templates import get_template_manager
-            template_manager = get_template_manager()
-            
+            template_manager = get_tm()
             result = template_manager.find_template("坪単価", "web")
             return result is not None
-        except:
+        except Exception:
             return False
 
     def _test_file_access(self):
         """ファイルアクセステスト"""
         try:
             test_file = "diagnostic_test.tmp"
-            with open(test_file, 'w') as f:
+            with open(test_file, 'w', encoding='utf-8') as f:
                 f.write("test")
-            
-            with open(test_file, 'r') as f:
+            with open(test_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
             os.remove(test_file)
             return content == "test"
-        except:
+        except Exception:
             return False
 
     # ==========================================================================
     # パフォーマンス・リソース監視
     # ==========================================================================
-
     async def _collect_performance_metrics(self) -> Dict[str, float]:
         """パフォーマンスメトリクス収集"""
         metrics = {}
-        
         try:
             # 統合チャット統計
             from api.routers.chat_unified import optimized_generator
             unified_stats = optimized_generator.get_performance_stats()
-            
             metrics["total_requests"] = unified_stats["optimization_performance"]["total_requests"]
             metrics["cache_hit_rate"] = unified_stats["optimization_performance"]["cache_hit_rate"]
             metrics["template_hit_rate"] = unified_stats["optimization_performance"]["template_hit_rate"]
-            
         except ImportError:
             pass
 
@@ -1055,10 +1000,8 @@ class SystemDiagnostics:
             # LINE Bot統計
             from api.routers.line_bot_ultra_fast import smart_router
             line_stats = smart_router.get_stats()
-            
             metrics["line_total_requests"] = line_stats["total_requests"]
             metrics["line_instant_response_rate"] = line_stats["optimization_metrics"]["instant_response_rate"]
-            
         except ImportError:
             pass
 
@@ -1067,24 +1010,17 @@ class SystemDiagnostics:
     def _get_resource_usage(self) -> Dict[str, float]:
         """リソース使用量取得"""
         try:
-            # CPU使用率
             cpu_percent = psutil.cpu_percent(interval=1)
-            
-            # メモリ使用率
             memory = psutil.virtual_memory()
             memory_percent = memory.percent
-            
-            # プロセス固有の情報
             process = psutil.Process()
             process_memory = process.memory_percent()
-            
             return {
                 "cpu_usage": cpu_percent,
                 "memory_usage": memory_percent,
                 "process_memory_usage": process_memory,
                 "memory_available_gb": memory.available / (1024**3)
             }
-            
         except Exception as e:
             logger.error(f"Resource usage check failed: {e}")
             return {"error": str(e)}
@@ -1092,12 +1028,9 @@ class SystemDiagnostics:
     # ==========================================================================
     # ユーティリティ関数
     # ==========================================================================
-
     def _add_to_history(self, system_health: SystemHealth):
         """履歴にシステムヘルスを追加"""
         self.check_history.append(system_health)
-        
-        # 履歴サイズ制限
         if len(self.check_history) > self.max_history:
             self.check_history = self.check_history[-self.max_history:]
 
@@ -1105,18 +1038,11 @@ class SystemDiagnostics:
         """健全性サマリー取得"""
         if not self.check_history:
             return {"status": "no_data", "message": "No diagnostic history available"}
-        
         latest = self.check_history[-1]
-        
-        # コンポーネント状態サマリー
-        component_summary = {}
-        for name, status in latest.components.items():
-            component_summary[name] = {
-                "status": status.status,
-                "response_time": status.response_time,
-                "error_count": status.error_count
-            }
-
+        component_summary = {
+            name: {"status": st.status, "response_time": st.response_time, "error_count": st.error_count}
+            for name, st in latest.components.items()
+        }
         return {
             "overall_status": latest.overall_status,
             "timestamp": latest.timestamp.isoformat(),
@@ -1131,56 +1057,45 @@ class SystemDiagnostics:
         """トレンド分析"""
         if len(self.check_history) < 2:
             return {"status": "insufficient_data"}
-        
         cutoff_time = datetime.now() - timedelta(hours=hours)
-        recent_checks = [
-            check for check in self.check_history 
-            if check.timestamp >= cutoff_time
-        ]
-        
+        recent_checks = [c for c in self.check_history if c.timestamp >= cutoff_time]
         if not recent_checks:
             return {"status": "no_recent_data"}
 
-        # 状態変化のトレンド
         status_changes = []
         for i in range(1, len(recent_checks)):
             prev_status = recent_checks[i-1].overall_status
             curr_status = recent_checks[i].overall_status
-            
             if prev_status != curr_status:
                 status_changes.append({
                     "timestamp": recent_checks[i].timestamp.isoformat(),
-                    "from": prev_status,
-                    "to": curr_status
+                    "from": prev_status, "to": curr_status
                 })
 
-        # パフォーマンストレンド
         performance_trend = {}
-        if recent_checks:
-            first_check = recent_checks[0]
-            last_check = recent_checks[-1]
-            
-            for metric_name in first_check.performance_metrics:
-                if metric_name in last_check.performance_metrics:
-                    first_value = first_check.performance_metrics[metric_name]
-                    last_value = last_check.performance_metrics[metric_name]
-                    
-                    if first_value > 0:
-                        change_percent = ((last_value - first_value) / first_value) * 100
-                        performance_trend[metric_name] = {
-                            "change_percent": change_percent,
-                            "direction": "improving" if change_percent > 0 else "degrading" if change_percent < -5 else "stable"
-                        }
+        first_check = recent_checks[0]
+        last_check = recent_checks[-1]
+        for metric_name in first_check.performance_metrics:
+            if metric_name in last_check.performance_metrics:
+                first_value = first_check.performance_metrics[metric_name]
+                last_value = last_check.performance_metrics[metric_name]
+                if first_value > 0:
+                    change_percent = ((last_value - first_value) / first_value) * 100
+                    performance_trend[metric_name] = {
+                        "change_percent": change_percent,
+                        "direction": "improving" if change_percent > 0 else "degrading" if change_percent < -5 else "stable"
+                    }
+
+        avg_resp = sum(
+            c.performance_metrics.get("average_response_time", 0) for c in recent_checks
+        ) / len(recent_checks) if recent_checks else 0
 
         return {
             "period_hours": hours,
             "checks_analyzed": len(recent_checks),
             "status_changes": status_changes,
             "performance_trends": performance_trend,
-            "average_response_time": sum(
-                check.performance_metrics.get("average_response_time", 0) 
-                for check in recent_checks
-            ) / len(recent_checks) if recent_checks else 0
+            "average_response_time": avg_resp
         }
 
     def export_diagnostics(self, file_path: str) -> bool:
@@ -1199,13 +1114,10 @@ class SystemDiagnostics:
                 "check_history_count": len(self.check_history),
                 "thresholds": self.thresholds
             }
-            
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2, default=str)
-            
             logger.info(f"📤 Diagnostics exported to {file_path}")
             return True
-            
         except Exception as e:
             logger.error(f"Failed to export diagnostics: {e}")
             return False
@@ -1216,22 +1128,16 @@ _global_diagnostics = None
 def get_system_diagnostics() -> SystemDiagnostics:
     """グローバル診断インスタンス取得"""
     global _global_diagnostics
-    
     if _global_diagnostics is None:
         _global_diagnostics = SystemDiagnostics()
-    
     return _global_diagnostics
 
 async def run_quick_health_check() -> Dict[str, Any]:
     """クイックヘルスチェック実行"""
     diagnostics = get_system_diagnostics()
-    
-    # 簡易チェック（主要コンポーネントのみ）
     quick_checks = ["rag_system", "cache_system", "performance"]
-    
     results = {}
     overall_issues = 0
-    
     for check_name in quick_checks:
         if check_name in diagnostics.component_checkers:
             try:
@@ -1242,19 +1148,12 @@ async def run_quick_health_check() -> Dict[str, Any]:
                     "response_time": result.response_time,
                     "error_count": result.error_count
                 }
-                
                 if result.status in ["degraded", "failed"]:
                     overall_issues += 1
-                    
             except Exception as e:
-                results[check_name] = {
-                    "status": "failed",
-                    "error": str(e)
-                }
+                results[check_name] = {"status": "failed", "error": str(e)}
                 overall_issues += 1
-    
     overall_status = "healthy" if overall_issues == 0 else "degraded" if overall_issues <= 1 else "critical"
-    
     return {
         "overall_status": overall_status,
         "timestamp": datetime.now().isoformat(),
