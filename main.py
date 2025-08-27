@@ -16,28 +16,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-# ---------------------------------
-# パス（ローカル実行の安定化）
-# ---------------------------------
-ROOT = pathlib.Path(__file__).resolve().parent  # D:/RAG-LLM-Project
+# =================================
+# パス（ローカル/Cloud Run での import 安定化）
+# =================================
+ROOT = pathlib.Path(__file__).resolve().parent  # プロジェクトルート
+# 主要ディレクトリを先頭に追加
 for p in [ROOT, ROOT / "services", ROOT / "llm", ROOT / "rag", ROOT / "api"]:
-    p_str = str(p)
-    if p_str not in sys.path:
-        sys.path.insert(0, p_str)
+    s = str(p)
+    if s not in sys.path:
+        sys.path.insert(0, s)
 
-# ---------------------------------
+# =================================
 # 基本ログ
-# ---------------------------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+# =================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
-# ---------------------------------
+# =================================
 # FastAPI
-# ---------------------------------
+# =================================
 app = FastAPI(
     title="Unified RAG API - Diagnostics Enhanced",
     description="High-Performance Unified AI Chat API with Enhanced RAG Diagnostics",
-    version="7.2.2",
+    version="7.3.0",
 )
 
 # CORS
@@ -49,9 +53,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------------
+# =================================
 # グローバル（RAG）
-# ---------------------------------
+# =================================
 vectorstore = None
 rag_chain_template = None  # .invoke({"query": ...}) を持つ想定
 llm_instance = None
@@ -59,8 +63,9 @@ initialization_lock = asyncio.Lock()
 is_initialized = False
 RAG_SHARED_GLOBALLY = False
 
-# 便利フラグ
-ENABLE_RAG_INITIALIZATION = True
+# 便利フラグ（環境変数で制御）
+# DISABLE_RAG_INIT=true のとき起動時初期化をスキップ
+ENABLE_RAG_INITIALIZATION = os.getenv("DISABLE_RAG_INIT", "false").lower() != "true"
 ENABLE_UNIFIED_CHAT = True
 ENABLE_LINE_INTEGRATION = True
 
@@ -68,7 +73,7 @@ UNIFIED_CHAT_MODE = os.getenv("UNIFIED_CHAT_MODE", "complete")
 DEFAULT_PLATFORM = "web"
 DEFAULT_RESPONSE_MODE = "auto"
 
-# 出典制御（UIでは非表示だが念のため）
+# 出典制御（UIでは非表示要件なので既定 false）
 INCLUDE_SOURCES = os.getenv("INCLUDE_SOURCES", "false").lower() == "true"
 
 # 起動時刻
@@ -89,11 +94,11 @@ rag_diagnostics = {
     "health_checks": {"last_check": None, "vectorstore_test": False, "rag_query_test": False, "llm_response_test": False},
 }
 
-# ---------------------------------
+# =================================
 # RAG 初期化（Diagnostics 強化・動的 import）
-# ---------------------------------
+# =================================
 async def initialize_rag_components():
-    """RAG コンポーネントの非同期初期化（fast優先→servicesフロントドアへフォールバック）"""
+    """RAG コンポーネントの非同期初期化（fast 優先 → services フロントドアにフォールバック）"""
     global vectorstore, rag_chain_template, llm_instance, is_initialized, RAG_SHARED_GLOBALLY, rag_diagnostics
 
     if is_initialized:
@@ -190,7 +195,7 @@ async def initialize_rag_components():
                 except Exception as test_e:
                     logger.warning(f"⚠️ RAG quick test failed: {test_e}")
 
-                # Vectorstoreメタ
+                # Vectorstore メタ
                 if vectorstore is not None:
                     idx_path = os.path.join(os.getenv("VECTOR_DIR", "rag/vectorstore"), "index.faiss")
                     if os.path.exists(idx_path):
@@ -207,7 +212,7 @@ async def initialize_rag_components():
                 rag_diagnostics["component_status"]["rag_chain"]["error"] = str(e_vs)
                 raise
 
-            # ---- STEP 3: LLM 単体テスト（任意） ----
+            # ---- STEP 3: LLM 単体テスト（任意）
             try:
                 if hasattr(llm_instance, "invoke"):
                     _r = llm_instance.invoke("テスト")
@@ -245,9 +250,9 @@ def get_shared_rag_components():
         "diagnostics": rag_diagnostics,
     }
 
-# ---------------------------------
+# =================================
 # 診断系 API
-# ---------------------------------
+# =================================
 @app.get("/debug/rag-status")
 async def get_rag_detailed_status():
     live_health = {
@@ -325,9 +330,27 @@ async def attempt_rag_auto_fix():
             "timestamp": datetime.now().isoformat(),
         }
 
-# ---------------------------------
+# Cloud Build の検証で参照している簡易システム状態
+@app.get("/system-status")
+async def system_status():
+    return {
+        "status": "ok" if is_initialized else "degraded",
+        "version": "7.3.0",
+        "components": {
+            "rag_chain": rag_chain_template is not None,
+            "vectorstore": vectorstore is not None,
+            "llm": llm_instance is not None,
+        },
+        "diag": {
+            "attempts": rag_diagnostics["initialization_attempts"],
+            "success": rag_diagnostics["initialization_success"],
+            "duration": rag_diagnostics["initialization_duration"],
+        }
+    }
+
+# =================================
 # パフォーマンスモニタ（簡略）
-# ---------------------------------
+# =================================
 class PerfMon:
     def __init__(self):
         self.start_time = time.time()
@@ -373,9 +396,9 @@ class PerfMon:
 
 perf = PerfMon()
 
-# ---------------------------------
+# =================================
 # リクエストモデル
-# ---------------------------------
+# =================================
 class UnifiedChatRequest(BaseModel):
     question: str
     username: str | None = None
@@ -383,9 +406,9 @@ class UnifiedChatRequest(BaseModel):
     mode: str | None = "auto"
     debug_mode: bool | None = False
 
-# ---------------------------------
+# =================================
 # メインチャット
-# ---------------------------------
+# =================================
 @app.post("/chat")
 @app.post("/chat/")
 async def unified_chat(req: UnifiedChatRequest, request: Request):
@@ -395,7 +418,7 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
     mode = req.mode or "auto"
 
     try:
-        if not is_initialized:
+        if not is_initialized and ENABLE_RAG_INITIALIZATION:
             await initialize_rag_components()
 
         # chat_unified の場所が repo により変わるので動的 import で吸収
@@ -403,8 +426,12 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
             mod = importlib.import_module("api.routers.chat_unified")
             unified_generator = getattr(mod, "unified_generator", mod)
         except Exception:
-            mod = importlib.import_module("chat_unified")
-            unified_generator = getattr(mod, "unified_generator", mod)
+            try:
+                mod = importlib.import_module("routers.chat_unified")
+                unified_generator = getattr(mod, "unified_generator", mod)
+            except Exception:
+                mod = importlib.import_module("chat_unified")
+                unified_generator = getattr(mod, "unified_generator", mod)
 
         # 統一の generate_response を想定
         response = await unified_generator.generate_response(req.question, platform, username, mode)
@@ -417,10 +444,10 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
             "sources": response.get("sources", []),
             "status": response.get("status", "ok"),
             "performance": {"total_time": rt, "platform": platform, "mode": mode, "source": response.get("source")},
-            "system_info": {"version": "7.2.2", "rag_status": "initialized" if is_initialized else "failed"},
+            "system_info": {"version": "7.3.0", "rag_status": "initialized" if is_initialized else "skipped"},
         }
         if req.debug_mode:
-            result["debug_info"] = {"rag_diagnostics": rag_diagnostics}
+            result["debug_info"] = {"rag_diagnostics": rag_diagnostics, "perf": perf.stats()}
         return result
 
     except Exception as e:
@@ -431,25 +458,31 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
         logger.error(traceback.format_exc())
         return JSONResponse(
             status_code=200,
-            content={"answer": f"システムエラーが発生しました。（エラーID: {err_id}）", "sources": [], "status": "error",
-                     "performance": {"total_time": rt, "platform": platform, "mode": mode}},
+            content={
+                "answer": f"システムエラーが発生しました。（エラーID: {err_id}）",
+                "sources": [],
+                "status": "error",
+                "performance": {"total_time": rt, "platform": platform, "mode": mode},
+            },
         )
 
-# ---------------------------------
+# =================================
 # ルート/ヘルス
-# ---------------------------------
+# =================================
 @app.get("/")
 async def root():
     return {
         "message": "Unified RAG API - Diagnostics Enhanced",
-        "version": "7.2.2",
+        "version": "7.3.0",
         "rag_initialized": is_initialized,
         "diagnostic_endpoints": {
             "rag_status": "/debug/rag-status",
             "fix_rag": "/debug/fix-rag",
+            "system_status": "/system-status",
             "chat": "/chat",
             "line_webhook": "/line/webhook",
         },
+        "perf": perf.stats(),
     }
 
 @app.get("/healthz")
@@ -464,9 +497,9 @@ async def health_check():
             quick = False
     return {"status": "healthy" if is_initialized else "degraded", "uptime": uptime, "rag_quick_test": quick}
 
-# ---------------------------------
+# =================================
 # 起動時処理
-# ---------------------------------
+# =================================
 @app.on_event("startup")
 async def startup_event():
     logger.info("🚀 Starting Unified RAG System (Diagnostics Enhanced)")
@@ -476,7 +509,10 @@ async def startup_event():
     # LINE ルーター読み込み（存在すれば）
     if ENABLE_LINE_INTEGRATION:
         try:
-            mod = importlib.import_module("api.routers.line_bot_ultra_fast")
+            try:
+                mod = importlib.import_module("api.routers.line_bot_ultra_fast")
+            except Exception:
+                mod = importlib.import_module("routers.line_bot_ultra_fast")
             line_router = getattr(mod, "router")
             app.include_router(line_router, prefix="", tags=["line"])  # prefix二重回避
             logger.info("✅ LINE router included")

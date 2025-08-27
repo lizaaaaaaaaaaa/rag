@@ -1,9 +1,15 @@
+# api/routers/line_bot_ultra_fast.py  — 完全修正版（固定テンプレ更新版）
+# - リッチメニュー押下は即時 reply（定型文）
+# - RAG / 資金計画はバックグラウンド実行 → push で最終結果
+# - 「出典/参考/資料」等は非表示
+# - Webhook は /line/webhook
+
 import logging
 import os
 import re
-import asyncio
 import time
 import hashlib
+import threading
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 
@@ -88,14 +94,21 @@ except Exception as e:
 router = APIRouter(prefix="", tags=["line-ultra-fast"])
 
 # ==============================================================================
-# 固定テンプレ（必要に応じ編集OK）
+# 設定
+# ==============================================================================
+LINE_RESPONSE_TIMEOUT = int(os.getenv("LINE_RESPONSE_TIMEOUT", "12"))  # 既定12秒
+SESSION_TTL = int(os.getenv("SESSION_TTL_MINUTES", "30")) * 60
+
+# ==============================================================================
+# 固定テンプレ（ご指定文面に完全一致）
 # ==============================================================================
 RICHMENU_FIXED_RESPONSES = {
+    # 友だち追加後
     "follow_greeting": """こんにちは！キノエデザインです。
-この度は友だち追加ありがとうございます✨
+この度は友だち追加ありがとうございます:sparkles:
 
-目的のボタンをタップ👇
-🤖AI相談 / 📍来場予約 / 📄資料請求 / 💰資金計画 / 🌐サイト / 💬チャット
+目的のボタンをタップ:point_down:
+:robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :yen:資金計画 / :globe_with_meridians:サイト / :speech_balloon:チャット
 
 AIは24時間、担当者は当日〜翌営業日に返信します。
 
@@ -103,35 +116,105 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
 プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
-    "🤖 AI相談": """🤖 AI住まい相談を開始します！
 
-住まいに関するご質問をお気軽にどうぞ。
-
-💡 例）
-・坪単価はどのくらい？
-・標準仕様は？
-・耐震/断熱性能は？
-
+    # AI相談
+    "AI相談": """:robot: AI住まい相談を開始します！
+キノエデザインの住まいAIコンシェルジュです。
+住まいに関するご質問をお気軽にどうぞ！
+:bulb: **例えば**
+・坪単価について教えて
+・標準仕様はどんな感じ？
+・耐震性能について知りたい
+・断熱性能はどのくらい？
+何でもお聞きください:blush:
 ※ご使用の前に、必ず以下の取り扱いをご確認ください。
 プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
-    "💰 資金計画": """💬 AI資金診断のご案内
 
-以下の5点をお送りください（概算可）：
-・年収
-・毎月の希望返済額
-・希望借入期間
-・家族構成
-・その他の大きな負担（例：自動車ローン）
+    # AI住まいサイト
+    "AI住まいサイト": """:globe_with_meridians: AI住まいサイトのご案内
+キノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）
+:house: サイト内容：
+・AIチャット相談（資金計画／補助金／間取り など）
+・施工写真（実例）
+・間取りの考え方・プラン例
+・よくある質問（最初に迷う3つのこと ほか）
+・保存版デジタル冊子 ZINE（無料ダウンロード）
+・LINEで無料相談／来場予約
+:mobile_phone: サイトURL:
+https://preview.studio.site/live/EjOQljz1WJ/""",
 
-ご入力後、目安レンジと注意点を簡潔にお返しします。""",
+    # 資料請求
+    "資料請求": """:clipboard:ありがとうございます！こちらからご覧いただけます。
+〔資料タイトル〕（PDF）：〔URL〕
+よろしければ簡単アンケート（任意）：
+・ご計画時期：今すぐ / 3–6か月 / 1年以内 / 未定
+・連絡方法（任意）：このLINE / メール / 連絡不要
+※必ず以下の取り扱いをご確認ください。
+プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
+利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
+Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
+
+    # 展示場来場予約
+    "展示場来場予約": """:round_pushpin: 展示場のご来場予約につきましては、下記URLより必要事項のご入力をお願い申し上げます。
+【https://preview.studio.site/live/EjOQljz1WJ/reservation 】
+スタッフ一同、心よりお待ちしております！""",
+
+    # 資金計画
+    "資金計画": """:speech_balloon: AI資金診断のご案内
+本診断は匿名でご利用いただけます。ご回答内容は保存いたしません。算出される金額は試算（概算）であり、目安としてご確認ください。
+お手数ですが、以下の5点をご入力ください。
+・年収（概算可）
+・毎月のご希望返済額
+・住宅ローンのご希望借入期間
+・ご家族構成（例：大人2名・お子さま1名）
+・その他の大きなご負担（例：自動車ローン 等）
+未入力の項目があっても進められます。ご入力後、概算結果をご提示いたします。""",
+
+    # チャット相談
+    "チャット相談": """:speech_balloon: スタッフとのご相談
+【対応時間】
+営業時間：9:00-18:00
+:mobile_phone: ご相談方法：
+・このLINEでの直接相談
+・お電話での相談
+・展示場での対面相談
+営業時間内でしたら迅速にお返事します。
+お気軽にお声かけください！"""
 }
 
+# ボタンの文言ゆらぎを吸収するマッピング
 RICHMENU_KEYWORD_MAPPING = {
-    "AI相談": "🤖 AI相談",
-    "資金計画": "💰 資金計画",
-    # 必要に応じて他ボタンもマップ追加
+    # AI相談
+    "AI相談": "AI相談",
+    ":robot: AI相談": "AI相談",
+    "🤖 AI相談": "AI相談",
+
+    # AI住まいサイト
+    "AI住まいサイト": "AI住まいサイト",
+    ":globe_with_meridians: AI住まいサイト": "AI住まいサイト",
+    "サイト": "AI住まいサイト",
+    "ホームページ": "AI住まいサイト",
+
+    # 資料請求
+    "資料請求": "資料請求",
+    ":clipboard: 資料請求": "資料請求",
+
+    # 展示場来場予約
+    "展示場来場予約": "展示場来場予約",
+    ":round_pushpin: 展示場来場　予約": "展示場来場予約",  # 全角スペースパターン
+    "来場予約": "展示場来場予約",
+
+    # 資金計画
+    "資金計画": "資金計画",
+    ":moneybag: 資金計画": "資金計画",
+    "💰 資金計画": "資金計画",
+
+    # チャット相談
+    "チャット相談": "チャット相談",
+    ":speech_balloon: チャット相談": "チャット相談",
+    "チャット": "チャット相談",
 }
 
 # ==============================================================================
@@ -176,7 +259,6 @@ class SessionStore:
             return ""
         return d.get("mode", "")
 
-SESSION_TTL = int(os.getenv("SESSION_TTL_MINUTES", "30")) * 60
 sessions = SessionStore(SESSION_TTL)
 
 # ==============================================================================
@@ -233,9 +315,10 @@ if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
         handler = None
 
 # ==============================================================================
-# 送信（reply→push フォールバック）
+# 送信ヘルパー
 # ==============================================================================
-def _send_message(reply_token: str, user_id: str, text: str) -> bool:
+def _reply_or_push(reply_token: str, user_id: str, text: str) -> bool:
+    """まず reply、だめなら push。"""
     api = _ensure_api()
     if not api:
         logger.error("MessagingApi not ready")
@@ -263,6 +346,60 @@ def _send_message(reply_token: str, user_id: str, text: str) -> bool:
         logger.error(f"LINE send failed: {e}")
         return False
 
+def _push(user_id: str, text: str) -> bool:
+    """push 専用（最終結果はこちら）"""
+    api = _ensure_api()
+    if not api:
+        logger.error("MessagingApi not ready")
+        return False
+    if dup_guard.seen(user_id, f"out:{text[:64]}"):
+        return True
+    try:
+        api.push_message_with_http_info(
+            PushMessageRequest(to=user_id, messages=[TextMessage(text=text)])
+        )
+        return True
+    except Exception as e:
+        logger.error(f"LINE push failed: {e}")
+        return False
+
+# ==============================================================================
+# バックグラウンド・ワーカー
+# ==============================================================================
+def _worker_finance(user_id: str, user_text: str):
+    """資金計画：重い計算は別スレッドで実行し、最終結果は push"""
+    try:
+        if run_financial_plan is None:
+            _push(user_id, "資金診断を準備中です。時間をおいてお試しください。")
+            return
+        try:
+            import inspect, asyncio
+            if inspect.iscoroutinefunction(run_financial_plan):
+                result = asyncio.run(run_financial_plan(user_text))
+            else:
+                result = run_financial_plan(user_text)
+        except Exception as e:
+            logger.error(f"financial_plan error: {e}")
+            result = "うまく処理できませんでした。必要項目（年収・毎月返済額・借入期間・家族構成・その他負担）をもう一度教えてください。"
+        _push(user_id, _strip_citations(result or "").strip() or "結果を作成できませんでした。")
+    except Exception as e:
+        logger.error(f"_worker_finance fatal: {e}")
+
+def _worker_ai(user_id: str, user_text: str):
+    """AI相談：RAG で回答し、最終結果は push"""
+    try:
+        if get_rag_response is None:
+            _push(user_id, "AI相談の準備中です。時間をおいてお試しください。")
+            return
+        try:
+            answer, _ = get_rag_response(user_text)
+        except Exception as e:
+            logger.error(f"RAG error: {e}")
+            answer = "該当情報が見つかりませんでした。別の聞き方でお試しください。"
+        _push(user_id, _strip_citations(answer or "").strip() or "回答を作成できませんでした。")
+    except Exception as e:
+        logger.error(f"_worker_ai fatal: {e}")
+
 # ==============================================================================
 # Webhook（即ACK）
 # ==============================================================================
@@ -285,7 +422,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 # ==============================================================================
-# イベントハンドラ
+# イベントハンドラ（reply→push 方針）
 # ==============================================================================
 if LINE_SDK_AVAILABLE and handler:
     @handler.add(FollowEvent)
@@ -295,7 +432,7 @@ if LINE_SDK_AVAILABLE and handler:
             if dup_guard.seen(user_id, f"follow:{user_id}"):
                 return
             greeting = RICHMENU_FIXED_RESPONSES["follow_greeting"]
-            _send_message(event.reply_token, user_id, greeting)
+            _reply_or_push(event.reply_token, user_id, greeting)
         except Exception as e:
             logger.error(f"follow handler error: {e}")
 
@@ -321,54 +458,41 @@ if LINE_SDK_AVAILABLE and handler:
                         break
 
             if key:
-                if key == "🤖 AI相談":
+                if key == "AI相談":
                     sessions.set_mode(user_id, "ai")
-                elif key == "💰 資金計画":
+                elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
-                _send_message(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
                 return
 
             mode = sessions.get_mode(user_id)
 
-            # 資金計画モード：ユーザー入力→LLM回答
+            # 資金計画モード：まず即時 ACK、その後バックグラウンドで結果 push
             if mode == "finance":
-                if run_financial_plan is None:
-                    _send_message(reply_token, user_id, "資金診断を準備中です。少し時間をおいてお試しください。")
-                    return
-                try:
-                    # 既存の financial_api 側が async なら await へ変更
-                    resp = asyncio.run(run_financial_plan(text)) if asyncio.iscoroutinefunction(run_financial_plan) else run_financial_plan(text)
-                except Exception as e:
-                    logger.error(f"financial_plan error: {e}")
-                    resp = "うまく処理できませんでした。もう一度お試しください。"
-                _send_message(reply_token, user_id, _strip_citations(resp or ""))
+                ack = "📊 試算中です。少しお待ちください…"
+                _reply_or_push(reply_token, user_id, ack)
+                threading.Thread(target=_worker_finance, args=(user_id, text), daemon=True).start()
                 return
 
-            # AI相談モード：RAGで回答（出典は全面カット）
+            # AI相談モード：まず即時 ACK、その後バックグラウンドで結果 push
             if mode == "ai":
-                if get_rag_response is None:
-                    _send_message(reply_token, user_id, "AI相談の準備中です。少し時間をおいてお試しください。")
-                    return
-                try:
-                    answer, _ = get_rag_response(text)
-                except Exception as e:
-                    logger.error(f"RAG error: {e}")
-                    answer = "該当情報が見つかりませんでした。別の聞き方でお試しください。"
-                _send_message(reply_token, user_id, _strip_citations(answer or ""))
+                ack = "🔎 回答を作成しています…"
+                _reply_or_push(reply_token, user_id, ack)
+                threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start()
                 return
 
             # 既定（案内）
             fallback = (
                 "ご質問ありがとうございます😊\n\n"
                 "目的のボタンをタップしてください👇\n"
-                "🤖AI相談 / 📍来場予約 / 📄資料請求 / 💰資金計画 / 🌐サイト / 💬チャット\n\n"
-                "具体的なご質問もお気軽にどうぞ✨"
+                ":robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :yen:資金計画 / :globe_with_meridians:サイト / :speech_balloon:チャット\n\n"
+                "具体的なご質問もお気軽にどうぞ:sparkles:"
             )
-            _send_message(reply_token, user_id, fallback)
+            _reply_or_push(reply_token, user_id, fallback)
         except Exception as e:
             logger.error(f"message handler error: {e}")
             try:
-                _send_message(event.reply_token, event.source.user_id, "一時的にエラーが発生しました。時間をおいてお試しください。")
+                _reply_or_push(event.reply_token, event.source.user_id, "一時的にエラーが発生しました。時間をおいてお試しください。")
             except Exception:
                 pass
 
@@ -397,17 +521,17 @@ if LINE_SDK_AVAILABLE and handler:
                         break
 
             if key:
-                if key == "🤖 AI相談":
+                if key == "AI相談":
                     sessions.set_mode(user_id, "ai")
-                elif key == "💰 資金計画":
+                elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
-                _send_message(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
                 return
 
-            _send_message(
+            _reply_or_push(
                 reply_token,
                 user_id,
-                "目的のボタンをタップしてください😊\n\n🤖AI相談 / 📍来場予約 / 📄資料請求 / 💰資金計画 / 🌐サイト / 💬チャット",
+                "目的のボタンをタップしてください😊\n\n:robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :yen:資金計画 / :globe_with_meridians:サイト / :speech_balloon:チャット",
             )
         except Exception as e:
             logger.error(f"postback handler error: {e}")
@@ -420,4 +544,5 @@ def health():
     return {
         "status": "ok" if (LINE_SDK_AVAILABLE and handler and _ensure_api()) else "degraded",
         "ts": datetime.now().isoformat(),
+        "timeout": LINE_RESPONSE_TIMEOUT,
     }
