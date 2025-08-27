@@ -1,4 +1,4 @@
-# utils/web_search.py - 改善版（自然な回答生成）
+# utils/web_search.py - 修正版（リッチメニュー押下時は無効化、AI相談時のみ有効）
 
 import os
 import logging
@@ -17,6 +17,22 @@ class GoogleSearcher:
         self.google_api_key = os.environ.get("GOOGLE_SEARCH_API_KEY")
         self.google_cx = os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
         self.search_endpoint = "https://www.googleapis.com/customsearch/v1"
+        
+        # リッチメニューの固定応答キーワード（Web検索を無効化）
+        self.richmenu_keywords = [
+            "🤖 AI相談",
+            "🌐 AI住まいサイト",
+            "📋 資料請求",
+            "📍 展示場来場",
+            "💰 資金計画",
+            "💬 チャット相談",
+            "AI相談",
+            "AI住まいサイト",
+            "資料請求",
+            "展示場来場",
+            "資金計画",
+            "チャット相談"
+        ]
         
         # Secret Managerから取得する場合
         if not self.google_api_key and os.environ.get("ENV") == "production":
@@ -41,8 +57,32 @@ class GoogleSearcher:
         except Exception as e:
             logger.error(f"Failed to load secrets: {e}")
     
+    def is_richmenu_action(self, query: str) -> bool:
+        """リッチメニューの押下アクションかどうかを判定"""
+        query_stripped = query.strip()
+        
+        # 完全一致チェック（絵文字付き・絵文字なし両方）
+        for keyword in self.richmenu_keywords:
+            if query_stripped == keyword:
+                logger.info(f"リッチメニュー押下を検出: {query}")
+                return True
+        
+        # 部分一致チェック（短いキーワードの場合）
+        short_keywords = ["AI相談", "資料請求", "展示場来場", "資金計画", "チャット相談"]
+        for keyword in short_keywords:
+            if query_stripped == keyword or query_stripped.endswith(keyword):
+                logger.info(f"リッチメニュー関連キーワードを検出: {query}")
+                return True
+        
+        return False
+    
     def search_web(self, query: str, num_results: int = 5) -> List[Dict]:
         """Google Custom Search APIを使用してWeb検索"""
+        # リッチメニュー押下の場合はWeb検索を実行しない
+        if self.is_richmenu_action(query):
+            logger.info(f"リッチメニュー押下のためWeb検索をスキップ: {query}")
+            return []
+        
         if not self.google_api_key or not self.google_cx:
             logger.warning("Google Search API credentials not found")
             return []
@@ -86,10 +126,16 @@ class GoogleSearcher:
             return []
     
     def get_enhanced_answer(self, query: str, context: str = "", use_web_search: bool = True) -> str:
-        """Web検索結果も含めて強化された回答を生成（自然な回答版）"""
+        """Web検索結果も含めて強化された回答を生成（リッチメニュー押下時は固定応答優先）"""
         
-        # 坪単価の質問に特化した処理
-        if "坪単価" in query:
+        # リッチメニュー押下の場合は、Web検索を実行せず固定応答を優先
+        if self.is_richmenu_action(query):
+            logger.info(f"リッチメニュー押下のため固定テンプレート応答を優先: {query}")
+            # 固定テンプレートシステムに任せるため、何も処理しない
+            return ""
+        
+        # 坪単価の質問に特化した処理（AI相談での実際の質問時のみ）
+        if "坪単価" in query and not self.is_richmenu_action(query):
             # コンテキストから坪単価情報を探す
             if context:
                 # コンテキストに坪単価の情報があるか確認
@@ -114,7 +160,7 @@ class GoogleSearcher:
                 # コンテキストに情報がない場合
                 return "申し訳ございません。坪単価については、お客様のご希望や仕様によって異なるため、詳細なお見積りをご提供させていただきます。お気軽にお問い合わせください。"
         
-        # Web検索結果を取得
+        # Web検索結果を取得（AI相談での実際の質問時のみ）
         web_context = ""
         if use_web_search and self.should_search_web(query):
             logger.info(f"Performing web search for: {query}")
@@ -207,8 +253,26 @@ class GoogleSearcher:
         return cleaned
     
     def should_search_web(self, query: str) -> bool:
-        """Web検索が必要かどうかを判定"""
-        # 最新情報が必要そうなキーワード
+        """Web検索が必要かどうかを判定（リッチメニュー押下時は無効化）"""
+        
+        # リッチメニューの押下アクションの場合は絶対に検索しない
+        if self.is_richmenu_action(query):
+            logger.info(f"リッチメニュー押下のためWeb検索を無効化: {query}")
+            return False
+        
+        # リッチメニュー関連の固定応答キーワードも検索対象外
+        richmenu_related_keywords = [
+            "展示場", "来場", "予約", "資料請求", "チャット相談", 
+            "AI相談", "住まいサイト", "資金計画"
+        ]
+        
+        query_lower = query.lower()
+        for keyword in richmenu_related_keywords:
+            if keyword.lower() in query_lower and len(query.strip()) < 20:  # 短いクエリの場合
+                logger.info(f"リッチメニュー関連キーワード検出のためWeb検索をスキップ: {query}")
+                return False
+        
+        # 最新情報が必要そうなキーワード（AI相談での実際の質問時のみ有効）
         current_keywords = [
             "最新", "現在", "今", "2024", "2025", "ニュース", 
             "天気", "株価", "為替", "最近", "新しい", "トレンド",
@@ -226,14 +290,14 @@ class GoogleSearcher:
             "バージョン", "アップデート", "リリース", "最新版"
         ]
         
-        query_lower = query.lower()
-        
-        # 最新情報が必要な場合
+        # 最新情報が必要な場合（AI相談での実際の質問時のみ）
         if any(keyword in query for keyword in current_keywords):
+            logger.info(f"最新情報が必要な質問のためWeb検索を実行: {query}")
             return True
         
         # 技術的な最新情報が必要な場合
         if any(keyword in query for keyword in tech_keywords):
+            logger.info(f"技術的最新情報が必要な質問のためWeb検索を実行: {query}")
             return True
             
         # 一般的な質問の場合はFalse
@@ -241,10 +305,49 @@ class GoogleSearcher:
            not any(keyword in query for keyword in current_keywords):
             return False
             
-        # 疑問詞で始まる具体的な質問は検索する可能性
+        # 疑問詞で始まる具体的な質問は検索する可能性（但しリッチメニュー関連は除外済み）
         specific_questions = ["どこで", "いくら", "何円", "どの"]
         if any(query.startswith(q) for q in specific_questions):
+            logger.info(f"具体的な質問のためWeb検索を実行: {query}")
             return True
             
         # デフォルトはFalse（RAGデータベースを優先）
+        logger.info(f"RAGデータベース優先のためWeb検索をスキップ: {query}")
         return False
+
+# グローバル検索インスタンス
+_global_searcher = None
+
+def get_google_searcher():
+    """グローバル検索インスタンスを取得"""
+    global _global_searcher
+    if _global_searcher is None:
+        _global_searcher = GoogleSearcher()
+    return _global_searcher
+
+def should_use_web_search(query: str) -> bool:
+    """Web検索を使用すべきかの判定（外部からの呼び出し用）"""
+    searcher = get_google_searcher()
+    return searcher.should_search_web(query)
+
+def is_richmenu_pressed(query: str) -> bool:
+    """リッチメニューが押下されたかの判定（外部からの呼び出し用）"""
+    searcher = get_google_searcher()
+    return searcher.is_richmenu_action(query)
+
+def perform_web_search_if_needed(query: str, context: str = "") -> str:
+    """必要に応じてWeb検索を実行（リッチメニュー押下時は無効化）"""
+    searcher = get_google_searcher()
+    
+    # リッチメニュー押下の場合は何もせず空文字列を返す（固定テンプレートに任せる）
+    if searcher.is_richmenu_action(query):
+        logger.info(f"リッチメニュー押下のためWeb検索をスキップし、固定テンプレートに委譲: {query}")
+        return ""
+    
+    # AI相談での実際の質問の場合のみ実行
+    if searcher.should_search_web(query):
+        logger.info(f"AI相談での質問に対してWeb検索を実行: {query}")
+        return searcher.get_enhanced_answer(query, context, use_web_search=True)
+    else:
+        logger.info(f"Web検索不要と判定、RAGデータベースに委譲: {query}")
+        return ""

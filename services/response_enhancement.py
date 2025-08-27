@@ -1,4 +1,4 @@
-# services/response_enhancement.py - 応答品質向上サービス
+# services/response_enhancement.py - 応答品質向上サービス（リッチメニュー対応修正版）
 
 import logging
 import re
@@ -49,7 +49,8 @@ class ResponseEnhancementService:
             "clarity_improvements": 0,
             "platform_optimizations": 0,
             "quality_assessments": 0,
-            "average_improvement_score": 0.0
+            "average_improvement_score": 0.0,
+            "richmenu_responses_preserved": 0  # リッチメニュー応答保持数
         }
         
         # 設定
@@ -58,14 +59,25 @@ class ResponseEnhancementService:
         self.target_clarity_score = 0.8
         self.enable_auto_enhancement = True
         
+        # 🔧 リッチメニュー関連設定
+        self.preserve_richmenu_responses = True  # リッチメニュー応答保持
+        self.richmenu_response_markers = [
+            "🤖 AI住まい相談を開始します！",
+            "🌐 AI住まいサイトのご案内",
+            "📋ありがとうございます！こちらからご覧いただけます。",
+            "📍 展示場のご来場予約につきましては",
+            "💬 AI資金診断のご案内",
+            "💬 スタッフとのご相談"
+        ]
+        
         self._initialize_enhancement_rules()
         self._initialize_quality_patterns()
         self._initialize_platform_optimizers()
 
     def _initialize_enhancement_rules(self):
-        """品質向上ルールの初期化"""
+        """品質向上ルールの初期化（リッチメニュー対応）"""
         self.enhancement_rules = {
-            # 文章完全性ルール
+            # 文章完全性ルール（リッチメニュー応答は除外）
             "sentence_completion": {
                 "patterns": [
                     (r"(.+)や$", r"\1や関連する準備を進めることをお勧めします。"),
@@ -78,10 +90,11 @@ class ResponseEnhancementService:
                     (r"(.+)(は|が)$", r"\1\2重要なポイントです。"),
                     (r"(.+)(ます|です)$", r"\1\2。")
                 ],
-                "priority": 10
+                "priority": 10,
+                "exclude_richmenu": True  # リッチメニュー応答は除外
             },
             
-            # 明確性向上ルール
+            # 明確性向上ルール（リッチメニュー応答は最小限）
             "clarity_improvement": {
                 "replacements": [
                     ("こちら", "弊社"),
@@ -95,10 +108,11 @@ class ResponseEnhancementService:
                     (r"(\d+)年", r"\1年間"),
                     (r"(\d+)%", r"\1パーセント")
                 ],
-                "priority": 7
+                "priority": 7,
+                "exclude_richmenu": True  # リッチメニュー応答は除外
             },
             
-            # 情報補完ルール
+            # 情報補完ルール（リッチメニュー応答は除外）
             "information_enrichment": {
                 "context_additions": {
                     "坪単価": "※坪単価は建物の仕様、立地条件、施工時期により変動する場合があります。",
@@ -106,14 +120,15 @@ class ResponseEnhancementService:
                     "住宅ローン": "※金利や条件は金融機関により異なります。複数の機関で比較検討されることをお勧めします。",
                     "工期": "※工期は天候、地盤状況、仕様変更等により変動する場合があります。"
                 },
-                "priority": 5
+                "priority": 5,
+                "exclude_richmenu": True  # リッチメニュー応答は除外
             }
         }
 
     def _initialize_quality_patterns(self):
-        """品質評価パターンの初期化"""
+        """品質評価パターンの初期化（リッチメニュー対応）"""
         self.quality_patterns = {
-            # 完全性チェックパターン
+            # 完全性チェックパターン（リッチメニュー応答は除外）
             "completeness": {
                 "incomplete_endings": [
                     r".+[やがはで]$",
@@ -130,7 +145,8 @@ class ResponseEnhancementService:
                     r".+です。$",
                     r".+ます。$",
                     r".+ください。$"
-                ]
+                ],
+                "richmenu_exceptions": True  # リッチメニュー応答は例外扱い
             },
             
             # 明確性チェックパターン
@@ -144,7 +160,8 @@ class ResponseEnhancementService:
                 "technical_terms": [
                     "UA値", "C値", "断熱等級", "耐震等級", 
                     "ZEH", "長期優良住宅", "瑕疵担保"
-                ]
+                ],
+                "richmenu_exceptions": True  # リッチメニュー応答は例外扱い
             },
             
             # 適切性チェックパターン
@@ -156,14 +173,14 @@ class ResponseEnhancementService:
                     },
                     "line": {
                         "good_patterns": [r"😊", r"✨", r"です♪", r"ですね"],
-                        "avoid_patterns": [r"いたします", r"ございます"]
+                        "avoid_patterns": []  # LINEでは絵文字使用OK
                     }
                 }
             }
         }
 
     def _initialize_platform_optimizers(self):
-        """プラットフォーム最適化の初期化"""
+        """プラットフォーム最適化の初期化（リッチメニュー対応）"""
         self.platform_optimizers = {
             "web": {
                 "tone_adjustments": [
@@ -183,41 +200,83 @@ class ResponseEnhancementService:
                     (r"・(.+)\n・(.+)\n・(.+)", r"・\1\n・\2\n・\3\n"),
                     # 段落分けの改善
                     (r"([。！？])([A-Z])", r"\1\n\n\2")
-                ]
+                ],
+                "exclude_richmenu": True  # リッチメニュー応答は除外
             },
             
             "line": {
-                "tone_adjustments": [
-                    (r"いたします", "します😊"),
-                    (r"ございます", "です✨"),
-                    (r"申し上げます", "お伝えします"),
-                    (r"恐れ入ります", "すみません")
-                ],
-                "emoji_enhancements": [
-                    (r"住宅", "🏠住宅"),
-                    (r"お金", "💰お金"),
-                    (r"計画", "📋計画"),
-                    (r"相談", "💬相談"),
-                    (r"資料", "📄資料"),
-                    (r"見学", "👀見学")
-                ],
+                # 🔧 LINEでは最小限の調整のみ（リッチメニュー応答保持）
+                "tone_adjustments": [],  # 調整なし
+                "emoji_enhancements": [],  # 絵文字追加なし
                 "length_optimization": [
-                    # 長い文の分割
-                    (r"(.{50,}?)([、。])(.+)", r"\1\2\n\n\3"),
-                    # 簡潔化
-                    (r"ということです", "です"),
-                    (r"というものです", "です")
-                ]
+                    # 極端に長い文のみ分割（400文字超える場合のみ）
+                    (r"(.{400,}?)([、。])(.+)", r"\1\2\n\n\3")
+                ],
+                "exclude_richmenu": True  # リッチメニュー応答は完全除外
             }
         }
 
+    def _is_richmenu_response(self, response: str) -> bool:
+        """リッチメニュー応答かどうかを判定"""
+        if not self.preserve_richmenu_responses:
+            return False
+        
+        # マーカー文字列での判定
+        for marker in self.richmenu_response_markers:
+            if marker in response:
+                return True
+        
+        # リッチメニューボタン名での判定
+        richmenu_buttons = [
+            "🤖 AI相談", "🌐 AI住まいサイト", "📋 資料請求",
+            "📍 展示場来場　予約", "💰 資金計画", "💬 チャット相談"
+        ]
+        
+        for button in richmenu_buttons:
+            if response.strip().startswith(button):
+                return True
+        
+        # 特徴的なフレーズでの判定
+        richmenu_phrases = [
+            "キノエデザインの住まいAIコンシェルジュです",
+            "展示場のご来場予約につきましては",
+            "AI資金診断のご案内",
+            "スタッフとのご相談",
+            "プライバシーポリシー：【",
+            "利用規約：【",
+            "Cookie：【"
+        ]
+        
+        for phrase in richmenu_phrases:
+            if phrase in response:
+                return True
+        
+        return False
+
     async def enhance_response(self, response: str, query: str, platform: str = "web",
                              user_context: Optional[Dict] = None) -> Dict[str, Any]:
-        """応答品質向上のメイン処理"""
+        """応答品質向上のメイン処理（リッチメニュー対応）"""
         start_time = time.time()
         self.stats["total_enhancements"] += 1
         
         try:
+            # 🔧 リッチメニュー応答の場合は最小限の処理で保持
+            if self._is_richmenu_response(response):
+                self.stats["richmenu_responses_preserved"] += 1
+                logger.info(f"🎯 Richmenu response detected - preserving original content")
+                
+                # リッチメニュー応答は元のまま返す
+                return {
+                    "enhanced_response": response,  # そのまま保持
+                    "original_response": response,
+                    "quality_assessment": None,  # 評価スキップ
+                    "enhancements_applied": ["richmenu_preservation"],
+                    "processing_time": time.time() - start_time,
+                    "improvement_score": 0.0,
+                    "richmenu_response": True
+                }
+            
+            # 通常の応答処理
             # 1. 品質評価
             quality_assessment = await self._assess_response_quality(
                 response, query, platform, user_context
@@ -238,32 +297,35 @@ class ResponseEnhancementService:
             enhanced_response = response
             applied_enhancements = []
             
-            # 文章完全性の修正
-            if QualityIssueType.INCOMPLETE_SENTENCE in quality_assessment.issues:
+            # 文章完全性の修正（リッチメニュー応答以外）
+            if (QualityIssueType.INCOMPLETE_SENTENCE in quality_assessment.issues and
+                not self._is_richmenu_response(enhanced_response)):
                 enhanced_response = self._fix_sentence_completion(
                     enhanced_response, platform
                 )
                 applied_enhancements.append("sentence_completion")
                 self.stats["completeness_fixes"] += 1
             
-            # 明確性の向上
-            if QualityIssueType.UNCLEAR_CONTENT in quality_assessment.issues:
+            # 明確性の向上（リッチメニュー応答以外）
+            if (QualityIssueType.UNCLEAR_CONTENT in quality_assessment.issues and
+                not self._is_richmenu_response(enhanced_response)):
                 enhanced_response = self._improve_clarity(
                     enhanced_response, query, platform
                 )
                 applied_enhancements.append("clarity_improvement")
                 self.stats["clarity_improvements"] += 1
             
-            # プラットフォーム最適化
+            # プラットフォーム最適化（リッチメニュー応答は最小限）
             enhanced_response = self._optimize_for_platform(
                 enhanced_response, platform, user_context
             )
             applied_enhancements.append("platform_optimization")
             self.stats["platform_optimizations"] += 1
             
-            # 長さ調整
-            if (QualityIssueType.TOO_SHORT in quality_assessment.issues or 
-                QualityIssueType.TOO_LONG in quality_assessment.issues):
+            # 長さ調整（リッチメニュー応答は除外）
+            if ((QualityIssueType.TOO_SHORT in quality_assessment.issues or 
+                QualityIssueType.TOO_LONG in quality_assessment.issues) and
+                not self._is_richmenu_response(enhanced_response)):
                 enhanced_response = self._adjust_response_length(
                     enhanced_response, platform, quality_assessment
                 )
@@ -306,8 +368,21 @@ class ResponseEnhancementService:
 
     async def _assess_response_quality(self, response: str, query: str, 
                                      platform: str, user_context: Optional[Dict]) -> QualityAssessment:
-        """応答品質の評価"""
+        """応答品質の評価（リッチメニュー対応）"""
         self.stats["quality_assessments"] += 1
+        
+        # 🔧 リッチメニュー応答は高品質として扱う
+        if self._is_richmenu_response(response):
+            return QualityAssessment(
+                overall_score=0.95,  # 高品質スコア
+                issues=[],
+                suggestions=[],
+                completeness_score=1.0,
+                clarity_score=1.0,
+                appropriateness_score=1.0,
+                platform_optimization_score=1.0,
+                confidence=1.0
+            )
         
         issues = []
         suggestions = []
@@ -367,7 +442,11 @@ class ResponseEnhancementService:
         )
 
     def _evaluate_completeness(self, response: str) -> float:
-        """文章完全性の評価"""
+        """文章完全性の評価（リッチメニュー対応）"""
+        # リッチメニュー応答は完全として扱う
+        if self._is_richmenu_response(response):
+            return 1.0
+        
         patterns = self.quality_patterns["completeness"]
         
         # 不完全な終わり方をチェック
@@ -387,7 +466,11 @@ class ResponseEnhancementService:
         return 0.8  # 標準スコア
 
     def _evaluate_clarity(self, response: str, query: str) -> float:
-        """明確性の評価"""
+        """明確性の評価（リッチメニュー対応）"""
+        # リッチメニュー応答は明確として扱う
+        if self._is_richmenu_response(response):
+            return 1.0
+        
         patterns = self.quality_patterns["clarity"]
         score = 1.0
         
@@ -415,7 +498,11 @@ class ResponseEnhancementService:
         return max(0.0, min(1.0, score))
 
     def _evaluate_platform_appropriateness(self, response: str, platform: str) -> float:
-        """プラットフォーム適合性の評価"""
+        """プラットフォーム適合性の評価（リッチメニュー対応）"""
+        # リッチメニュー応答は適切として扱う
+        if self._is_richmenu_response(response):
+            return 1.0
+        
         if platform not in self.quality_patterns["appropriateness"]["platform_specific"]:
             return 0.8  # デフォルトスコア
         
@@ -437,7 +524,11 @@ class ResponseEnhancementService:
         return max(0.0, min(1.0, score))
 
     def _evaluate_platform_optimization(self, response: str, platform: str) -> float:
-        """プラットフォーム最適化の評価"""
+        """プラットフォーム最適化の評価（リッチメニュー対応）"""
+        # リッチメニュー応答は最適化済みとして扱う
+        if self._is_richmenu_response(response):
+            return 1.0
+        
         if platform == "line":
             # LINE最適化評価
             emoji_count = len(re.findall(r'[😀-🿿]', response))
@@ -502,7 +593,11 @@ class ResponseEnhancementService:
         return False
 
     def _fix_sentence_completion(self, response: str, platform: str) -> str:
-        """文章完全性の修正"""
+        """文章完全性の修正（リッチメニュー応答は除外）"""
+        # リッチメニュー応答は変更しない
+        if self._is_richmenu_response(response):
+            return response
+        
         rules = self.enhancement_rules["sentence_completion"]
         
         enhanced = response.strip()
@@ -512,7 +607,7 @@ class ResponseEnhancementService:
                 enhanced = re.sub(pattern, replacement, enhanced)
                 break
         
-        # プラットフォーム別調整
+        # プラットフォーム別調整（リッチメニュー以外）
         if platform == "line" and not enhanced.endswith(('。', '！', '？')):
             if enhanced.endswith(('です', 'ます')):
                 enhanced += '😊'
@@ -522,7 +617,11 @@ class ResponseEnhancementService:
         return enhanced
 
     def _improve_clarity(self, response: str, query: str, platform: str) -> str:
-        """明確性の向上"""
+        """明確性の向上（リッチメニュー応答は除外）"""
+        # リッチメニュー応答は変更しない
+        if self._is_richmenu_response(response):
+            return response
+        
         rules = self.enhancement_rules["clarity_improvement"]
         enhanced = response
         
@@ -544,37 +643,41 @@ class ResponseEnhancementService:
 
     def _optimize_for_platform(self, response: str, platform: str, 
                              user_context: Optional[Dict]) -> str:
-        """プラットフォーム最適化"""
+        """プラットフォーム最適化（リッチメニュー応答は最小限処理）"""
+        # 🔧 リッチメニュー応答は最小限の処理のみ
+        if self._is_richmenu_response(response):
+            # 極端に長い場合のみ分割（1000文字超える場合）
+            if len(response) > 1000 and platform == "line":
+                # 改行で自然分割
+                lines = response.split('\n')
+                if len('\n'.join(lines[:len(lines)//2])) < 800:
+                    return '\n'.join(lines[:len(lines)//2])
+            return response  # 基本的にはそのまま返す
+        
         if platform not in self.platform_optimizers:
             return response
         
         optimizer = self.platform_optimizers[platform]
         enhanced = response
         
-        # トーン調整
+        # トーン調整（リッチメニュー以外）
         for old, new in optimizer.get("tone_adjustments", []):
             enhanced = re.sub(old, new, enhanced)
         
         # プラットフォーム特有の改善
         if platform == "web":
-            # フォーマル化
+            # フォーマル化（リッチメニュー以外）
             for old, new in optimizer.get("formality_enhancements", []):
                 enhanced = enhanced.replace(old, new)
             
-            # 構造改善
+            # 構造改善（リッチメニュー以外）
             for pattern, replacement in optimizer.get("structure_improvements", []):
                 enhanced = re.sub(pattern, replacement, enhanced)
         
         elif platform == "line":
-            # 絵文字追加（過度にならないよう注意）
-            emoji_count = len(re.findall(r'[😀-🿿]', enhanced))
-            if emoji_count < 2:
-                for old, new in optimizer.get("emoji_enhancements", []):
-                    if old in enhanced:
-                        enhanced = enhanced.replace(old, new, 1)  # 1回だけ置換
-                        break
+            # LINEでは最小限の調整のみ（リッチメニュー応答は完全除外済み）
             
-            # 長さ最適化
+            # 長さ最適化（極端に長い場合のみ）
             for pattern, replacement in optimizer.get("length_optimization", []):
                 enhanced = re.sub(pattern, replacement, enhanced)
         
@@ -582,7 +685,11 @@ class ResponseEnhancementService:
 
     def _adjust_response_length(self, response: str, platform: str, 
                               assessment: QualityAssessment) -> str:
-        """応答長の調整"""
+        """応答長の調整（リッチメニュー応答は除外）"""
+        # リッチメニュー応答は変更しない
+        if self._is_richmenu_response(response):
+            return response
+        
         if QualityIssueType.TOO_SHORT in assessment.issues:
             return self._expand_response(response, platform)
         elif QualityIssueType.TOO_LONG in assessment.issues:
@@ -590,7 +697,11 @@ class ResponseEnhancementService:
         return response
 
     def _expand_response(self, response: str, platform: str) -> str:
-        """応答の拡張"""
+        """応答の拡張（リッチメニュー応答は除外）"""
+        # リッチメニュー応答は変更しない
+        if self._is_richmenu_response(response):
+            return response
+        
         if platform == "line":
             # LINE用の短い追加情報
             additions = [
@@ -614,7 +725,11 @@ class ResponseEnhancementService:
         return response
 
     def _compress_response(self, response: str, platform: str) -> str:
-        """応答の圧縮"""
+        """応答の圧縮（リッチメニュー応答は除外）"""
+        # リッチメニュー応答は変更しない
+        if self._is_richmenu_response(response):
+            return response
+        
         # 不要な繰り返しの除去
         sentences = response.split('。')
         unique_sentences = []
@@ -645,7 +760,7 @@ class ResponseEnhancementService:
         return compressed
 
     def get_service_stats(self) -> Dict[str, Any]:
-        """サービス統計取得"""
+        """サービス統計取得（リッチメニュー対応）"""
         return {
             "performance": {
                 "total_enhancements": self.stats["total_enhancements"],
@@ -653,31 +768,35 @@ class ResponseEnhancementService:
                 "clarity_improvements": self.stats["clarity_improvements"],
                 "platform_optimizations": self.stats["platform_optimizations"],
                 "quality_assessments": self.stats["quality_assessments"],
-                "average_improvement_score": self.stats["average_improvement_score"]
+                "average_improvement_score": self.stats["average_improvement_score"],
+                "richmenu_responses_preserved": self.stats["richmenu_responses_preserved"]  # 追加
             },
             "enhancement_rates": {
                 "completeness_fix_rate": (self.stats["completeness_fixes"] / max(1, self.stats["total_enhancements"]) * 100),
                 "clarity_improvement_rate": (self.stats["clarity_improvements"] / max(1, self.stats["total_enhancements"]) * 100),
-                "platform_optimization_rate": (self.stats["platform_optimizations"] / max(1, self.stats["total_enhancements"]) * 100)
+                "platform_optimization_rate": (self.stats["platform_optimizations"] / max(1, self.stats["total_enhancements"]) * 100),
+                "richmenu_preservation_rate": (self.stats["richmenu_responses_preserved"] / max(1, self.stats["total_enhancements"]) * 100)  # 追加
             },
             "configuration": {
                 "auto_enhancement_enabled": self.enable_auto_enhancement,
                 "min_response_length": self.min_response_length,
                 "max_response_length": self.max_response_length,
-                "target_clarity_score": self.target_clarity_score
+                "target_clarity_score": self.target_clarity_score,
+                "preserve_richmenu_responses": self.preserve_richmenu_responses  # 追加
             },
             "enhancement_features": [
-                "Sentence completion",
-                "Clarity improvement", 
-                "Platform optimization",
-                "Length adjustment",
-                "Tone adjustment",
-                "Information enrichment"
+                "Sentence completion (excluding richmenu)",
+                "Clarity improvement (excluding richmenu)", 
+                "Platform optimization (minimal for richmenu)",
+                "Length adjustment (excluding richmenu)",
+                "Tone adjustment (excluding richmenu)",
+                "Information enrichment (excluding richmenu)",
+                "Richmenu response preservation"  # 追加
             ]
         }
 
     def configure(self, **kwargs) -> None:
-        """サービス設定の更新"""
+        """サービス設定の更新（リッチメニュー対応）"""
         for key, value in kwargs.items():
             if hasattr(self, key):
                 setattr(self, key, value)

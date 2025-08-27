@@ -3,7 +3,7 @@
 import os
 import time
 import logging
-from typing import Dict, Any, List  # List を追加
+from typing import Dict, Any, List
 from collections import deque
 from datetime import datetime, timedelta
 
@@ -22,7 +22,7 @@ class SpeedOptimizationConfig:
     }
     
     # ==============================================================================
-    # 🚀 RAG最適化設定
+    # 🚀 RAG最適化設定（質問到着後のみ使用）
     # ==============================================================================
     RAG_OPTIMIZATION = {
         "search_k": int(os.getenv("OPTIMIZED_SEARCH_K", "1")),  # 削減：2→1
@@ -30,7 +30,9 @@ class SpeedOptimizationConfig:
         "cache_expire_time": int(os.getenv("RAG_CACHE_EXPIRE", "1800")),  # 30分
         "enable_rag_avoidance": os.getenv("ENABLE_RAG_AVOIDANCE", "true").lower() == "true",
         "rag_usage_target": float(os.getenv("RAG_USAGE_TARGET", "0.05")),  # 5%以下
-        "embedding_batch_size": int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+        "embedding_batch_size": int(os.getenv("EMBEDDING_BATCH_SIZE", "32")),
+        "disable_for_richmenu": True,  # リッチメニュー押下時はRAG無効化
+        "require_user_question": True   # ユーザー質問がある場合のみRAG使用
     }
     
     # ==============================================================================
@@ -44,49 +46,70 @@ class SpeedOptimizationConfig:
     }
     
     # ==============================================================================
-    # 🚀 テンプレート最適化設定
+    # 🚀 テンプレート最適化設定（リッチメニュー優先）
     # ==============================================================================
     TEMPLATE_OPTIMIZATION = {
         "enable_instant_templates": os.getenv("ENABLE_INSTANT_TEMPLATES", "true").lower() == "true",
-        "template_priority_over_rag": os.getenv("TEMPLATE_PRIORITY", "true").lower() == "true",
+        "template_priority_over_rag": True,  # 常にテンプレート優先
         "max_template_length": int(os.getenv("MAX_TEMPLATE_LENGTH", "800")),
-        "line_template_length": int(os.getenv("LINE_TEMPLATE_LENGTH", "400"))
+        "line_template_length": int(os.getenv("LINE_TEMPLATE_LENGTH", "400")),
+        "force_template_for_richmenu": True,  # リッチメニューは強制的にテンプレート使用
+        "richmenu_bypass_all": True  # リッチメニューは全処理をバイパス
     }
     
     # ==============================================================================
-    # 🚀 LINEボット最適化設定
+    # 🚀 LINEボット最適化設定（テンプレート即時応答）
     # ==============================================================================
     LINE_OPTIMIZATION = {
         "duplicate_window": int(os.getenv("LINE_DUPLICATE_WINDOW", "45")),  # 短縮
         "event_window": int(os.getenv("LINE_EVENT_WINDOW", "8")),
         "log_throttle_window": int(os.getenv("LINE_LOG_THROTTLE", "120")),  # ログ削減
         "rag_timeout": int(os.getenv("LINE_RAG_TIMEOUT", "3")),  # 超短縮
-        "enable_ultra_strict_rag": os.getenv("LINE_ULTRA_STRICT_RAG", "true").lower() == "true"
+        "enable_ultra_strict_rag": os.getenv("LINE_ULTRA_STRICT_RAG", "true").lower() == "true",
+        "richmenu_instant_response": True,  # リッチメニューは即時応答
+        "richmenu_skip_rag": True,  # リッチメニューはRAGスキップ
+        "richmenu_skip_search": True,  # リッチメニューは検索スキップ
+        "richmenu_skip_llm": True  # リッチメニューはLLM処理スキップ
     }
     
     # ==============================================================================
-    # 🚀 アンチハルチネーション最適化設定
+    # 🚀 アンチハルチネーション最適化設定（質問到着後のみ）
     # ==============================================================================
     ANTI_HALLUCINATION_OPTIMIZATION = {
         "enable_strict_filtering": os.getenv("STRICT_ANTI_HALLUCINATION", "true").lower() == "true",
         "timeout_seconds": int(os.getenv("ANTI_HALLUCINATION_TIMEOUT", "8")),
         "conditions_required": int(os.getenv("ANTI_HALLUCINATION_CONDITIONS", "2")),  # 2/3条件
         "min_query_length": int(os.getenv("ANTI_HALLUCINATION_MIN_LENGTH", "30")),
-        "enable_basic_filter_fallback": os.getenv("ENABLE_BASIC_FILTER", "true").lower() == "true"
+        "enable_basic_filter_fallback": os.getenv("ENABLE_BASIC_FILTER", "true").lower() == "true",
+        "disable_for_richmenu": True,  # リッチメニュー押下時は無効
+        "require_user_question": True   # ユーザー質問がある場合のみ使用
+    }
+    
+    # ==============================================================================
+    # 🚀 Web検索最適化設定（質問到着後のみ）
+    # ==============================================================================
+    WEB_SEARCH_OPTIMIZATION = {
+        "enable_web_search": os.getenv("ENABLE_WEB_SEARCH", "false").lower() == "true",
+        "search_timeout": int(os.getenv("WEB_SEARCH_TIMEOUT", "5")),
+        "max_results": int(os.getenv("WEB_SEARCH_MAX_RESULTS", "3")),
+        "disable_for_richmenu": True,  # リッチメニュー押下時は無効
+        "require_explicit_request": True,  # 明示的な要求時のみ検索
+        "require_user_question": True  # ユーザー質問がある場合のみ使用
     }
     
     # ==============================================================================
     # 🚀 パフォーマンス目標設定
     # ==============================================================================
     PERFORMANCE_TARGETS = {
-        "template_response_time": 0.3,      # 300ms以下
-        "rag_response_time": 6.0,           # 6秒以下
+        "template_response_time": 0.3,      # 300ms以下（リッチメニュー用）
+        "rag_response_time": 6.0,           # 6秒以下（質問応答用）
         "cache_hit_response_time": 0.1,     # 100ms以下
-        "line_response_time": 2.0,          # 2秒以下
-        "template_hit_rate": 0.85,          # 85%以上
+        "line_response_time": 0.5,          # 500ms以下（リッチメニュー）
+        "template_hit_rate": 0.95,          # 95%以上（リッチメニュー）
         "rag_usage_rate": 0.05,             # 5%以下
         "cache_hit_rate": 0.70,             # 70%以上
-        "anti_hallucination_usage": 0.02    # 2%以下
+        "anti_hallucination_usage": 0.02,   # 2%以下
+        "richmenu_response_time": 0.2       # 200ms以下（超高速）
     }
     
     # ==============================================================================
@@ -99,6 +122,11 @@ class SpeedOptimizationConfig:
         "enable_instant_templates": os.getenv("ENABLE_INSTANT_TEMPLATES", "true").lower() == "true",
         "enable_ultra_fast_cache": os.getenv("ENABLE_ULTRA_FAST_CACHE", "true").lower() == "true",
         
+        # リッチメニュー専用フラグ
+        "richmenu_force_template": True,  # リッチメニューは強制テンプレート
+        "richmenu_skip_all_processing": True,  # リッチメニューは全処理スキップ
+        "richmenu_instant_only": True,  # リッチメニューは即時応答のみ
+        
         # デバッグ・監視
         "enable_performance_monitoring": os.getenv("ENABLE_PERF_MONITORING", "true").lower() == "true",
         "enable_detailed_logging": os.getenv("ENABLE_DETAILED_LOGGING", "false").lower() == "true",
@@ -110,6 +138,95 @@ class SpeedOptimizationConfig:
         "maintain_backward_compatibility": os.getenv("BACKWARD_COMPATIBILITY", "true").lower() == "true"
     }
     
+    # ==============================================================================
+    # 🚀 リッチメニュー専用設定
+    # ==============================================================================
+    RICHMENU_OPTIMIZATION = {
+        "bypass_all": True,  # 全処理バイパス
+        "template_only": True,  # テンプレートのみ使用
+        "no_rag": True,  # RAG使用しない
+        "no_search": True,  # 検索使用しない
+        "no_llm": True,  # LLM使用しない
+        "no_anti_hallucination": True,  # アンチハルシネーション使用しない
+        "instant_response": True,  # 即時応答
+        "max_response_time": 0.2  # 最大200ms
+    }
+    
+    @classmethod
+    def should_use_template_only(cls, message_text: str) -> bool:
+        """テンプレートのみ使用すべきか判定"""
+        # リッチメニューのキーワード
+        richmenu_keywords = [
+            "🤖 AI相談",
+            "🌐 AI住まいサイト", 
+            "📋 資料請求",
+            "📍 展示場来場　予約",
+            "💰 資金計画",
+            "💬 チャット相談"
+        ]
+        
+        # リッチメニューボタンの場合は常にテンプレート
+        for keyword in richmenu_keywords:
+            if keyword in message_text:
+                return True
+        
+        return False
+    
+    @classmethod
+    def should_skip_rag(cls, message_text: str) -> bool:
+        """RAGをスキップすべきか判定"""
+        # リッチメニューボタンの場合は常にスキップ
+        if cls.should_use_template_only(message_text):
+            return True
+        
+        # その他の条件でもRAGスキップ判定
+        if cls.RAG_OPTIMIZATION.get("disable_for_richmenu"):
+            return cls.should_use_template_only(message_text)
+        
+        return False
+    
+    @classmethod
+    def should_skip_web_search(cls, message_text: str) -> bool:
+        """Web検索をスキップすべきか判定"""
+        # リッチメニューボタンの場合は常にスキップ
+        if cls.should_use_template_only(message_text):
+            return True
+        
+        # Web検索は明示的な要求がない限りスキップ
+        if cls.WEB_SEARCH_OPTIMIZATION.get("require_explicit_request"):
+            search_keywords = ["最新", "ニュース", "現在", "今"]
+            return not any(keyword in message_text for keyword in search_keywords)
+        
+        return False
+    
+    @classmethod
+    def should_skip_anti_hallucination(cls, message_text: str) -> bool:
+        """アンチハルシネーションをスキップすべきか判定"""
+        # リッチメニューボタンの場合は常にスキップ
+        if cls.should_use_template_only(message_text):
+            return True
+        
+        # 短い質問の場合もスキップ
+        if len(message_text) < cls.ANTI_HALLUCINATION_OPTIMIZATION.get("min_query_length", 30):
+            return True
+        
+        return False
+    
+    @classmethod
+    def get_processing_flags(cls, message_text: str) -> Dict[str, bool]:
+        """メッセージに対する処理フラグを取得"""
+        is_richmenu = cls.should_use_template_only(message_text)
+        
+        return {
+            "use_template_only": is_richmenu,
+            "skip_rag": is_richmenu or cls.should_skip_rag(message_text),
+            "skip_web_search": is_richmenu or cls.should_skip_web_search(message_text),
+            "skip_anti_hallucination": is_richmenu or cls.should_skip_anti_hallucination(message_text),
+            "skip_llm": is_richmenu,
+            "instant_response": is_richmenu,
+            "is_richmenu": is_richmenu
+        }
+    
     @classmethod
     def get_all_settings(cls) -> Dict[str, Any]:
         """全設定取得"""
@@ -120,6 +237,8 @@ class SpeedOptimizationConfig:
             "template_optimization": cls.TEMPLATE_OPTIMIZATION,
             "line_optimization": cls.LINE_OPTIMIZATION,
             "anti_hallucination_optimization": cls.ANTI_HALLUCINATION_OPTIMIZATION,
+            "web_search_optimization": cls.WEB_SEARCH_OPTIMIZATION,
+            "richmenu_optimization": cls.RICHMENU_OPTIMIZATION,
             "performance_targets": cls.PERFORMANCE_TARGETS,
             "feature_flags": cls.FEATURE_FLAGS
         }
@@ -136,15 +255,13 @@ class SpeedOptimizationConfig:
         if cls.LLM_OPTIMIZATION["request_timeout"] > 15:
             warnings.append("request_timeout > 15s may cause user experience issues")
         
-        # RAG設定検証
-        if cls.RAG_OPTIMIZATION["rag_timeout"] > 10:
-            warnings.append("rag_timeout > 10s is not recommended for production")
-        if cls.RAG_OPTIMIZATION["rag_usage_target"] > 0.2:
-            warnings.append("rag_usage_target > 20% may impact response speed")
+        # RAG設定検証（質問応答時のみ使用）
+        if not cls.RAG_OPTIMIZATION["disable_for_richmenu"]:
+            warnings.append("RAG should be disabled for richmenu responses")
         
-        # キャッシュ設定検証
-        if cls.CACHE_OPTIMIZATION["max_cache_size"] < 1000:
-            warnings.append("max_cache_size < 1000 may reduce cache effectiveness")
+        # リッチメニュー設定検証
+        if not cls.RICHMENU_OPTIMIZATION["template_only"]:
+            errors.append("Richmenu must use template only")
         
         return {
             "status": "error" if errors else "warning" if warnings else "valid",
@@ -165,7 +282,7 @@ ENABLE_STREAMING=true
 OPTIMIZED_TEMPERATURE=0.1
 OPTIMIZED_MAX_RETRIES=2
 
-# RAG Optimization
+# RAG Optimization (User questions only)
 OPTIMIZED_SEARCH_K=1
 OPTIMIZED_RAG_TIMEOUT=6
 RAG_CACHE_EXPIRE=1800
@@ -179,7 +296,7 @@ CACHE_EXPIRE_HOURS=1
 ENABLE_FAQ_PRELOAD=true
 CACHE_CLEANUP_INTERVAL=180
 
-# Template Optimization
+# Template Optimization (Richmenu priority)
 ENABLE_INSTANT_TEMPLATES=true
 TEMPLATE_PRIORITY=true
 MAX_TEMPLATE_LENGTH=800
@@ -192,12 +309,17 @@ LINE_LOG_THROTTLE=120
 LINE_RAG_TIMEOUT=3
 LINE_ULTRA_STRICT_RAG=true
 
-# Anti-Hallucination Optimization
+# Anti-Hallucination Optimization (User questions only)
 STRICT_ANTI_HALLUCINATION=true
 ANTI_HALLUCINATION_TIMEOUT=8
 ANTI_HALLUCINATION_CONDITIONS=2
 ANTI_HALLUCINATION_MIN_LENGTH=30
 ENABLE_BASIC_FILTER=true
+
+# Web Search (User questions only)
+ENABLE_WEB_SEARCH=false
+WEB_SEARCH_TIMEOUT=5
+WEB_SEARCH_MAX_RESULTS=3
 
 # Performance Monitoring
 ENABLE_PERF_MONITORING=true
@@ -233,7 +355,9 @@ class SpeedOptimizationMonitor:
             "cache_hits": 0,
             "rag_avoided": 0,
             "anti_hallucination_used": 0,
-            "slow_responses": 0
+            "slow_responses": 0,
+            "richmenu_responses": 0,
+            "user_question_responses": 0
         }
         
     def record_response(self, response_time: float, source: str, optimizations: Dict[str, Any] = None):
@@ -260,9 +384,14 @@ class SpeedOptimizationMonitor:
                 self.optimization_stats["rag_avoided"] += 1
             if optimizations.get("anti_hallucination_used"):
                 self.optimization_stats["anti_hallucination_used"] += 1
+            if optimizations.get("is_richmenu"):
+                self.optimization_stats["richmenu_responses"] += 1
+            else:
+                self.optimization_stats["user_question_responses"] += 1
         
-        # 遅延応答記録
-        if response_time > self.config.FEATURE_FLAGS["slow_response_threshold"]:
+        # 遅延応答記録（リッチメニューは別基準）
+        threshold = 0.5 if optimizations and optimizations.get("is_richmenu") else self.config.FEATURE_FLAGS["slow_response_threshold"]
+        if response_time > threshold:
             self.optimization_stats["slow_responses"] += 1
             self.slow_responses.append({
                 "time": response_time,
@@ -292,6 +421,7 @@ class SpeedOptimizationMonitor:
         rag_rate = (self.optimization_stats["rag_hits"] / total * 100) if total > 0 else 0
         cache_rate = (self.optimization_stats["cache_hits"] / total * 100) if total > 0 else 0
         rag_avoidance_rate = (self.optimization_stats["rag_avoided"] / total * 100) if total > 0 else 0
+        richmenu_rate = (self.optimization_stats["richmenu_responses"] / total * 100) if total > 0 else 0
         
         # 目標達成状況
         targets = self.config.PERFORMANCE_TARGETS
@@ -308,13 +438,16 @@ class SpeedOptimizationMonitor:
                 "median_response_time": median_response_time,
                 "p95_response_time": p95_response_time,
                 "total_requests": total,
-                "slow_responses": self.optimization_stats["slow_responses"]
+                "slow_responses": self.optimization_stats["slow_responses"],
+                "richmenu_responses": self.optimization_stats["richmenu_responses"],
+                "user_question_responses": self.optimization_stats["user_question_responses"]
             },
             "optimization_effectiveness": {
                 "template_hit_rate": template_rate,
                 "rag_usage_rate": rag_rate,
                 "cache_hit_rate": cache_rate,
                 "rag_avoidance_rate": rag_avoidance_rate,
+                "richmenu_rate": richmenu_rate,
                 "anti_hallucination_usage": (self.optimization_stats["anti_hallucination_used"] / total * 100) if total > 0 else 0
             },
             "target_achievements": target_achievements,
@@ -348,6 +481,7 @@ def apply_speed_optimizations():
         logging.getLogger(__name__).info(f"   - RAG timeout: {optimizations['rag_optimization']['rag_timeout']}s")
         logging.getLogger(__name__).info(f"   - Cache size: {optimizations['cache_optimization']['max_cache_size']}")
         logging.getLogger(__name__).info(f"   - RAG avoidance: {optimizations['rag_optimization']['enable_rag_avoidance']}")
+        logging.getLogger(__name__).info(f"   - Richmenu instant: {optimizations['richmenu_optimization']['instant_response']}")
         
         return True
     else:
@@ -378,19 +512,24 @@ def _generate_optimization_recommendations(performance_report: Dict[str, Any]) -
     metrics = performance_report["performance_metrics"]
     effectiveness = performance_report["optimization_effectiveness"]
     
+    # リッチメニュー応答に基づく推奨
+    if effectiveness.get("richmenu_rate", 0) > 0:
+        richmenu_responses = metrics.get("richmenu_responses", 0)
+        if richmenu_responses > 0:
+            recommendations.append("✅ Richmenu responses using instant templates")
+    
     # 応答時間に基づく推奨
     if metrics["avg_response_time"] > 3.0:
-        recommendations.append("🚀 Consider reducing RAG timeout further")
+        recommendations.append("🚀 Consider reducing RAG timeout further for user questions")
         recommendations.append("📈 Increase template coverage")
     
     # キャッシュ効率に基づく推奨
     if effectiveness["cache_hit_rate"] < 60:
         recommendations.append("💾 Increase cache size or improve cache key normalization")
     
-    # RAG使用率に基づく推奨
+    # RAG使用率に基づく推奨（ユーザー質問のみ）
     if effectiveness["rag_usage_rate"] > 10:
-        recommendations.append("🚫 Strengthen RAG avoidance conditions")
-        recommendations.append("📋 Add more template patterns")
+        recommendations.append("🚫 RAG usage high for user questions - review query patterns")
     
     # 遅延応答に基づく推奨
     if metrics["slow_responses"] > metrics["total_requests"] * 0.1:
@@ -444,6 +583,20 @@ if __name__ == "__main__":
     print("🚀 Speed Optimization Configuration Test")
     print("=" * 50)
     
+    # リッチメニューメッセージテスト
+    test_messages = [
+        "🤖 AI相談",
+        "🌐 AI住まいサイト",
+        "普通の質問です",
+        "最新のニュースを教えて"
+    ]
+    
+    print("\nMessage Processing Flags Test:")
+    for msg in test_messages:
+        flags = config.get_processing_flags(msg)
+        print(f"\nMessage: {msg}")
+        print(f"  Flags: {flags}")
+    
     # 設定値表示
     settings = config.get_all_settings()
     for category, values in settings.items():
@@ -458,8 +611,3 @@ if __name__ == "__main__":
         print("Warnings:")
         for warning in validation['warnings']:
             print(f"  ⚠️ {warning}")
-    
-    # 環境変数テンプレート生成
-    print("\n" + "=" * 50)
-    print("Environment Template:")
-    print(config.get_environment_template())

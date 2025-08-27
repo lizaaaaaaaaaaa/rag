@@ -1,4 +1,4 @@
-# integration/anti_hallucination_integration.py - 最適化版（条件厳格化・応答速度優先）
+# integration/anti_hallucination_integration.py - 最適化版（リッチメニュー押下時は無効化）
 
 import logging
 import asyncio
@@ -20,10 +20,26 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 class OptimizedAntiHallucinationIntegration:
-    """最適化ハルチネーション対策統合クラス（条件厳格化・速度重視）"""
+    """最適化ハルチネーション対策統合クラス（リッチメニュー押下時は無効化・AI相談時のみ有効）"""
     
     def __init__(self):
-        # 🚀 厳格化：補助金関連キーワードを限定
+        # リッチメニューの固定応答キーワード（ハルチネーション対策を無効化）
+        self.richmenu_keywords = [
+            "🤖 AI相談",
+            "🌐 AI住まいサイト", 
+            "📋 資料請求",
+            "📍 展示場来場",
+            "💰 資金計画",
+            "💬 チャット相談",
+            "AI相談",
+            "AI住まいサイト",
+            "資料請求",
+            "展示場来場",
+            "資金計画",
+            "チャット相談"
+        ]
+        
+        # 🚀 厳格化：補助金関連キーワードを限定（AI相談での実際の質問時のみ適用）
         self.strict_subsidy_keywords = [
             # 明確な補助金制度名のみ
             "zeh補助金", "zeh支援事業", "ネット・ゼロ・エネルギー・ハウス支援事業",
@@ -50,6 +66,7 @@ class OptimizedAntiHallucinationIntegration:
         self.processing_stats = {
             "should_use_calls": 0,
             "should_use_approved": 0,
+            "richmenu_blocked": 0,
             "processing_attempts": 0,
             "processing_successes": 0,
             "processing_timeouts": 0,
@@ -57,9 +74,34 @@ class OptimizedAntiHallucinationIntegration:
             "sync_fallbacks": 0
         }
     
+    def is_richmenu_action(self, query: str) -> bool:
+        """リッチメニューの押下アクションかどうかを判定"""
+        query_stripped = query.strip()
+        
+        # 完全一致チェック（絵文字付き・絵文字なし両方）
+        for keyword in self.richmenu_keywords:
+            if query_stripped == keyword:
+                logger.info(f"🚫 リッチメニュー押下を検出、ハルチネーション対策を無効化: {query}")
+                return True
+        
+        # 部分一致チェック（短いキーワードの場合）
+        short_keywords = ["AI相談", "資料請求", "展示場来場", "資金計画", "チャット相談"]
+        for keyword in short_keywords:
+            if query_stripped == keyword or query_stripped.endswith(keyword):
+                logger.info(f"🚫 リッチメニュー関連キーワードを検出、ハルチネーション対策を無効化: {query}")
+                return True
+        
+        return False
+    
     def should_use_anti_hallucination_strict(self, query: str) -> bool:
-        """🚀 厳格なハルチネーション対策使用判定（大幅条件削減）"""
+        """🚀 厳格なハルチネーション対策使用判定（リッチメニュー押下時は無効化）"""
         self.processing_stats["should_use_calls"] += 1
+        
+        # リッチメニュー押下の場合は絶対に無効化
+        if self.is_richmenu_action(query):
+            self.processing_stats["richmenu_blocked"] += 1
+            logger.info(f"🚫 リッチメニュー押下のためハルチネーション対策をスキップ: {query}")
+            return False
         
         if not ANTI_HALLUCINATION_MODULE_AVAILABLE:
             return False
@@ -91,9 +133,9 @@ class OptimizedAntiHallucinationIntegration:
         
         if should_use:
             self.processing_stats["should_use_approved"] += 1
-            logger.info(f"🛡️ Anti-hallucination approved: conditions={conditions_met}/3, length={len(query)}")
+            logger.info(f"🛡️ AI相談でのハルチネーション対策を承認: conditions={conditions_met}/3, length={len(query)}")
         else:
-            logger.debug(f"🚫 Anti-hallucination skipped: conditions={conditions_met}/3, length={len(query)}")
+            logger.debug(f"🚫 ハルチネーション対策をスキップ: conditions={conditions_met}/3, length={len(query)}")
         
         return should_use
     
@@ -118,11 +160,16 @@ class OptimizedAntiHallucinationIntegration:
         original_rag_response: str = None,
         timeout: float = 8.0  # 🔧 短縮：デフォルト8秒
     ) -> Dict[str, Any]:
-        """🚀 最適化ハルチネーション対策処理（タイムアウト・エラー処理強化）"""
+        """🚀 最適化ハルチネーション対策処理（リッチメニュー押下時は無効化）"""
         
         self.processing_stats["processing_attempts"] += 1
         
-        logger.info(f"🛡️ Anti-hallucination processing (optimized): {query[:40]}...")
+        # リッチメニュー押下の場合は処理を行わず、固定テンプレートに委譲
+        if self.is_richmenu_action(query):
+            logger.info(f"🚫 リッチメニュー押下のためハルチネーション対策をスキップし、固定テンプレートに委譲: {query}")
+            return self._create_richmenu_response(query, platform)
+        
+        logger.info(f"🛡️ AI相談でのハルチネーション対策処理（最適化版）: {query[:40]}...")
         
         if not ANTI_HALLUCINATION_MODULE_AVAILABLE:
             return self._create_basic_filter_response(query, original_rag_response, platform)
@@ -160,6 +207,22 @@ class OptimizedAntiHallucinationIntegration:
             self.processing_stats["processing_errors"] += 1
             logger.error(f"❌ Anti-hallucination error: {e}")
             return self._create_basic_filter_response(query, original_rag_response, platform)
+    
+    def _create_richmenu_response(self, query: str, platform: str) -> Dict[str, Any]:
+        """🚀 リッチメニュー押下時の応答（ハルチネーション対策なし）"""
+        logger.info(f"🚫 リッチメニュー押下のためハルチネーション対策を完全スキップ: {query}")
+        
+        return {
+            "answer": "",  # 空文字列を返して固定テンプレートシステムに完全委譲
+            "confidence_level": 1.0,  # 固定テンプレートは100%信頼性
+            "verification_method": "richmenu_fixed_template",
+            "verification_note": "🔘 リッチメニュー固定応答",
+            "last_updated": datetime.now().strftime("%Y-%m-%d"),
+            "sources": [],
+            "warnings": [],
+            "anti_hallucination_used": False,  # 使用していない
+            "processing_method": "richmenu_bypass"
+        }
     
     def _create_basic_filter_response(self, query: str, original_response: str, platform: str) -> Dict[str, Any]:
         """🚀 基本フィルタ応答（軽量版ハルチネーション対策）"""
@@ -278,6 +341,10 @@ class OptimizedAntiHallucinationIntegration:
         
         return {
             "anti_hallucination_optimization_stats": self.processing_stats,
+            "richmenu_optimization": {
+                "richmenu_blocked_count": self.processing_stats["richmenu_blocked"],
+                "richmenu_block_rate": (self.processing_stats["richmenu_blocked"] / total_calls * 100) if total_calls > 0 else 0
+            },
             "efficiency_metrics": {
                 "approval_rate": (self.processing_stats["should_use_approved"] / total_calls * 100) if total_calls > 0 else 0,
                 "success_rate": (self.processing_stats["processing_successes"] / total_attempts * 100) if total_attempts > 0 else 0,
@@ -285,6 +352,7 @@ class OptimizedAntiHallucinationIntegration:
                 "sync_fallback_rate": (self.processing_stats["sync_fallbacks"] / total_attempts * 100) if total_attempts > 0 else 0
             },
             "optimization_features": [
+                "🚫 Richmenu press blocking (fixed template priority)",
                 "🚀 Strict keyword filtering (reduced triggers)",
                 "⏰ 8s timeout (reduced from default)",
                 "🔧 Basic filter fallback",
@@ -292,7 +360,8 @@ class OptimizedAntiHallucinationIntegration:
                 "🎯 2/3 condition requirement"
             ],
             "performance_targets": {
-                "approval_rate": "< 20% (strict filtering)",
+                "richmenu_block_rate": "100% (all richmenu presses blocked)",
+                "approval_rate": "< 20% (strict filtering for AI chat only)",
                 "success_rate": "> 80%",
                 "timeout_rate": "< 15%",
                 "processing_time": "< 8s average"
@@ -300,7 +369,7 @@ class OptimizedAntiHallucinationIntegration:
         }
 
 # ==============================================================================
-# 🚀 最適化統合関数（高速版）
+# 🚀 最適化統合関数（リッチメニュー対応版）
 # ==============================================================================
 
 # グローバルインスタンス
@@ -312,11 +381,26 @@ async def enhance_web_chat_response_optimized(
     user_context: Dict = None,
     timeout: float = 8.0
 ) -> Dict[str, Any]:
-    """🚀 Webチャット回答の最適化強化（条件厳格化）"""
+    """🚀 Webチャット回答の最適化強化（リッチメニュー押下時は無効化）"""
     
-    # 🚀 厳格な条件チェック
+    # リッチメニュー押下の場合は固定テンプレートに完全委譲
+    if _optimized_integration.is_richmenu_action(query):
+        logger.info("🚫 リッチメニュー押下のためWebチャットハルチネーション対策をスキップ")
+        return {
+            "answer": original_response,  # 元の応答をそのまま返す
+            "confidence_level": 1.0,
+            "verification_method": "richmenu_fixed_template",
+            "verification_note": "🔘 リッチメニュー固定応答",
+            "last_updated": None,
+            "sources": [],
+            "warnings": [],
+            "anti_hallucination_used": False,
+            "processing_method": "richmenu_bypass"
+        }
+    
+    # 🚀 AI相談での厳格な条件チェック
     if _optimized_integration.should_use_anti_hallucination_strict(query):
-        logger.info("🛡️ Using strict anti-hallucination for web chat")
+        logger.info("🛡️ AI相談でのハルチネーション対策を実行（Webチャット）")
         
         enhanced_response = await _optimized_integration.process_with_anti_hallucination_optimized(
             query=query,
@@ -347,11 +431,26 @@ async def enhance_line_chat_response_optimized(
     original_response: str = None,
     timeout: float = 6.0  # 🔧 LINE用はより短く
 ) -> Dict[str, Any]:
-    """🚀 LINEチャット回答の最適化強化（厳格条件・短時間）"""
+    """🚀 LINEチャット回答の最適化強化（リッチメニュー押下時は無効化）"""
     
-    # 🚀 厳格な条件チェック
+    # リッチメニュー押下の場合は固定テンプレートに完全委譲
+    if _optimized_integration.is_richmenu_action(query):
+        logger.info("🚫 リッチメニュー押下のためLINEハルチネーション対策をスキップ")
+        return {
+            "answer": "",  # 空文字列を返して固定テンプレートシステムに委譲
+            "confidence_level": 1.0,
+            "verification_method": "richmenu_fixed_template",
+            "verification_note": "🔘 リッチメニュー固定応答",
+            "last_updated": None,
+            "sources": [],
+            "warnings": [],
+            "anti_hallucination_used": False,
+            "processing_method": "richmenu_bypass"
+        }
+    
+    # 🚀 AI相談での厳格な条件チェック
     if _optimized_integration.should_use_anti_hallucination_strict(query):
-        logger.info("🛡️ Using strict anti-hallucination for LINE chat")
+        logger.info("🛡️ AI相談でのハルチネーション対策を実行（LINE）")
         
         user_context = {"user_id": user_id, "platform": "line"}
         
@@ -379,7 +478,7 @@ async def enhance_line_chat_response_optimized(
         }
 
 # ==============================================================================
-# 🚀 同期版関数（イベントループエラー対策・最適化版）
+# 🚀 同期版関数（イベントループエラー対策・リッチメニュー対応版）
 # ==============================================================================
 
 def enhance_line_chat_response_sync_optimized(
@@ -387,11 +486,26 @@ def enhance_line_chat_response_sync_optimized(
     user_id: str,
     original_response: str = None
 ) -> Dict[str, Any]:
-    """🚀 LINEチャット回答の同期版強化（条件厳格化・高速）"""
+    """🚀 LINEチャット回答の同期版強化（リッチメニュー押下時は無効化）"""
     
-    # 🚀 厳格条件チェック（同期版）
+    # リッチメニュー押下の場合は固定テンプレートに完全委譲
+    if _optimized_integration.is_richmenu_action(query):
+        logger.info("🚫 リッチメニュー押下のため同期版LINEハルチネーション対策をスキップ")
+        return {
+            "answer": "",  # 空文字列を返して固定テンプレートシステムに委譲
+            "confidence_level": 1.0,
+            "verification_method": "richmenu_fixed_template", 
+            "verification_note": "🔘 リッチメニュー固定応答",
+            "last_updated": None,
+            "sources": [],
+            "warnings": [],
+            "anti_hallucination_used": False,
+            "processing_method": "sync_richmenu_bypass"
+        }
+    
+    # 🚀 AI相談での厳格条件チェック（同期版）
     if _optimized_integration.should_use_anti_hallucination_strict(query):
-        logger.info("🛡️ Using sync strict anti-hallucination for LINE chat")
+        logger.info("🛡️ AI相談での同期版ハルチネーション対策を実行")
         
         # 🚀 同期版基本フィルタリング（軽量処理）
         return _optimized_integration._create_basic_filter_response(query, original_response, "line")
@@ -414,11 +528,26 @@ def enhance_web_chat_response_sync_optimized(
     original_response: str,
     user_context: Dict = None
 ) -> Dict[str, Any]:
-    """🚀 Webチャット回答の同期版強化（最適化）"""
+    """🚀 Webチャット回答の同期版強化（リッチメニュー対応）"""
     
-    # 🚀 厳格条件チェック（同期版）
+    # リッチメニュー押下の場合は元の応答をそのまま返す
+    if _optimized_integration.is_richmenu_action(query):
+        logger.info("🚫 リッチメニュー押下のため同期版Webハルチネーション対策をスキップ")
+        return {
+            "answer": original_response,
+            "confidence_level": 1.0,
+            "verification_method": "richmenu_fixed_template",
+            "verification_note": "🔘 リッチメニュー固定応答", 
+            "last_updated": None,
+            "sources": [],
+            "warnings": [],
+            "anti_hallucination_used": False,
+            "processing_method": "sync_richmenu_bypass"
+        }
+    
+    # 🚀 AI相談での厳格条件チェック（同期版）
     if _optimized_integration.should_use_anti_hallucination_strict(query):
-        logger.info("🛡️ Using sync strict anti-hallucination for web chat")
+        logger.info("🛡️ AI相談での同期版ハルチネーション対策を実行")
         
         # 🚀 同期版基本フィルタリング
         return _optimized_integration._create_basic_filter_response(query, original_response, "web")
@@ -441,7 +570,7 @@ def enhance_web_chat_response_sync_optimized(
 # ==============================================================================
 
 def get_anti_hallucination_optimization_stats() -> Dict[str, Any]:
-    """🚀 最適化統計取得"""
+    """🚀 最適化統計取得（リッチメニュー対応）"""
     return _optimized_integration.get_processing_stats()
 
 # ==============================================================================
@@ -455,45 +584,92 @@ enhance_line_chat_response_sync = enhance_line_chat_response_sync_optimized
 enhance_web_chat_response_sync = enhance_web_chat_response_sync_optimized
 
 # ==============================================================================
+# リッチメニュー判定用外部関数
+# ==============================================================================
+
+def is_richmenu_action(query: str) -> bool:
+    """リッチメニュー押下判定（外部からの呼び出し用）"""
+    return _optimized_integration.is_richmenu_action(query)
+
+def should_skip_anti_hallucination(query: str) -> bool:
+    """ハルチネーション対策をスキップすべきかの判定（外部からの呼び出し用）"""
+    return _optimized_integration.is_richmenu_action(query)
+
+# ==============================================================================
 # テスト・デバッグ用
 # ==============================================================================
 
 class OptimizedAntiHallucinationTest:
-    """最適化統合テスト用クラス"""
+    """最適化統合テスト用クラス（リッチメニュー対応）"""
     
     def __init__(self):
         self.integration = OptimizedAntiHallucinationIntegration()
     
+    async def test_richmenu_blocking(self):
+        """リッチメニュー押下ブロックテスト"""
+        richmenu_cases = [
+            "🤖 AI相談",
+            "🌐 AI住まいサイト", 
+            "📋 資料請求",
+            "📍 展示場来場",
+            "💰 資金計画",
+            "💬 チャット相談",
+            "AI相談",
+            "資料請求"
+        ]
+        
+        print("🧪 Richmenu Blocking Test Results:")
+        print("=" * 50)
+        
+        for query in richmenu_cases:
+            is_blocked = self.integration.is_richmenu_action(query)
+            should_use = self.integration.should_use_anti_hallucination_strict(query)
+            
+            status = "✅ BLOCKED" if is_blocked and not should_use else "❌ NOT BLOCKED"
+            print(f"{status} '{query}' -> blocked={is_blocked}, should_use={should_use}")
+    
     async def test_strict_conditions(self):
-        """厳格条件テスト"""
+        """厳格条件テスト（AI相談時のみ）"""
         test_cases = [
-            # 承認されるべきケース
+            # 承認されるべきケース（AI相談時）
             ("兵庫県の2024年度ZEH補助金について教えてください", True),
-            ("加東市のこどもエコすまい支援事業2024年最新情報", True),
-            ("現在実施中の住宅ローン控除制度について神戸市での適用例", True),
+            ("加東市のこどもエコすまい支援事業2024年最新情報はどうなっていますか", True),
+            ("現在実施中の住宅ローン控除制度について神戸市での適用例を知りたい", True),
             
             # 拒否されるべきケース
             ("住宅ローン控除について", False),
             ("補助金", False),
             ("ZEH補助金", False),
             ("坪単価について教えて", False),
-            ("標準仕様はどんな感じ？", False)
+            ("標準仕様はどんな感じ？", False),
+            
+            # リッチメニュー（拒否されるべき）
+            ("🤖 AI相談", False),
+            ("📋 資料請求", False)
         ]
         
-        print("🧪 Strict Condition Test Results:")
-        print("=" * 50)
+        print("\n🧪 Strict Condition Test Results (AI Chat Only):")
+        print("=" * 60)
         
         for query, expected in test_cases:
+            is_richmenu = self.integration.is_richmenu_action(query)
             result = self.integration.should_use_anti_hallucination_strict(query)
+            
+            if is_richmenu:
+                expected = False  # リッチメニューは必ず拒否
+            
             status = "✅ PASS" if result == expected else "❌ FAIL"
-            print(f"{status} '{query[:40]}...' -> {result} (expected: {expected})")
+            note = "(richmenu)" if is_richmenu else ""
+            print(f"{status} '{query[:40]}...' -> {result} (expected: {expected}) {note}")
         
         stats = self.integration.get_processing_stats()
         print(f"\nApproval rate: {stats['efficiency_metrics']['approval_rate']:.1f}%")
+        print(f"Richmenu block rate: {stats['richmenu_optimization']['richmenu_block_rate']:.1f}%")
 
 if __name__ == "__main__":
     async def main():
         tester = OptimizedAntiHallucinationTest()
+        await tester.test_richmenu_blocking()
         await tester.test_strict_conditions()
     
     asyncio.run(main())

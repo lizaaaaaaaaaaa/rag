@@ -1,161 +1,117 @@
 {
-  "description": "LINE Bot リッチメニュー専用事前キャッシュデータ（瞬時応答用）",
-  "version": "1.0.0",
-  "last_updated": "2024-12-20",
+  "description": "LINE Bot リッチメニュー専用事前キャッシュデータ（指定文面統一版）",
+  "version": "2.0.0",
+  "last_updated": "2024-12-27",
   "target_response_time": "< 0.1s",
+  "unified_message_policy": "指定文面のみ使用、他の固定文面は削除済み",
   "cache_data": {
     "rich_menu_buttons": {
       "🤖AI相談": {
-        "response": "🤖 AI住まい相談を開始します！\n\nキノエデザインの住まいAIコンシェルジュです✨\n住まいに関するご質問をお気軽にどうぞ！\n\n💡 **よくあるご質問**\n・坪単価について教えて\n・標準仕様はどんな感じ？\n・耐震性能について知りたい\n・断熱性能はどのくらい？\n・補助金について教えて\n\n何でもお聞きください😊",
+        "response": "🤖 AI住まい相談を開始します！\n\nキノエデザインの住まいAIコンシェルジュです。\n住まいに関するご質問をお気軽にどうぞ！\n\n💡 **例えば**\n・坪単価について教えて\n・標準仕様はどんな感じ？\n・耐震性能について知りたい\n・断熱性能はどのくらい？\n\n何でもお聞きください😊\n\n※ご使用の前に、必ず以下の取り扱いをご確認ください。\nプライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy】\n利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service】\nCookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie】",
         "priority": 10,
-        "cache_duration": 3600
+        "cache_duration": 3600,
+        "unified_message": true
       },
       "🌐AI住まいサイト": {
-        "response": "🌐 AI住まいサイト\n\n家づくりの疑問にAIが24時間即回答\n\n🏠 **内容**\n・AIチャット相談\n・施工事例\n・間取りプラン例\n・よくある質問\n・デジタル冊子\n\n📱 https://preview.studio.site/live/EjOQljz1WJ/",
-        "priority": 9,
-        "cache_duration": 7200
+        "response": "🌐 AI住まいサイトのご案内\n\nキノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）\n\n🏠 サイト内容：\n・AIチャット相談（資金計画／補助金／間取り など）\n・施工写真（実例）\n・間取りの考え方・プラン例\n・よくある質問（最初に迷う3つのこと ほか）\n・保存版デジタル冊子 ZINE（無料ダウンロード）\n・LINEで無料相談／来場予約\n\n📱 サイトURL:\nhttps://preview.studio.site/live/EjOQljz1WJ/",
+        "priority": 10,
+        "cache_duration": 7200,
+        "unified_message": true
       },
       "📋資料請求": {
-        "response": "📋 資料請求を承ります\n\n以下の情報をお教えください📝\n\n**必要項目**\n・お名前（フルネーム）\n・ご住所（〒から詳しく）\n・お電話番号\n・ご希望資料の種類\n\n**お送りする資料**\n🏠 会社案内・施工事例集\n📐 間取りプラン集\n💰 価格・仕様資料\n🏦 住宅ローンガイド\n\n3営業日以内にお送りいたします📮",
+        "response": "📋ありがとうございます！こちらからご覧いただけます。\n\n〔資料タイトル〕（PDF）：〔URL〕\n\nよろしければ簡単アンケート（任意）：\n・ご計画時期：今すぐ / 3–6か月 / 1年以内 / 未定\n・連絡方法（任意）：このLINE / メール / 連絡不要\n\n※必ず以下の取り扱いをご確認ください。\nプライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy】\n利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service】\nCookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie】",
         "priority": 10,
-        "cache_duration": 1800
+        "cache_duration": 1800,
+        "unified_message": true
       },
       "📍展示場来場予約": {
-        "response": "📍 展示場見学予約\n\nhttps://preview.studio.site/live/EjOQljz1WJ/reservation\n\n**営業時間**\n🕘 9:00-18:00（水曜定休）\n\n**見学内容**\n・最新住宅仕様の確認\n・実際の住み心地を体感\n・詳細な打ち合わせ可能\n\nスタッフ一同お待ちしております！✨",
+        "response": "📍 展示場のご来場予約につきましては、下記URLより必要事項のご入力をお願い申し上げます。\n\n【https://preview.studio.site/live/EjOQljz1WJ/reservation】\n\nスタッフ一同、心よりお待ちしております！",
         "priority": 10,
-        "cache_duration": 3600
+        "cache_duration": 3600,
+        "unified_message": true
       },
       "💰資金計画": {
-        "response": "💰 資金計画診断\n\n年収、返済希望額、借入期間、家族構成、その他負担をお教えください。\n\n概算結果をご提示いたします。\n\n**資金計画の基本**\n・無理のない返済計画が大切💡\n・将来のライフプランも考慮📊\n・余裕を持った資金設定を✨\n\n※匿名利用可・回答内容非保存",
-        "priority": 8,
-        "cache_duration": 1800
+        "response": "💬 AI資金診断のご案内\n\n本診断は匿名でご利用いただけます。ご回答内容は保存いたしません。算出される金額は試算（概算）であり、目安としてご確認ください。\n\nお手数ですが、以下の5点をご入力ください。\n・年収（概算可）\n・毎月のご希望返済額\n・住宅ローンのご希望借入期間\n・ご家族構成（例：大人2名・お子さま1名）\n・その他の大きなご負担（例：自動車ローン 等）\n\n未入力の項目があっても進められます。ご入力後、概算結果をご提示いたします。",
+        "priority": 10,
+        "cache_duration": 1800,
+        "unified_message": true
       },
       "💬チャット相談": {
-        "response": "💬 スタッフとのご相談\n\n**対応時間**\n営業時間：9:00-18:00\n\n**相談方法**\n・このLINEで直接相談💬\n・お電話での相談📞\n・展示場での対面相談🏠\n\n営業時間内でしたら迅速にお返事します📲\nお気軽にお声かけください！✨",
-        "priority": 7,
-        "cache_duration": 3600
+        "response": "💬 スタッフとのご相談\n\n【対応時間】\n営業時間：9:00-18:00\n\n📱 ご相談方法：\n・このLINEでの直接相談\n・お電話での相談\n・展示場での対面相談\n\n営業時間内でしたら迅速にお返事します。\nお気軽にお声かけください！",
+        "priority": 10,
+        "cache_duration": 3600,
+        "unified_message": true
       }
     },
     "text_only_variations": {
       "AI相談": {
-        "response": "🤖 AI住まい相談を開始します！\n\n住まいに関するご質問をお気軽にどうぞ！\n\n💡 **よくある質問**\n・坪単価について\n・標準仕様について\n・性能について\n・補助金情報\n\n何でもお聞きください😊",
-        "priority": 8,
-        "cache_duration": 3600
+        "response": "🤖 AI住まい相談を開始します！\n\nキノエデザインの住まいAIコンシェルジュです。\n住まいに関するご質問をお気軽にどうぞ！\n\n💡 **例えば**\n・坪単価について教えて\n・標準仕様はどんな感じ？\n・耐震性能について知りたい\n・断熱性能はどのくらい？\n\n何でもお聞きください😊\n\n※ご使用の前に、必ず以下の取り扱いをご確認ください。\nプライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy】\n利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service】\nCookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie】",
+        "priority": 10,
+        "cache_duration": 3600,
+        "unified_message": true
       },
       "AI住まいサイト": {
-        "response": "🌐 AI住まいサイト\n\n家づくりの疑問にAIが24時間即回答\n\n📱 https://preview.studio.site/live/EjOQljz1WJ/",
-        "priority": 7,
-        "cache_duration": 7200
+        "response": "🌐 AI住まいサイトのご案内\n\nキノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）\n\n🏠 サイト内容：\n・AIチャット相談（資金計画／補助金／間取り など）\n・施工写真（実例）\n・間取りの考え方・プラン例\n・よくある質問（最初に迷う3つのこと ほか）\n・保存版デジタル冊子 ZINE（無料ダウンロード）\n・LINEで無料相談／来場予約\n\n📱 サイトURL:\nhttps://preview.studio.site/live/EjOQljz1WJ/",
+        "priority": 10,
+        "cache_duration": 7200,
+        "unified_message": true
       },
       "資料請求": {
-        "response": "📋 資料請求を承ります\n\nお名前、ご住所、お電話番号をお教えください。\n\n**お送りする資料**\n・会社案内・施工事例\n・間取りプラン集\n・価格・仕様資料\n\n3営業日以内にお送りします😊",
-        "priority": 8,
-        "cache_duration": 1800
+        "response": "📋ありがとうございます！こちらからご覧いただけます。\n\n〔資料タイトル〕（PDF）：〔URL〕\n\nよろしければ簡単アンケート（任意）：\n・ご計画時期：今すぐ / 3–6か月 / 1年以内 / 未定\n・連絡方法（任意）：このLINE / メール / 連絡不要\n\n※必ず以下の取り扱いをご確認ください。\nプライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy】\n利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service】\nCookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie】",
+        "priority": 10,
+        "cache_duration": 1800,
+        "unified_message": true
       },
       "展示場来場予約": {
-        "response": "📍 展示場見学予約\n\nhttps://preview.studio.site/live/EjOQljz1WJ/reservation\n\n**営業時間**\n9:00-18:00（水曜定休）\n\nスタッフ一同お待ちしております！",
-        "priority": 8,
-        "cache_duration": 3600
+        "response": "📍 展示場のご来場予約につきましては、下記URLより必要事項のご入力をお願い申し上げます。\n\n【https://preview.studio.site/live/EjOQljz1WJ/reservation】\n\nスタッフ一同、心よりお待ちしております！",
+        "priority": 10,
+        "cache_duration": 3600,
+        "unified_message": true
       },
       "資金計画": {
-        "response": "💰 資金計画診断\n\n年収、返済希望額、借入期間、家族構成、その他負担をお教いください。\n\n概算結果をご提示いたします。\n\n※匿名利用可・回答内容非保存",
-        "priority": 6,
-        "cache_duration": 1800
+        "response": "💬 AI資金診断のご案内\n\n本診断は匿名でご利用いただけます。ご回答内容は保存いたしません。算出される金額は試算（概算）であり、目安としてご確認ください。\n\nお手数ですが、以下の5点をご入力ください。\n・年収（概算可）\n・毎月のご希望返済額\n・住宅ローンのご希望借入期間\n・ご家族構成（例：大人2名・お子さま1名）\n・その他の大きなご負担（例：自動車ローン 等）\n\n未入力の項目があっても進められます。ご入力後、概算結果をご提示いたします。",
+        "priority": 10,
+        "cache_duration": 1800,
+        "unified_message": true
       },
       "チャット相談": {
-        "response": "💬 スタッフとのご相談\n\n**対応時間**\n営業時間：9:00-18:00\n\nお気軽にお声かけください！",
-        "priority": 6,
-        "cache_duration": 3600
-      }
-    },
-    "common_questions": {
-      "坪単価": {
-        "response": "💰 坪単価について\n\n🏠 **目安**\n・標準仕様：約70～85万円/坪\n・高性能仕様：約85～100万円/坪\n\n✨ **含まれる内容**\n・耐震等級3の構造\n・長期優良住宅対応\n・高断熱・高気密仕様\n・標準設備一式\n\n詳細は展示場でご相談ください😊",
-        "keywords": ["価格", "費用", "いくら", "金額", "値段"],
+        "response": "💬 スタッフとのご相談\n\n【対応時間】\n営業時間：9:00-18:00\n\n📱 ご相談方法：\n・このLINEでの直接相談\n・お電話での相談\n・展示場での対面相談\n\n営業時間内でしたら迅速にお返事します。\nお気軽にお声かけください！",
         "priority": 10,
-        "cache_duration": 3600
-      },
-      "標準仕様": {
-        "response": "🏗️ 標準仕様について\n\n**構造・性能**\n・耐震等級3（最高等級）\n・長期優良住宅認定対応\n・省エネ等級4以上\n・高断熱・高気密仕様\n\n**設備**\n・システムキッチン\n・ユニットバス\n・洗面化粧台\n・温水洗浄便座付トイレ\n\n詳しくは展示場見学をご利用ください😊",
-        "keywords": ["仕様", "設備", "標準", "基本"],
-        "priority": 9,
-        "cache_duration": 3600
-      },
-      "耐震": {
-        "response": "🏗️ 耐震性能について\n\n**耐震等級**\n・耐震等級3（最高等級）\n・建築基準法の1.5倍の強度\n\n**構造**\n・構造用集成材使用\n・金物工法\n・ベタ基礎\n\n地震に強い安心の住まいです😊",
-        "keywords": ["地震", "安全", "構造", "強度"],
-        "priority": 8,
-        "cache_duration": 7200
-      },
-      "断熱": {
-        "response": "🌡️ 断熱性能について\n\n**等級**\n・断熱等級4以上（ZEH対応）\n・UA値：0.6以下\n・C値：1.0以下\n\n**効果**\n・夏涼しく、冬暖かい\n・光熱費削減\n・結露抑制\n\n展示場で体感できます✨",
-        "keywords": ["性能", "zeh", "省エネ", "温度"],
-        "priority": 8,
-        "cache_duration": 7200
-      },
-      "補助金": {
-        "response": "💰 補助金制度について\n\n**主な制度**\n🏠 ZEH補助金：定額55万円～\n👶 こどもエコすまい：最大100万円\n🏦 住宅ローン減税：13年間\n🏛️ 地域独自補助金：自治体により異なる\n\n最新情報はスタッフまでお問い合わせください😊",
-        "keywords": ["助成", "支援", "減税", "zeh補助"],
-        "priority": 7,
-        "cache_duration": 1800
+        "cache_duration": 3600,
+        "unified_message": true
       }
     },
-    "greeting_responses": {
-      "こんにちは": {
-        "response": "こんにちは！キノエデザインです✨\n\n住まいづくりのことでしたら何でもお気軽にご相談ください😊\n\n**🎯 人気のご相談内容**\n💰 坪単価・価格\n🏠 住宅性能・仕様\n📋 資料請求・展示場見学\n💴 資金計画\n\nどのようなことを知りたいですか？",
-        "priority": 5,
-        "cache_duration": 7200
-      },
-      "こんばんは": {
-        "response": "こんばんは！キノエデザインです🌙\n\n住まいづくりのご相談、お気軽にどうぞ😊\n\n営業時間外ですが、このLINEではいつでもご質問いただけます✨",
-        "priority": 5,
-        "cache_duration": 7200
-      },
-      "おはよう": {
-        "response": "おはようございます！キノエデザインです☀️\n\n今日も住まいづくりのサポートをさせていただきます😊\n\n何でもお気軽にご相談ください✨",
-        "priority": 5,
-        "cache_duration": 7200
-      },
-      "ありがとう": {
-        "response": "どういたしまして😊\n\n他にもご質問がございましたら、お気軽にお聞かせください。\n\n**📞 より詳しい相談をご希望の場合**\n・「展示場予約」→専門スタッフが直接対応\n・「資料請求」→詳細資料をお送りします\n\n住まいづくりを全力でサポートいたします✨",
-        "priority": 4,
-        "cache_duration": 7200
-      },
-      "よろしく": {
-        "response": "こちらこそよろしくお願いいたします✨\n\n住まいづくりについて何でもお聞かせください😊\n\nリッチメニューからお選びいただくか、\n直接ご質問をお聞かせください💬",
-        "priority": 4,
-        "cache_duration": 7200
-      }
-    },
-    "fallback_responses": {
-      "general": {
-        "response": "ご質問ありがとうございます😊\n\n住まいづくりについて、どのようなことをお知りになりたいでしょうか？\n\n**🎯リッチメニューから選択**\n🤖AI相談 / 📋資料請求 / 📍展示場予約 / 💰資金計画\n\n具体的なご質問もお気軽にどうぞ✨",
-        "priority": 1,
-        "cache_duration": 1800
-      },
-      "consultation": {
-        "response": "ご相談は営業時間内にスタッフが対応いたします😊\n\n**対応時間**\n平日・土日祝：9:00-18:00\n定休日：水曜日\n\nお気軽にお声かけください✨",
-        "priority": 2,
-        "cache_duration": 3600
-      },
-      "detailed_info": {
-        "response": "詳しい情報は展示場で直接ご確認いただけます🏠\n\n専門スタッフがご案内いたします。\n\n展示場予約はリッチメニューからどうぞ📍",
-        "priority": 2,
-        "cache_duration": 3600
+    "follow_greeting": {
+      "welcome_message": {
+        "response": "こんにちは！キノエデザインです。\nこの度は友だち追加ありがとうございます✨\n\n目的のボタンをタップ👇\n🤖AI相談 / 📍来場予約 / 📄資料請求 / 💰資金計画 / 🌐サイト / 💬チャット\n\nAIは24時間、担当者は当日〜翌営業日に返信します。\n\n※ご使用の前に、必ず以下の取り扱いをご確認ください。\nプライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy】\n利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service】\nCookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie】",
+        "priority": 10,
+        "cache_duration": 86400,
+        "unified_message": true
       }
     }
   },
   "usage_instructions": {
-    "integration_method": "Load this JSON data into the RichMenuCacheSystem class",
-    "cache_key_matching": "Use exact match first, then keyword matching",
-    "priority_handling": "Higher priority responses take precedence",
-    "cache_duration": "In seconds, used for cache expiration",
-    "response_format": "All responses are formatted for LINE display with appropriate emojis"
+    "integration_method": "Load unified message templates into RichMenuCacheSystem class",
+    "cache_key_matching": "Use exact match for specified message text only",
+    "priority_handling": "All unified messages have priority 10",
+    "cache_duration": "In seconds, optimized for each message type",
+    "response_format": "All responses use exact specified text with proper formatting"
   },
   "performance_targets": {
-    "response_time": "< 100ms",
-    "cache_hit_rate": "> 95%",
-    "template_coverage": "99+ variations",
-    "memory_usage": "< 2MB"
+    "response_time": "< 50ms",
+    "cache_hit_rate": "> 99%",
+    "message_consistency": "100% unified text",
+    "memory_usage": "< 1MB"
+  },
+  "removed_entries": {
+    "note": "以下の項目を削除しました（指定文面統一のため）",
+    "deleted_categories": [
+      "common_questions（坪単価、標準仕様、耐震、断熱、補助金等の個別テンプレート）",
+      "greeting_responses（こんにちは、ありがとう等の個別挨拶）",
+      "fallback_responses（一般的なフォールバック）",
+      "その他の固定テンプレート"
+    ],
+    "reason": "指定された6つのリッチメニュー機能とfollowイベントの文面のみ保持",
+    "unified_policy": "リッチメニューボタン押下時は指定文面のみ返信"
   }
 }

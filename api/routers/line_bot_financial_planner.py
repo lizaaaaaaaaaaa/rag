@@ -1,5 +1,5 @@
 # api/routers/line_bot_financial_planner.py
-# 資金計画機能統合実装
+# 資金計画機能統合実装（指定文面統一版）
 
 import logging
 import re
@@ -372,10 +372,10 @@ class FinancialInputParser:
         return parse_result
 
 # ==============================================================================
-# 資金計画統合ハンドラー
+# 資金計画統合ハンドラ（指定文面統一版）
 # ==============================================================================
 class FinancialPlanningHandler:
-    """資金計画統合ハンドラー"""
+    """資金計画統合ハンドラー（指定文面統一版）"""
     
     def __init__(self):
         self.state_manager = FinancialPlanningStateManager()
@@ -383,7 +383,7 @@ class FinancialPlanningHandler:
         self.calculator = FinancialCalculationEngine()
     
     def handle_financial_planning_message(self, user_id: str, message: str) -> str:
-        """資金計画メッセージ処理"""
+        """資金計画メッセージ処理（指定文面統一版）"""
         try:
             # 1. 既存セッションチェック
             session = self.state_manager.get_session(user_id)
@@ -437,8 +437,8 @@ class FinancialPlanningHandler:
 「💰 資金計画」をもう一度タップして再開してください。"""
     
     def _get_initial_guidance_message(self) -> str:
-        """初期案内メッセージ"""
-        return """💰 AI資金診断のご案内
+        """初期案内メッセージ（指定文面統一版）"""
+        return """💬 AI資金診断のご案内
 
 本診断は匿名でご利用いただけます。ご回答内容は保存いたしません。算出される金額は試算（概算）であり、目安としてご確認ください。
 
@@ -449,19 +449,7 @@ class FinancialPlanningHandler:
 ・ご家族構成（例：大人2名・お子さま1名）
 ・その他の大きなご負担（例：自動車ローン 等）
 
-未入力の項目があっても進められます。ご入力後、概算結果をご提示いたします。
-
-※必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：https://preview.studio.site/live/EjOQljz1WJ/privacy-policy
-利用規約：https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service
-Cookie：https://preview.studio.site/live/EjOQljz1WJ/cookie
-
-💡 **入力例**
-年収：「600万円」
-返済額：「月8万円」
-期間：「35年」
-家族：「夫婦と子ども1人」
-その他：「車ローン月3万円」または「なし」"""
+未入力の項目があっても進められます。ご入力後、概算結果をご提示いたします。"""
     
     def _get_next_input_message(self, session: FinancialPlanInput, current_update: str) -> str:
         """次の入力を促すメッセージ"""
@@ -798,7 +786,7 @@ def is_financial_planning_message(message: str) -> bool:
     return any(keyword in message for keyword in keywords)
 
 def handle_financial_message_for_line(user_id: str, message: str) -> str:
-    """LINE Bot用資金計画メッセージ処理"""
+    """LINE Bot用資金計画メッセージ処理（指定文面統一版）"""
     return financial_handler.handle_financial_planning_message(user_id, message)
 
 # ==============================================================================
@@ -809,7 +797,7 @@ def test_financial_planning():
     test_user_id = "test_user_123"
     handler = FinancialPlanningHandler()
     
-    print("🧪 資金計画機能テスト開始")
+    print("🧪 資金計画機能テスト開始（指定文面統一版）")
     print("=" * 50)
     
     # 1. セッション開始
@@ -836,7 +824,7 @@ def test_financial_planning():
     response6 = handler.handle_financial_planning_message(test_user_id, "車ローン月3万円")
     print(f"6. 最終結果: {response6[:200]}...")
     
-    print("\n✅ テスト完了")
+    print("\n✅ テスト完了（指定文面統一版）")
 
 if __name__ == "__main__":
     test_financial_planning()
