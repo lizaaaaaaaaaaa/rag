@@ -94,7 +94,7 @@ steps:
       '-f', 'Dockerfile.front',
       '.'
     ]
-    timeout: '900s'
+    timeout: '1800s'
     id: 'build-enhanced-frontend'
     waitFor: ['deploy-enhanced-api']
 
