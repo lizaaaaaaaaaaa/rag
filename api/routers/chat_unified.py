@@ -256,14 +256,16 @@ def _normalize_colon_emoji(s: str) -> str:
 # 10) リッチメニューの固定テンプレ（抜粋）
 # -------------------------------
 RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
-    "follow_greeting": _normalize_colon_emoji("""こんにちは！キノエデザインです。
+    "follow_greeting": _normalize_colon_emoji("""こんにちは！キノエデザイン住まいAIコンシェルジュ（秋山住研）です。
 この度は友だち追加ありがとうございます✨
+まずはメニュー左上の「AI相談（24h）」から、 気になることを質問してみてください。
 
-目的のボタンをタップ👇
+すぐ使えるメニューはこちら👇
 🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画 / 🌐サイト / 💬チャット
 
-AIは24時間、担当者は当日〜翌営業日に返信します。
-
+※匿名OK／保存OFF（既定） 
+※AIの回答は必ずしも正しいとは限りません。➡ 最終案内はスタッフが行います。
+※AIは24時間、担当者は当日〜翌営業日に返信します。
 ※ご使用の前に、必ず以下の取り扱いをご確認ください。
 プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
