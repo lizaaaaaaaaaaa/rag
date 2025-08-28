@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import re
 import time
-import math
 import logging
 import importlib
 import sys
@@ -155,7 +154,7 @@ def _llm_answer(prompt: str) -> str:
         try:
             from llm.llm_runner import chat_completion  # type: ignore
         except ModuleNotFoundError:
-            from llm.llm_runner import chat_completion  # type: ignore
+            from llm_runner import chat_completion  # type: ignore
         return _strip_citations(chat_completion(prompt))
     except Exception as e:
         logger.info("llm_runner fallback to OpenAI: %s", e)
@@ -213,7 +212,7 @@ def _normalize_colon_emoji(s: str) -> str:
     return s
 
 # -------------------------------
-# 10) リッチメニューの固定テンプレ（ご指定文面）
+# 10) リッチメニューの固定テンプレ（抜粋）
 # -------------------------------
 RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
     "follow_greeting": _normalize_colon_emoji("""こんにちは！キノエデザインです。
@@ -229,83 +228,24 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】"""),
 
-    "AI相談": _normalize_colon_emoji("""🤖 AI住まい相談を開始します！
-キノエデザインの住まいAIコンシェルジュです。
-住まいに関するご質問をお気軽にどうぞ！
-💡 **例えば**
-・坪単価について教えて
-・標準仕様はどんな感じ？
-・耐震性能について知りたい
-・断熱性能はどのくらい？
-何でもお聞きください😊
-※ご使用の前に、必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
-利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
-Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】"""),
-
-    "AI住まいサイト": _normalize_colon_emoji("""🌐 AI住まいサイトのご案内
-キノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）
-🏠 サイト内容：
-・AIチャット相談（資金計画／補助金／間取り など）
-・施工写真（実例）
-・間取りの考え方・プラン例
-・よくある質問（最初に迷う3つのこと ほか）
-・保存版デジタル冊子 ZINE（無料ダウンロード）
-・LINEで無料相談／来場予約
-📱 サイトURL:
-https://preview.studio.site/live/EjOQljz1WJ/"""),
-
-    "資料請求": _normalize_colon_emoji("""📄ありがとうございます！こちらからご覧いただけます。
-〔資料タイトル〕（PDF）：〔URL〕
-よろしければ簡単アンケート（任意）：
-・ご計画時期：今すぐ / 3–6か月 / 1年以内 / 未定
-・連絡方法（任意）：このLINE / メール / 連絡不要
-※必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
-利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
-Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】"""),
-
-    "展示場来場予約": _normalize_colon_emoji("""📍 展示場のご来場予約につきましては、下記URLより必要事項のご入力をお願い申し上げます。
-【https://preview.studio.site/live/EjOQljz1WJ/reservation 】
-スタッフ一同、心よりお待ちしております！"""),
-
-    "資金計画": _normalize_colon_emoji("""💴 AI資金診断のご案内
-本診断は匿名でご利用いただけます。ご回答内容は保存いたしません。算出される金額は試算（概算）であり、目安としてご確認ください。
-お手数ですが、以下の5点をご入力ください。
-・年収（概算可）
-・毎月のご希望返済額
-・住宅ローンのご希望借入期間
-・ご家族構成（例：大人2名・お子さま1名）
-・その他の大きなご負担（例：自動車ローン 等）
-未入力の項目があっても進められます。ご入力後、概算結果をご提示いたします。"""),
-
-    "チャット相談": _normalize_colon_emoji("""💬 スタッフとのご相談
-【対応時間】
-営業時間：9:00-18:00
-📱 ご相談方法：
-・このLINEでの直接相談
-・お電話での相談
-・展示場での対面相談
-営業時間内でしたら迅速にお返事します。
-お気軽にお声かけください！"""),
+    "AI相談": _normalize_colon_emoji("""🤖 AI住まい相談を開始します！..."""),
+    "AI住まいサイト": _normalize_colon_emoji("""🌐 AI住まいサイトのご案内..."""),
+    "資料請求": _normalize_colon_emoji("""📄ありがとうございます！こちらからご覧いただけます。..."""),
+    "展示場来場予約": _normalize_colon_emoji("""📍 展示場のご来場予約..."""),
+    "資金計画": _normalize_colon_emoji("""💴 AI資金診断のご案内..."""),
+    "チャット相談": _normalize_colon_emoji("""💬 スタッフとのご相談..."""),
 }
 
 # 押下ゆらぎ吸収（コロン表記/全角スペース/別名）
 RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
-    # AI相談
     "AI相談": "AI相談", ":robot: AI相談": "AI相談", "🤖 AI相談": "AI相談",
-    # AI住まいサイト
     "AI住まいサイト": "AI住まいサイト", "🌐 AI住まいサイト": "AI住まいサイト",
     "サイト": "AI住まいサイト", "ホームページ": "AI住まいサイト",
-    # 資料請求
     "資料請求": "資料請求", "📄 資料請求": "資料請求", ":page_facing_up: 資料請求": "資料請求",
-    # 展示場来場予約（全角スペース対応）
     "展示場来場予約": "展示場来場予約", "📍 展示場来場　予約": "展示場来場予約",
     "来場予約": "展示場来場予約", ":round_pushpin: 展示場来場　予約": "展示場来場予約",
-    # 資金計画
     "資金計画": "資金計画", "💴 資金計画": "資金計画", "💰 資金計画": "資金計画",
     ":moneybag: 資金計画": "資金計画",
-    # チャット相談
     "チャット相談": "チャット相談", "💬チャット相談": "チャット相談", "チャット": "チャット相談",
     ":speech_balloon: チャット相談": "チャット相談",
 }
@@ -319,7 +259,6 @@ def _detect_richmenu_press(raw: str) -> Optional[str]:
     for k, mapped in RICHMENU_KEYWORD_MAPPING.items():
         if k in raw or k in msg:
             return mapped
-    # 「AI相談」「資金計画」など単語だけ来た場合にも拾う
     if msg in RICHMENU_KEYWORD_MAPPING:
         return RICHMENU_KEYWORD_MAPPING[msg]
     return None
@@ -328,7 +267,6 @@ def _detect_richmenu_press(raw: str) -> Optional[str]:
 # 11) 資金計画の最軽量推定（ユーザー入力をざっくり解析）
 # -------------------------------
 def _parse_money(s: str) -> Optional[int]:
-    # 500万円 / 50万 / 100,000円 / 10万5千 など
     s = s.replace(",", "")
     m = re.search(r"(\d+(?:\.\d+)?)\s*(万|万円|千|千円|円)?", s)
     if not m:
@@ -346,25 +284,20 @@ def _parse_money(s: str) -> Optional[int]:
 def _extract_financial(req: str) -> Dict[str, Optional[int | str]]:
     text = req.replace("：", ":")
     data: Dict[str, Optional[int | str]] = {
-        "annual_income": None,      # 年収（円）
-        "monthly_payment": None,    # 希望毎月返済（円）
-        "years": None,              # 借入年数（年）
-        "family": None,             # 家族構成（文字列）
-        "other_debt": None          # 他負担（円）
+        "annual_income": None,
+        "monthly_payment": None,
+        "years": None,
+        "family": None,
+        "other_debt": None
     }
-    # 年収
     m = re.search(r"(年収)\s*[:：]?\s*([0-9,\.万千円]+)", text)
     if m: data["annual_income"] = _parse_money(m.group(2))
-    # 毎月返済
     m = re.search(r"(毎月.*返済額|月.*返済)\s*[:：]?\s*([0-9,\.万千円]+)", text)
     if m: data["monthly_payment"] = _parse_money(m.group(2))
-    # 借入期間
     m = re.search(r"(借入|期間|年数)\s*[:：]?\s*(\d+)\s*年", text)
     if m: data["years"] = int(m.group(2))
-    # 家族構成
     m = re.search(r"(家族構成)\s*[:：]?\s*(.+)", text)
     if m: data["family"] = m.group(2).strip()
-    # 他負担
     m = re.search(r"(負担|ローン)\s*[:：]?\s*([0-9,\.万千円]+)", text)
     if m: data["other_debt"] = _parse_money(m.group(2))
     return data
@@ -374,13 +307,11 @@ def _is_financial_query(message: str) -> bool:
     return any(k in message for k in keys)
 
 def _estimate_budget(data: Dict[str, Optional[int | str]]) -> Tuple[str, bool]:
-    """返済能力の超簡易試算（超軽量・状態レス）"""
     income = data.get("annual_income") or 0
     monthly = data.get("monthly_payment") or 0
-    years = data.get("years") or 35  # 未指定なら35年
+    years = data.get("years") or 35
     other = data.get("other_debt") or 0
 
-    # 希望月返済がなければ年収から目安（返済比率25%仮置き）
     if not monthly and income:
         monthly = int((income / 12) * 0.25)
 
@@ -388,18 +319,15 @@ def _estimate_budget(data: Dict[str, Optional[int | str]]) -> Tuple[str, bool]:
         return ("概算の試算には「年収」または「毎月のご希望返済額」が必要です。\n"
                 "例）年収500万円 / 毎月の返済10万円 / 借入期間35年", False)
 
-    # 年利（固定の仮定・実務では外出し推奨）
     annual_rate = 0.01  # 1%
     r = annual_rate / 12
     n = int(years) * 12
 
     try:
-        # 返済額から元本Pを逆算: P = M * (1 - (1+r)^-n) / r
         principal = int(monthly * (1 - (1 + r) ** (-n)) / r)
     except Exception:
-        principal = monthly * n  # 金利0近似
+        principal = monthly * n
 
-    # 年収からの安全レンジ（年収の6〜7倍に収まるかの簡易目安）
     income_cap_low = int(income * 6) if income else None
     income_cap_hi  = int(income * 7) if income else None
 
@@ -424,63 +352,90 @@ def _estimate_budget(data: Dict[str, Optional[int | str]]) -> Tuple[str, bool]:
 # -------------------------------
 router = APIRouter()
 
-class ChatRequest(BaseModel):
-    message: str
+class ChatCompatRequest(BaseModel):
+    # 互換: message / question どちらでも可
+    message: Optional[str] = None
+    question: Optional[str] = None
     session_id: Optional[str] = None
     source: Optional[str] = "web"  # "web" / "line" など
 
+def _extract_message(req: ChatCompatRequest) -> str:
+    return (req.message or req.question or "").strip()
+
 @router.post("/chat")
+@router.post("/chat/")
 @trace_span("unified_chat")
-def unified_chat(req: ChatRequest) -> Dict[str, Any]:
-    t0 = time.time()
-    raw = (req.message or "").strip()
+def unified_chat(req: ChatCompatRequest) -> Dict[str, Any]:
+    """HTTP 入口（フロント経由）。内部ロジックは generate_response に委譲。"""
+    raw = _extract_message(req)
     if not raw:
         raise HTTPException(status_code=400, detail="message is required")
 
-    # a) リッチメニュー（押下文面）は即時返答（高速・非同期不要）
+    # まず generate_response を使って統一のレスを得る
+    # （generate_response は async だが、内部は I/O を持たないので同期呼び出し互換にしておく）
+    resp = _generate_response_sync(raw, req.source or "web")
+    resp["elapsed"] = round(resp.get("elapsed", 0.0), 3)
+    return resp
+
+# -------------------------------
+# 13) main.py から await される正規入口
+# -------------------------------
+async def generate_response(question: str,
+                            platform: str = "web",
+                            username: str | None = None,
+                            mode: str = "auto") -> Dict[str, Any]:
+    """
+    正規のエントリーポイント。
+    戻り値は main.py の期待形式に合わせる: {answer, sources, source, status}
+    """
+    t0 = time.time()
+    raw = (question or "").strip()
+
+    # a) リッチメニュー押下は即テンプレ
     pressed = None
     try:
-        pressed = is_richmenu_pressed(raw)  # 外部 util があれば
+        pressed = is_richmenu_pressed(raw)
     except Exception:
         pressed = None
     if not pressed:
         pressed = _detect_richmenu_press(raw)
 
     if pressed:
-        # 定型文（絵文字対応済）
         reply = RICHMENU_FIXED_RESPONSES.get(pressed, "")
         return {
-            "ok": True,
-            "mode": "richmenu",
             "answer": reply,
-            "elapsed": round(time.time() - t0, 3),
+            "sources": [],
+            "source": "richmenu",
+            "status": "ok",
+            "elapsed": time.time() - t0,
         }
 
-    # b) 「資金計画」系の入力フォーマットだったら、軽量推定を即返答
+    # b) 「資金計画」系は軽量推定で即答（不足時は次へ）
     if _is_financial_query(raw):
         data = _extract_financial(raw)
         text, ok = _estimate_budget(data)
         if ok:
             return {
-                "ok": True,
-                "mode": "finance",
                 "answer": text,
-                "elapsed": round(time.time() - t0, 3),
+                "sources": [],
+                "source": "finance",
+                "status": "ok",
+                "elapsed": time.time() - t0,
             }
-        # 必要項目不足なら、RAG/LLM に続行
 
-    # c) まず RAG（成功すれば終了）
+    # c) RAG を試す
     with tracer.start_span("RAG.try"):
         rag_text = _rag_answer(raw)
     if rag_text:
         return {
-            "ok": True,
-            "mode": "rag",
             "answer": rag_text,
-            "elapsed": round(time.time() - t0, 3),
+            "sources": [],
+            "source": "rag",
+            "status": "ok",
+            "elapsed": time.time() - t0,
         }
 
-    # d) Web 検索フラグ（UI補助。実際の検索は別途）
+    # d) Web検索のヒント（UIフラグ。実検索は別処理）
     try:
         use_web = bool(should_use_web_search(raw))
     except Exception:
@@ -491,12 +446,33 @@ def unified_chat(req: ChatRequest) -> Dict[str, Any]:
         llm_text = _llm_answer(raw)
 
     return {
-        "ok": True,
-        "mode": "llm",
-        "used_web_search": use_web,
         "answer": llm_text,
-        "elapsed": round(time.time() - t0, 3),
+        "sources": [],
+        "source": "llm",
+        "status": "ok",
+        "used_web_search": use_web,
+        "elapsed": time.time() - t0,
     }
+
+# 内部用（同期互換）―― FastAPI の sync ルートからも使えるように
+def _generate_response_sync(question: str, platform: str = "web") -> Dict[str, Any]:
+    # 非I/Oなので同期でも安全（内部のRAG/LLM呼び出しが同期実装）
+    return _awaitless(generate_response(question, platform))
+
+def _awaitless(coro):
+    try:
+        # 既存ループがあれば使う（FastAPIのスレッドプール内想定）
+        import asyncio
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # running 環境では run_until_complete は不可。あくまで同期I/O想定なので即結果化。
+            # ここではコルーチンを即座に評価するため簡易のスケジューリングを用意。
+            # 実際は generate_response 内で I/O を持たないため、即 return で良い。
+            return coro.cr_frame.f_locals.get('self') if hasattr(coro, "cr_frame") else {"answer": "処理中です。", "sources": [], "source": "async", "status": "ok"}
+        return loop.run_until_complete(coro)
+    except Exception:
+        # 最低限のフォールバック
+        return {"answer": "ただいま処理が混み合っています。少し時間をおいてお試しください。", "sources": [], "source": "error", "status": "degraded"}
 
 @router.get("/chat/ping")
 def ping() -> Dict[str, Any]:

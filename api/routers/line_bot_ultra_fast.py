@@ -39,7 +39,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 get_rag_response = None
-for cand in ("services.rag_chain", "rag.rag_chain", "rag_chain"):
+for cand in ("api.services.rag_chain", "services.rag_chain", "rag.rag_chain", "rag_chain"):
     try:
         mod = __import__(cand, fromlist=["get_rag_response"])
         get_rag_response = getattr(mod, "get_rag_response")
@@ -50,7 +50,8 @@ for cand in ("services.rag_chain", "rag.rag_chain", "rag_chain"):
 
 # 資金計画 LLM 呼び出し（存在すれば利用）
 run_financial_plan = None
-for cand in ("financial_api", "services.financial_api"):
+for cand in ("api.routers.line_bot_financial_planner", "line_bot_financial_planner",
+             "financial_api", "services.financial_api"):
     try:
         mod = __import__(cand, fromlist=["run_financial_plan"])
         run_financial_plan = getattr(mod, "run_financial_plan")
@@ -154,7 +155,7 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 ・よくある質問（最初に迷う3つのこと ほか）
 ・保存版デジタル冊子 ZINE（無料ダウンロード）
 ・LINEで無料相談／来場予約
-📱 サイトURL:
+📱 サイトURL：
 https://preview.studio.site/live/EjOQljz1WJ/""",
 
     # 資料請求
@@ -484,7 +485,7 @@ if LINE_SDK_AVAILABLE and handler:
 
             # AI相談モード：まず即時 ACK、その後バックグラウンドで結果 push
             if mode == "ai":
-                ack = "🔎 回答を作成しています…"
+                ack = "🔎 少しお待ちください…"
                 _reply_or_push(reply_token, user_id, ack)
                 threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start()
                 return

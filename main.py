@@ -123,6 +123,7 @@ def _include_optional_router(py_path: str, attr: str = "router", prefix: str = "
 _include_optional_router("api.routers.legal_pages")
 _include_optional_router("api.routers.liff_pages")
 _include_optional_router("api.routers.reconsent_tasks")
+_include_optional_router("api.routers.financial_api")  # [PATCH] 資金計画のAPIを必ず公開
 
 # =================================
 # グローバル（RAG）

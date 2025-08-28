@@ -14,7 +14,12 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+# 正式ルータ（/financial プレフィックス）
 router = APIRouter(prefix="/financial", tags=["financial-planning"])
+
+# 互換ルータ（/api/financial-calculate を直下に生やす用）
+router_compat = APIRouter(tags=["financial-planning-compat"])
 
 # =============================================================================
 # 入力モデル（フロントは 万円 → API では 円を想定）
@@ -530,3 +535,12 @@ async def financial_health_check():
         ],
         "timestamp": datetime.now().isoformat(),
     }
+
+
+# =============================================================================
+# 互換： /api/financial-calculate → 正式APIへ委譲
+# =============================================================================
+@router_compat.post("/api/financial-calculate")
+async def _alias_calc(req: FinancialCalculationRequest):
+    # 旧クライアント（/api/financial-calculate）をサポート
+    return await calculate_financial_plan(req)
