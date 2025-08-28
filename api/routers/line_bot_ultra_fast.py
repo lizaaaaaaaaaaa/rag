@@ -16,6 +16,18 @@ from typing import Dict, Optional, Any, Tuple
 from fastapi import APIRouter, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 
+from api.routers.line_utils import with_utm
+
+# ▼ 追記: LIFF 各種リンク（リッチメニューや返信で使う際はこれを利用）
+AI_CONSULT_URL = "https://liff.line.me/LIFF_ID_AI?state=rag_home"
+AI_SITE_URL    = "https://liff.line.me/LIFF_ID_SITE?state=rag_home"
+BUDGET_URL     = "https://liff.line.me/LIFF_ID_BUDGET?state=rm_ai_loan"
+
+# ab既定は"A"（必要に応じて切替可能）
+ai_consult_link = with_utm(AI_CONSULT_URL, "ai_consult", ab="A")
+ai_site_link    = with_utm(AI_SITE_URL,   "ai_site",    ab="A")
+budget_link     = with_utm(BUDGET_URL,    "budget",     ab="A")
+
 logger = logging.getLogger(__name__)
 
 # ==============================================================================
@@ -102,13 +114,13 @@ SESSION_TTL = int(os.getenv("SESSION_TTL_MINUTES", "30")) * 60
 # ==============================================================================
 # 固定テンプレ（ご指定文面に完全一致）
 # ==============================================================================
-RICHMENU_FIXED_RESPONSES = {
-    # 友だち追加後
+RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
+    # 友だち追加後（Web 側でも同文面で案内）
     "follow_greeting": """こんにちは！キノエデザインです。
-この度は友だち追加ありがとうございます:sparkles:
+この度は友だち追加ありがとうございます✨
 
-目的のボタンをタップ:point_down:
-:robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :yen:資金計画 / :globe_with_meridians:サイト / :speech_balloon:チャット
+目的のボタンをタップ👇
+🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画 / 🌐サイト / 💬チャット
 
 AIは24時間、担当者は当日〜翌営業日に返信します。
 
@@ -118,35 +130,35 @@ AIは24時間、担当者は当日〜翌営業日に返信します。
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 
     # AI相談
-    "AI相談": """:robot: AI住まい相談を開始します！
+    "AI相談": """🤖 AI住まい相談を開始します！
 キノエデザインの住まいAIコンシェルジュです。
 住まいに関するご質問をお気軽にどうぞ！
-:bulb: **例えば**
+💡 **例えば**
 ・坪単価について教えて
 ・標準仕様はどんな感じ？
 ・耐震性能について知りたい
 ・断熱性能はどのくらい？
-何でもお聞きください:blush:
+何でもお聞きください😊
 ※ご使用の前に、必ず以下の取り扱いをご確認ください。
 プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 
     # AI住まいサイト
-    "AI住まいサイト": """:globe_with_meridians: AI住まいサイトのご案内
+    "AI住まいサイト": """🌐 AI住まいサイトのご案内
 キノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）
-:house: サイト内容：
+🏠 サイト内容：
 ・AIチャット相談（資金計画／補助金／間取り など）
 ・施工写真（実例）
 ・間取りの考え方・プラン例
 ・よくある質問（最初に迷う3つのこと ほか）
 ・保存版デジタル冊子 ZINE（無料ダウンロード）
 ・LINEで無料相談／来場予約
-:mobile_phone: サイトURL:
+📱 サイトURL:
 https://preview.studio.site/live/EjOQljz1WJ/""",
 
     # 資料請求
-    "資料請求": """:clipboard:ありがとうございます！こちらからご覧いただけます。
+    "資料請求": """📋ありがとうございます！こちらからご覧いただけます。
 〔資料タイトル〕（PDF）：〔URL〕
 よろしければ簡単アンケート（任意）：
 ・ご計画時期：今すぐ / 3–6か月 / 1年以内 / 未定
@@ -157,12 +169,12 @@ https://preview.studio.site/live/EjOQljz1WJ/""",
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 
     # 展示場来場予約
-    "展示場来場予約": """:round_pushpin: 展示場のご来場予約につきましては、下記URLより必要事項のご入力をお願い申し上げます。
+    "展示場来場予約": """📍 展示場のご来場予約につきましては、下記URLより必要事項のご入力をお願い申し上げます。
 【https://preview.studio.site/live/EjOQljz1WJ/reservation 】
 スタッフ一同、心よりお待ちしております！""",
 
     # 資金計画
-    "資金計画": """:speech_balloon: AI資金診断のご案内
+    "資金計画": """💬 AI資金診断のご案内
 本診断は匿名でご利用いただけます。ご回答内容は保存いたしません。算出される金額は試算（概算）であり、目安としてご確認ください。
 お手数ですが、以下の5点をご入力ください。
 ・年収（概算可）
@@ -173,49 +185,45 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 未入力の項目があっても進められます。ご入力後、概算結果をご提示いたします。""",
 
     # チャット相談
-    "チャット相談": """:speech_balloon: スタッフとのご相談
+    "チャット相談": """💬 スタッフとのご相談
 【対応時間】
 営業時間：9:00-18:00
-:mobile_phone: ご相談方法：
+📱 ご相談方法：
 ・このLINEでの直接相談
 ・お電話での相談
 ・展示場での対面相談
 営業時間内でしたら迅速にお返事します。
-お気軽にお声かけください！"""
+お気軽にお声かけください！""",
 }
 
 # ボタンの文言ゆらぎを吸収するマッピング
-RICHMENU_KEYWORD_MAPPING = {
+RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
     # AI相談
     "AI相談": "AI相談",
     ":robot: AI相談": "AI相談",
     "🤖 AI相談": "AI相談",
-
     # AI住まいサイト
     "AI住まいサイト": "AI住まいサイト",
-    ":globe_with_meridians: AI住まいサイト": "AI住まいサイト",
+    "🌐 AI住まいサイト": "AI住まいサイト",
     "サイト": "AI住まいサイト",
     "ホームページ": "AI住まいサイト",
-
     # 資料請求
     "資料請求": "資料請求",
-    ":clipboard: 資料請求": "資料請求",
-
+    "📋 資料請求": "資料請求",
     # 展示場来場予約
     "展示場来場予約": "展示場来場予約",
-    ":round_pushpin: 展示場来場　予約": "展示場来場予約",  # 全角スペースパターン
+    "📍 展示場来場　予約": "展示場来場予約",
     "来場予約": "展示場来場予約",
-
     # 資金計画
     "資金計画": "資金計画",
-    ":moneybag: 資金計画": "資金計画",
+    "💴 資金計画": "資金計画",
     "💰 資金計画": "資金計画",
-
     # チャット相談
     "チャット相談": "チャット相談",
-    ":speech_balloon: チャット相談": "チャット相談",
+    "💬チャット相談": "チャット相談",
     "チャット": "チャット相談",
 }
+
 
 # ==============================================================================
 # 軽量重複防止（連打/再送対策）
