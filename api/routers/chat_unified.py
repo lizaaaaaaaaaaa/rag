@@ -105,7 +105,8 @@ tracer = RAGTracer()
 # 6) RAG を柔軟にロード
 # -------------------------------
 _RAG = None
-for modname in ("services.rag_chain", "rag.fast_rag_chain", "rag_chain", "fast_rag_chain"):
+for modname in ("api.services.rag_chain", "services.rag_chain",
+                "rag.fast_rag_chain", "rag_chain", "fast_rag_chain"):
     try:
         _RAG = importlib.import_module(modname)
         logger.info("RAG module loaded: %s", modname)
@@ -159,20 +160,43 @@ def _llm_answer(prompt: str) -> str:
     except Exception as e:
         logger.info("llm_runner fallback to OpenAI: %s", e)
 
-    # 7-2) OpenAI 直
+    # 7-2) OpenAI 直（ENV優先で上限拡大 & 自動つづき）
     try:
         import openai  # type: ignore
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY not set")
         client = openai.OpenAI(api_key=api_key)  # type: ignore[attr-defined]
+
+        model = os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo")
+        temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.1"))
+        max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", os.getenv("MAX_NEW_TOKENS", "900")))
+        # 1回目
         rsp = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo"),
+            model=model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.1")),
-            max_tokens=int(os.getenv("MAX_NEW_TOKENS", "300")),
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
-        return _strip_citations(rsp.choices[0].message.content or "")
+        text = rsp.choices[0].message.content or ""
+        fin = getattr(rsp.choices[0], "finish_reason", None)
+
+        # 必要なら“続きだけ”もう1度取りに行く
+        if fin == "length":
+            max_tokens2 = int(os.getenv("OPENAI_MAX_TOKENS_CONT", os.getenv("MAX_NEW_TOKENS_CONT", "600")))
+            rsp2 = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": text},
+                    {"role": "user", "content": "続きだけを日本語で、簡潔に出してください。"}
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens2,
+            )
+            text += "\n" + (rsp2.choices[0].message.content or "")
+
+        return _strip_citations(text)
     except Exception as e:
         logger.warning("OpenAI not available: %s", e)
         return "今のご質問について準備中です。もう一度お試しください。"
