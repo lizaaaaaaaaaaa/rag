@@ -1,8 +1,10 @@
-# main.py - Unified RAG API (Diagnostics Super-Enhanced)
+# main.py - Unified RAG API (Diagnostics Super-Enhanced) [with Boot Guard]
+
 import logging
 import os
 import asyncio
 import time
+import json  # [ADD] Boot Guard ログ用
 from datetime import datetime
 from typing import Dict, Any, List
 from uuid import uuid4
@@ -12,6 +14,37 @@ import pathlib
 import importlib
 import importlib.util
 import types
+
+# ================================
+# Boot Guard: ENV 下限の強制 & ブート計測
+# （重い import/初期化の前に実行）
+# ================================
+logger = logging.getLogger(__name__)
+
+def _enforce_env_minimums():
+    mins = {
+        "MAX_NEW_TOKENS": "900",
+        "OPENAI_MAX_TOKENS": "900",
+        "LLM_TIMEOUT": "45",
+    }
+    bumped = {}
+    for k, v in mins.items():
+        cur = os.getenv(k)
+        if cur is None or (cur.isdigit() and int(cur) < int(v)):
+            os.environ[k] = v
+            bumped[k] = v
+    if bumped:
+        # 起動時に一度だけ警告を出しておく（ログ監視で検知可）
+        logger.warning(f"BootGuard: bumped env minimums -> {bumped}")
+
+_BOOT_T0 = time.time()
+# Boot開始ログ（Log-based Metricで監視しやすいようJSONに）
+try:
+    logger.info(json.dumps({"evt": "boot", "phase": "start"}))
+except Exception:
+    pass
+_enforce_env_minimums()
+# ===== /Boot Guard =====
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,14 +70,12 @@ def ensure_utils_web_search_alias() -> bool:
     `from utils.web_search import ...` が通るように別名登録する。
     戻り値: 何かしらの方法で alias/読み込みに成功したら True
     """
-    # すでに import 済みなら何もしない
     try:
         import utils.web_search  # type: ignore
         return True
     except Exception:
         pass
 
-    # 探索候補
     candidates = [
         ROOT / "utils" / "web_search.py",
         ROOT / "api" / "utils" / "web_search.py",
@@ -58,7 +89,6 @@ def ensure_utils_web_search_alias() -> bool:
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(mod)  # type: ignore
-                    # 親パッケージ 'utils' もダミーで登録
                     if "utils" not in sys.modules:
                         sys.modules["utils"] = types.ModuleType("utils")
                     sys.modules["utils.web_search"] = mod
@@ -123,7 +153,8 @@ def _include_optional_router(py_path: str, attr: str = "router", prefix: str = "
 _include_optional_router("api.routers.legal_pages")
 _include_optional_router("api.routers.liff_pages")
 _include_optional_router("api.routers.reconsent_tasks")
-_include_optional_router("api.routers.financial_api")  # [PATCH] 資金計画のAPIを必ず公開
+_include_optional_router("api.routers.financial_api")  # 資金計画のAPIを公開
+_include_optional_router("api.routers.financial_api", attr="router_compat")  # [ADD] 旧クライアント互換 (/api/financial-calculate)
 
 # =================================
 # グローバル（RAG）
@@ -314,6 +345,8 @@ def get_shared_rag_components():
 # =================================
 # 診断系 API
 # =================================
+from fastapi import APIRouter  # 追加 import はこの位置でもOK
+
 @app.get("/debug/rag-status")
 async def get_rag_detailed_status():
     live_health = {
@@ -589,6 +622,12 @@ async def startup_event():
             logger.info("✅ LINE router included")
         except Exception as e:
             logger.error(f"ℹ️ LINE router not included: {e}")
+
+    # Boot 完了ログ（所要ms）
+    try:
+        logger.info(json.dumps({"evt": "boot", "phase": "ready", "ms": int((time.time() - _BOOT_T0) * 1000)}))
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     import uvicorn

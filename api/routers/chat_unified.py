@@ -22,12 +22,14 @@ _PROJECT_ROOT = _THIS.parents[2]  # <repo>/
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 # -------------------------------
 # 2) UTM 付与（存在しない場合でも動くフォールバック）
 # -------------------------------
 def _with_utm_fallback(url: str, source: str, ab: str | None = None) -> str:
     from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
-
     u = urlparse(url)
     q = dict(parse_qsl(u.query))
     q.setdefault("utm_source", "line")
@@ -39,7 +41,6 @@ def _with_utm_fallback(url: str, source: str, ab: str | None = None) -> str:
     return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
 
 try:
-    # 既存の util があればそれを使用
     from api.routers.line_utils import with_utm as _with_utm  # type: ignore
 except Exception:
     _with_utm = _with_utm_fallback
@@ -55,13 +56,10 @@ ai_consult_link = _with_utm(AI_CONSULT_URL, "ai_consult", ab="A")
 ai_site_link    = _with_utm(AI_SITE_URL,   "ai_site",    ab="A")
 budget_link     = _with_utm(BUDGET_URL,    "budget",     ab="A")
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
 # -------------------------------
 # 4) web_search（存在しなくてもOK）
 # -------------------------------
-def _noop_should_use_web_search(_: str) -> bool:  # UI 用のフラグなので未実装でOK
+def _noop_should_use_web_search(_: str) -> bool:
     return False
 
 def _noop_is_richmenu_pressed(_: str) -> Optional[str]:
@@ -102,33 +100,52 @@ except Exception:
 tracer = RAGTracer()
 
 # -------------------------------
-# 6) RAG を柔軟にロード
+# 6) RAG を完全 lazy-load に
 # -------------------------------
 _RAG = None
-for modname in ("api.services.rag_chain", "services.rag_chain",
-                "rag.fast_rag_chain", "rag_chain", "fast_rag_chain"):
-    try:
-        _RAG = importlib.import_module(modname)
-        logger.info("RAG module loaded: %s", modname)
-        break
-    except Exception:
-        continue
+
+def _lazy_load_rag():
+    """必要になった瞬間にだけRAGモジュールを解決（起動を軽くする）"""
+    global _RAG
+    if _RAG is not None:
+        return _RAG
+    for modname in (
+        "api.services.rag_chain",
+        "services.rag_chain",
+        "rag.fast_rag_chain",
+        "rag_chain",
+        "fast_rag_chain",
+    ):
+        try:
+            _RAG = importlib.import_module(modname)
+            logger.info("RAG module loaded: %s", modname)
+            break
+        except Exception:
+            continue
+    return _RAG
 
 def _rag_answer(question: str) -> Optional[str]:
-    if _RAG is None:
+    mod = _lazy_load_rag()
+    if mod is None:
         return None
     try:
+        # チェーンfactory候補
         chain = None
-        for factory in ("get_ultra_fast_rag_chain", "get_super_fast_rag_chain",
-                        "build_fast_rag_chain", "get_rag_chain", "create_rag_chain"):
-            fn = getattr(_RAG, factory, None)
+        for factory in (
+            "get_ultra_fast_rag_chain",
+            "get_super_fast_rag_chain",
+            "build_fast_rag_chain",
+            "get_rag_chain",
+            "create_rag_chain",
+        ):
+            fn = getattr(mod, factory, None)
             if fn:
                 chain = fn()
                 break
         if chain is None:
-            # 直接関数系
+            # 直接関数候補
             for direct in ("answer_with_rag", "rag_answer", "answer", "get_rag_response"):
-                f = getattr(_RAG, direct, None)
+                f = getattr(mod, direct, None)
                 if f:
                     out = f(question)
                     return _strip_citations(_to_text(out))
@@ -147,7 +164,7 @@ def _rag_answer(question: str) -> Optional[str]:
         return None
 
 # -------------------------------
-# 7) LLM フォールバック（llm_runner → OpenAI → 固定文）
+# 7) LLM フォールバック（llm_runner → OpenAI直 → 固定文）
 # -------------------------------
 def _llm_answer(prompt: str) -> str:
     # 7-1) llm_runner を優先（パッケージ/相対の両対応）
@@ -260,7 +277,6 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】"""),
     "チャット相談": _normalize_colon_emoji("""💬 スタッフとのご相談..."""),
 }
 
-# 押下ゆらぎ吸収（コロン表記/全角スペース/別名）
 RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
     "AI相談": "AI相談", ":robot: AI相談": "AI相談", "🤖 AI相談": "AI相談",
     "AI住まいサイト": "AI住まいサイト", "🌐 AI住まいサイト": "AI住まいサイト",
@@ -447,7 +463,7 @@ async def generate_response(question: str,
                 "elapsed": time.time() - t0,
             }
 
-    # c) RAG を試す
+    # c) RAG を試す（ここで初めてRAGがロードされる）
     with tracer.start_span("RAG.try"):
         rag_text = _rag_answer(raw)
     if rag_text:
@@ -489,10 +505,8 @@ def _awaitless(coro):
         import asyncio
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # running 環境では run_until_complete は不可。あくまで同期I/O想定なので即結果化。
-            # ここではコルーチンを即座に評価するため簡易のスケジューリングを用意。
-            # 実際は generate_response 内で I/O を持たないため、即 return で良い。
-            return coro.cr_frame.f_locals.get('self') if hasattr(coro, "cr_frame") else {"answer": "処理中です。", "sources": [], "source": "async", "status": "ok"}
+            # running 環境では run_until_complete は不可。I/O無し想定なので簡易return
+            return {"answer": "処理中です。", "sources": [], "source": "async", "status": "ok"}
         return loop.run_until_complete(coro)
     except Exception:
         # 最低限のフォールバック
