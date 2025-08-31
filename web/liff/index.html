@@ -3,62 +3,104 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>LIFF Starter</title>
+  <title>AI相談をはじめる</title>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     body{font-family:system-ui,sans-serif;padding:24px}
     .ok{color:#2c7}.err{color:#c22}
+    .box{border:1px solid #ddd;border-radius:12px;padding:16px}
+    button{padding:10px 16px;border:0;border-radius:8px;cursor:pointer}
+    .links a{margin-right:12px}
   </style>
 </head>
 <body>
-  <h1>LIFF Ready</h1>
+  <h1>AI相談をはじめる</h1>
   <p id="status">initializing…</p>
+
+  <div class="box" id="preLogin" style="display:none">
+    <p>ご利用前に以下をご確認ください。</p>
+    <p class="links">
+      <a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>
+      <a href="/terms"   target="_blank" rel="noopener">利用規約</a>
+      <a href="/cookie"  target="_blank" rel="noopener">Cookie・外部送信</a>
+    </p>
+    <p>同意のうえ「ログインして開始」を押してください。</p>
+    <button id="btnLogin">ログインして開始</button>
+  </div>
+
   <script>
   (async () => {
-    const LIFF_ID = "2007887876-vMNe74eX"; // ← あなたのLIFF ID
+    const LIFF_ID = "2007887876-vMNe74eX";
     const POLICY_VERSION = "pp_v1.3";
     const TOS_VERSION    = "tos_v1.4";
 
-    // liff.state を展開（state/utm/ab などを保持）
+    const statusEl = document.getElementById("status");
+    const preLogin = document.getElementById("preLogin");
     const all = new URLSearchParams(location.search);
     const stateQS = new URLSearchParams(all.get("liff.state") || "");
     const state = stateQS.get("state") || "rag_home";
     const ab    = stateQS.get("ab") || "A";
     const utm_campaign = stateQS.get("utm_campaign") || "";
 
-    const statusEl = document.getElementById("status");
     try {
       await liff.init({ liffId: LIFF_ID });
-      if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return; }
 
-      // userId を取得（プロファイル権限が無くても IDトークンから取得できる場合あり）
-      let userId = liff.getDecodedIDToken()?.sub;
-      if (!userId && liff.getProfile) {
-        try { userId = (await liff.getProfile()).userId; } catch(_) {}
-      }
-      if (!userId) throw new Error("LINE userId が取得できませんでした。");
-
-      // 同意の有無を確認
-      const r = await fetch("/consent/check", {
-        method: "POST", headers: {"Content-Type":"application/json"}, credentials:"include",
-        body: JSON.stringify({ user_id: userId, policy_version: POLICY_VERSION, tos_version: TOS_VERSION })
-      });
-      const j = await r.json();
-
-      if (j.valid) {
-        statusEl.textContent = "OK - consented";
-        statusEl.className = "ok";
-        // 同意済み → アプリ本体へ
-        location.replace("/?consented=1&state="+encodeURIComponent(state)+"&ab="+encodeURIComponent(ab));
-      } else {
-        // 未同意 → /liff/consent に必要情報を引き継いで遷移
+      const goConsent = (userId) => {
         const qp = new URLSearchParams({
           user_id: userId, liff_id: LIFF_ID,
           policy_version: POLICY_VERSION, tos_version: TOS_VERSION,
           state, utm_campaign, ab
         });
         location.replace("/liff/consent?"+qp.toString());
+      };
+
+      const afterLogin = async () => {
+        // userId を取得
+        let userId = liff.getDecodedIDToken()?.sub;
+        if (!userId && liff.getProfile) { try { userId = (await liff.getProfile()).userId; } catch(_){} }
+        if (!userId) throw new Error("LINE userId が取得できませんでした。");
+
+        // 同意済みかチェック
+        const r = await fetch("/consent/check", {
+          method: "POST", headers: {"Content-Type":"application/json"}, credentials:"include",
+          body: JSON.stringify({ user_id: userId, policy_version: POLICY_VERSION, tos_version: TOS_VERSION })
+        });
+        const j = await r.json();
+
+        if (j.valid) {
+          statusEl.textContent = "OK - consented";
+          statusEl.className = "ok";
+          location.replace("/?consented=1&state="+encodeURIComponent(state)+"&ab="+encodeURIComponent(ab));
+        } else {
+          goConsent(userId);
+        }
+      };
+
+      if (liff.isLoggedIn()) {
+        await afterLogin();
+        return;
       }
+
+      // 自動ログインはしない。法務リンクを見せ、ボタンで開始。
+      preLogin.style.display = "block";
+      statusEl.textContent = "未ログインです。内容をご確認のうえ、ログインして開始してください。";
+      statusEl.className = "";
+
+      document.getElementById("btnLogin").onclick = () => {
+        // ログイン後にこのページへ戻し、afterLogin で同意確認へ進む
+        const url = new URL(location.href);
+        url.searchParams.set("from", "postlogin");
+        liff.login({ redirectUri: url.toString() });
+      };
+
+      // ログイン直後に戻ってきたら、同意確認へ進める
+      if (all.get("from") === "postlogin") {
+        // LINEの戻りでは isLoggedIn() が true のはずなので、リトライ的に試す
+        const wait = () => new Promise(r => setTimeout(r, 150));
+        for (let i=0;i<10;i++){ if (liff.isLoggedIn()) break; await wait(); }
+        if (liff.isLoggedIn()) await afterLogin();
+      }
+
     } catch (e) {
       statusEl.textContent = "Error: " + (e && e.message || e);
       statusEl.className="err";
