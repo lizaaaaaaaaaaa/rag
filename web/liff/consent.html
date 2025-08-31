@@ -5,80 +5,116 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>同意のお願い</title>
 <style>
-body{font-family:system-ui,-apple-system,"Segoe UI",Roboto;margin:0;background:#f8f9fb}
-.wrap{max-width:720px;margin:0 auto;padding:24px}
-.card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:20px}
-h1{font-size:1.2rem;margin:0 0 12px}
-.checks{display:grid;gap:10px;margin:14px 0}
-.links{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0}
-.links a{font-size:.92rem}
-button{width:100%;padding:12px 16px;border-radius:12px;border:0;font-weight:600}
-button[disabled]{opacity:.5}
-.beta{font-size:.8rem;opacity:.7;margin-bottom:8px}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto;margin:0;background:#f8f9fb}
+  .wrap{max-width:720px;margin:0 auto;padding:24px}
+  .card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:20px}
+  h1{font-size:1.2rem;margin:0 0 12px}
+  .checks{display:grid;gap:10px;margin:14px 0}
+  .links{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0}
+  .links a{font-size:.92rem}
+  button{width:100%;padding:12px 16px;border-radius:12px;border:0;font-weight:600}
+  #go{background:#2c7;color:#fff} #go:disabled{background:#a9d5bd}
+  .beta{position:fixed;left:8px;top:8px;background:#111;color:#fff;padding:4px 8px;border-radius:8px;font-size:.8rem;opacity:.9}
+  .note{font-size:.9rem;color:#666}
 </style>
 </head>
 <body>
 <div class="wrap">
-<div class="beta" aria-label="beta">β版</div>
-<div class="card">
-<h1>ご利用前の同意</h1>
-<p>以下の3点にご同意の上、「同意して始める」を押してください。</p>
-<div class="checks">
-<label><input type="checkbox" id="c1"> プライバシーポリシーに同意します</label>
-<label><input type="checkbox" id="c2"> 外部送信（AI/分析等）の可能性に同意します</label>
-<label><input type="checkbox" id="c3"> 生成AIの限界（誤り/偏り/責任分界）を理解しました</label>
+  <div class="beta" aria-label="beta">β版</div>
+  <div class="card">
+    <h1>ご利用前の同意</h1>
+    <p>以下の3点にご同意の上、「同意して始める」を押してください。</p>
+
+    <div class="checks">
+      <label><input type="checkbox" id="c1"> プライバシーポリシーに同意します</label>
+      <label><input type="checkbox" id="c2"> 外部送信（AI/分析等）の可能性に同意します</label>
+      <label><input type="checkbox" id="c3"> 生成AIの限界（誤り/偏り/責任分界）を理解しました</label>
+    </div>
+
+    <div class="links">
+      <a href="/privacy" target="_blank" rel="noopener">/privacy</a>
+      <a href="/terms" target="_blank" rel="noopener">/terms</a>
+      <a href="/cookie" target="_blank" rel="noopener">/cookie</a>
+    </div>
+
+    <button id="go" disabled>同意して始める</button>
+    <p id="msg" class="note" style="margin-top:10px"></p>
+  </div>
 </div>
-<div class="links">
-<a href="/privacy" target="_blank" rel="noopener">/privacy</a>
-<a href="/terms" target="_blank" rel="noopener">/terms</a>
-<a href="/cookie" target="_blank" rel="noopener">/cookie</a>
-</div>
-<button id="go" disabled>同意して始める</button>
-<p id="msg" style="font-size:.9rem;color:#888;margin-top:10px"></p>
-</div>
-</div>
+
 <script>
-const qs = new URLSearchParams(location.search);
-const mock = qs.get('mock') === '1';
-const version = 'v1'; // 同意バージョン（必要に応じて更新）
+  // ===== 受け渡しパラメータ =====
+  const qs = new URLSearchParams(location.search);
+  const mock = qs.get('mock') === '1';
 
+  // index.html から引き継ぐ値（無ければフォールバック）
+  const LIFF_ID_DEFAULT = '2007887876-vMNe74eX';
+  const POLICY_VERSION  = qs.get('policy_version') || 'pp_v1.3';
+  const TOS_VERSION     = qs.get('tos_version')    || 'tos_v1.4';
+  const USER_ID         = qs.get('user_id')        || '';
+  const LIFF_ID         = qs.get('liff_id')        || LIFF_ID_DEFAULT;
+  const STATE           = qs.get('state')          || 'rag_home';
+  const AB              = qs.get('ab')             || 'A';
 
-const c1 = document.getElementById('c1');
-const c2 = document.getElementById('c2');
-const c3 = document.getElementById('c3');
-const go = document.getElementById('go');
-const msg = document.getElementById('msg');
+  // ===== 画面要素 =====
+  const c1 = document.getElementById('c1');
+  const c2 = document.getElementById('c2');
+  const c3 = document.getElementById('c3');
+  const go = document.getElementById('go');
+  const msg = document.getElementById('msg');
 
+  function refresh(){ go.disabled = !(c1.checked && c2.checked && c3.checked); }
+  [c1,c2,c3].forEach(el=>el.addEventListener('change', refresh));
 
-function refresh(){
-const ok = c1.checked && c2.checked && c3.checked;
-go.disabled = !ok;
-}
-[c1,c2,c3].forEach(el=>el.addEventListener('change', refresh));
+  // デモ／確認用（?mock=1 でチェック済みに）
+  if (mock) { c1.checked = c2.checked = c3.checked = true; refresh(); }
 
+  // LIFF から来ていない等で user_id が取れなかった場合は注意表示
+  if (!USER_ID) {
+    msg.textContent = 'LINEのLIFF経由で開いてください（ユーザー識別が必要です）。';
+  }
 
-if(mock){ c1.checked = c2.checked = c3.checked = true; refresh(); }
+  // ===== 送信処理 =====
+  go.addEventListener('click', async ()=>{
+    go.disabled = true; msg.textContent = '送信中...';
 
+    // サーバ仕様：/consent/save (ConsentRequest)
+    const flags = { pp: c1.checked, xfer: c2.checked, ai_limits: c3.checked };
+    const consent_id = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
+    const payload = {
+      consent_id,
+      user_id: USER_ID,
+      liff_id: LIFF_ID,
+      consented_at: new Date().toISOString(),
+      ip: qs.get('ip') || '0.0.0.0',
+      ua: navigator.userAgent,
+      policy_version: POLICY_VERSION,
+      tos_version: TOS_VERSION,
+      flags,
+      locale: navigator.language || 'ja-JP',
+      source: 'liff',
+      withdrawn: false
+    };
 
-go.addEventListener('click', async ()=>{
-go.disabled = true; msg.textContent = '送信中...';
-try{
-const r = await fetch('/consent/accept',{
-method:'POST',
-headers:{'Content-Type':'application/json'},
-credentials:'include',
-body: JSON.stringify({version, agreed:true, at:new Date().toISOString()})
-});
-if(!r.ok){ throw new Error('consent failed: '+r.status); }
-// 同意後の遷移（LIFF起動元へ戻すなど必要に応じて変更）
-const state = qs.get('state') || 'rag_home';
-const ab = qs.get('ab') || 'A';
-location.href = '/?consented=1&state='+encodeURIComponent(state)+'&ab='+encodeURIComponent(ab);
-}catch(e){
-msg.textContent = 'エラーが発生しました。時間をおいて再度お試しください。';
-go.disabled = false;
-}
-});
+    try{
+      const r = await fetch('/consent/save', {  // ★ /consent/accept → /consent/save
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        credentials:'include',
+        body: JSON.stringify(payload)
+      });
+      if(!r.ok){ throw new Error('consent save failed: '+r.status); }
+
+      // 同意完了 → 呼び出し元へ戻す（任意で UTM 等も継続可能）
+      location.href = '/?consented=1'
+        + '&state=' + encodeURIComponent(STATE)
+        + '&ab='    + encodeURIComponent(AB);
+    }catch(e){
+      console.error(e);
+      msg.textContent = 'エラーが発生しました。時間をおいて再度お試しください。';
+      go.disabled = false;
+    }
+  });
 </script>
 </body>
 </html>

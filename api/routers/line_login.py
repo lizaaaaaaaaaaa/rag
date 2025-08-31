@@ -1,224 +1,262 @@
-# api/routers/line_login.py - LINEログイン・LIFF対応
-
+# api/routers/line_login.py - LINEログイン・LIFF対応（完全修正版）
 import os
+import re
 import logging
 import jwt
 import requests
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Request, HTTPException, Response
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/line-login", tags=["line-login"])
 
+# =========================
 # 環境変数
+# =========================
 LINE_LOGIN_CHANNEL_ID = os.getenv("LINE_LOGIN_CHANNEL_ID")
 LINE_LOGIN_CHANNEL_SECRET = os.getenv("LINE_LOGIN_CHANNEL_SECRET")
 LINE_LOGIN_REDIRECT_URI = os.getenv("LINE_LOGIN_REDIRECT_URI")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://rag-frontend-190389115361.asia-northeast1.run.app")
 JWT_SECRET = os.getenv("JWT_SECRET", "supersecret")
 
+# LIFF ID: v1（liff-...）と v2（{digits}-{alnum}）の両方を許可
+LIFF_ID_PATTERN = re.compile(r"^(liff-[\w-]+|[A-Za-z0-9]+-[A-Za-z0-9]+)$")
+
+# =========================
+# モデル
+# =========================
 class LineLoginRequest(BaseModel):
     code: str
     state: Optional[str] = None
+    redirect_uri: Optional[str] = None  # ★ 追加：実際に使ったリダイレクトURIを受ける
 
 class LiffInitRequest(BaseModel):
     liff_id: str
     user_id: Optional[str] = None
 
+# =========================
+# ヘルパー
+# =========================
+def _resolve_redirect_uri(redirect_uri: Optional[str]) -> str:
+    """
+    認可リクエストで実際に使った redirect_uri と
+    トークン交換時の redirect_uri が一致していないと invalid_grant になるため、
+    ここで確実に決め打ちする。
+    """
+    if redirect_uri and redirect_uri.strip():
+        return redirect_uri.strip()
+    if LINE_LOGIN_REDIRECT_URI and LINE_LOGIN_REDIRECT_URI.strip():
+        return LINE_LOGIN_REDIRECT_URI.strip()
+    # 最後の砦（フロントの /line-callback に着地）
+    return f"{FRONTEND_URL}/line-callback"
+
+def _build_auth_url(redirect_uri: str, state: str) -> str:
+    return (
+        "https://access.line.me/oauth2/v2.1/authorize"
+        f"?response_type=code"
+        f"&client_id={LINE_LOGIN_CHANNEL_ID}"
+        f"&redirect_uri={redirect_uri}"
+        f"&state={state}"
+        f"&scope=profile%20openid"
+    )
+
+# =========================
+# 認証URLの発行
+# =========================
 @router.get("/auth-url")
 async def get_line_login_url(redirect_uri: Optional[str] = None):
     """LINEログイン認証URLを生成"""
     if not LINE_LOGIN_CHANNEL_ID:
         raise HTTPException(status_code=500, detail="LINE Login not configured")
-    
-    # リダイレクトURIの設定
-    actual_redirect_uri = redirect_uri or LINE_LOGIN_REDIRECT_URI
-    if not actual_redirect_uri:
-        actual_redirect_uri = f"{FRONTEND_URL}/line-callback"
-    
-    # ランダムなstate生成（CSRF対策）
+
     import secrets
     state = secrets.token_urlsafe(32)
-    
-    auth_url = (
-        f"https://access.line.me/oauth2/v2.1/authorize"
-        f"?response_type=code"
-        f"&client_id={LINE_LOGIN_CHANNEL_ID}"
-        f"&redirect_uri={actual_redirect_uri}"
-        f"&state={state}"
-        f"&scope=profile%20openid"
-    )
-    
+    actual_redirect_uri = _resolve_redirect_uri(redirect_uri)
+
     return {
-        "auth_url": auth_url,
+        "auth_url": _build_auth_url(actual_redirect_uri, state),
         "state": state,
-        "redirect_uri": actual_redirect_uri
+        "redirect_uri": actual_redirect_uri,
     }
 
+# =========================
+# コールバック（POST JSON）
+# =========================
 @router.post("/callback")
 async def line_login_callback(request: LineLoginRequest):
-    """LINEログインコールバック処理"""
+    """LINEログインコールバック処理（JSONクライアント想定）"""
     try:
-        # アクセストークンを取得
-        token_response = await get_line_access_token(request.code)
-        
-        if not token_response.get("access_token"):
+        redirect_uri = _resolve_redirect_uri(request.redirect_uri)
+        token_response = await get_line_access_token(request.code, redirect_uri=redirect_uri)
+
+        access_token = token_response.get("access_token")
+        if not access_token:
+            logger.error(f"token exchange failed: {token_response}")
             raise HTTPException(status_code=400, detail="Failed to get access token")
-        
-        # ユーザー情報を取得
-        user_info = await get_line_user_profile(token_response["access_token"])
-        
-        # JWTトークンを生成
+
+        user_info = await get_line_user_profile(access_token)
+
         jwt_payload = {
-            "user_id": user_info["userId"],
+            "user_id": user_info.get("userId"),
             "display_name": user_info.get("displayName", ""),
             "picture_url": user_info.get("pictureUrl", ""),
             "email": user_info.get("email", ""),
             "provider": "line",
-            "exp": datetime.utcnow() + timedelta(hours=24)
+            "exp": datetime.utcnow() + timedelta(hours=24),
         }
-        
         jwt_token = jwt.encode(jwt_payload, JWT_SECRET, algorithm="HS256")
-        
+
         return {
             "success": True,
             "token": jwt_token,
             "user": {
-                "id": user_info["userId"],
+                "id": user_info.get("userId"),
                 "name": user_info.get("displayName", ""),
                 "picture": user_info.get("pictureUrl", ""),
-                "email": user_info.get("email", "")
-            }
+                "email": user_info.get("email", ""),
+            },
         }
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"LINE login callback error: {e}")
+        logger.exception("LINE login callback error")
         raise HTTPException(status_code=500, detail=str(e))
 
+# =========================
+# コールバック（GET、ブラウザリダイレクト）
+# =========================
 @router.get("/callback")
 async def line_login_callback_get(request: Request):
     """GET版のコールバック（ブラウザリダイレクト用）"""
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     error = request.query_params.get("error")
-    
+    redirect_uri_qs = request.query_params.get("redirect_uri")  # ★ 受け取れれば使う
+
     if error:
         return RedirectResponse(url=f"{FRONTEND_URL}/?login=error&reason={error}")
-    
+
     if not code:
         return RedirectResponse(url=f"{FRONTEND_URL}/?login=error&reason=no_code")
-    
+
     try:
-        # POSTと同じ処理
-        login_request = LineLoginRequest(code=code, state=state)
-        result = await line_login_callback(login_request)
-        
-        # フロントエンドにリダイレクト
+        lr = LineLoginRequest(code=code, state=state, redirect_uri=redirect_uri_qs)
+        result = await line_login_callback(lr)  # 上と同じ処理
+
         return RedirectResponse(
             url=f"{FRONTEND_URL}/?login=success&token={result['token']}&provider=line"
         )
-        
+
     except Exception as e:
-        logger.error(f"LINE login GET callback error: {e}")
+        logger.exception("LINE login GET callback error")
         return RedirectResponse(url=f"{FRONTEND_URL}/?login=error&reason=server_error")
 
-async def get_line_access_token(code: str) -> dict:
+# =========================
+# トークン交換 & プロフィール取得
+# =========================
+async def get_line_access_token(code: str, *, redirect_uri: Optional[str] = None) -> Dict[str, Any]:
     """認証コードからアクセストークンを取得"""
     token_url = "https://api.line.me/oauth2/v2.1/token"
-    
+    actual_redirect_uri = _resolve_redirect_uri(redirect_uri)
+
     data = {
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": LINE_LOGIN_REDIRECT_URI,
+        "redirect_uri": actual_redirect_uri,  # ★ 認可時と完全一致させる
         "client_id": LINE_LOGIN_CHANNEL_ID,
         "client_secret": LINE_LOGIN_CHANNEL_SECRET,
     }
-    
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    
-    response = requests.post(token_url, data=data, headers=headers)
-    response.raise_for_status()
-    
-    return response.json()
 
-async def get_line_user_profile(access_token: str) -> dict:
+    resp = requests.post(token_url, data=data, headers=headers, timeout=15)
+    # エラー時の本文もログに残す（デバッグ容易化）
+    if not resp.ok:
+        try:
+            logger.error("token exchange error %s: %s", resp.status_code, resp.text)
+        except Exception:
+            logger.error("token exchange http %s", resp.status_code)
+        resp.raise_for_status()
+    return resp.json()
+
+async def get_line_user_profile(access_token: str) -> Dict[str, Any]:
     """アクセストークンからユーザープロフィールを取得"""
     profile_url = "https://api.line.me/v2/profile"
-    
     headers = {"Authorization": f"Bearer {access_token}"}
-    
-    response = requests.get(profile_url, headers=headers)
-    response.raise_for_status()
-    
-    return response.json()
 
-# LIFF関連のエンドポイント
+    resp = requests.get(profile_url, headers=headers, timeout=10)
+    if not resp.ok:
+        try:
+            logger.error("profile error %s: %s", resp.status_code, resp.text)
+        except Exception:
+            logger.error("profile http %s", resp.status_code)
+        resp.raise_for_status()
+    return resp.json()
+
+# =========================
+# LIFF 初期化
+# =========================
 @router.post("/liff/init")
 async def liff_initialize(request: LiffInitRequest):
-    """LIFF初期化処理"""
+    """
+    LIFF初期化処理
+    - v1: liff-xxxx 形式
+    - v2: 2007887876-vMNe74eX のような形式
+    """
     try:
-        # LIFF IDの検証
-        liff_id = request.liff_id
-        if not liff_id.startswith("liff-"):
-            raise HTTPException(status_code=400, detail="Invalid LIFF ID")
-        
-        # ユーザー情報があれば取得
+        liff_id = (request.liff_id or "").strip()
+        if not LIFF_ID_PATTERN.match(liff_id):
+            raise HTTPException(status_code=400, detail="Invalid LIFF ID format")  # ★ 修正：v2も許可
+
         user_info = None
         if request.user_id:
-            # ここでユーザー情報を取得（データベースから）
             user_info = await get_user_by_line_id(request.user_id)
-        
+
         return {
             "success": True,
             "liff_id": liff_id,
             "user": user_info,
             "config": {
-                "api_endpoint": f"https://rag-api-190389115361.asia-northeast1.run.app"
-            }
+                "api_endpoint": "https://rag-api-190389115361.asia-northeast1.run.app"
+            },
         }
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"LIFF initialization error: {e}")
+        logger.exception("LIFF initialization error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/liff/config/{liff_id}")
 async def get_liff_config(liff_id: str):
-    """LIFF設定情報を取得"""
+    """LIFF設定情報を取得（形式が不正なら 400）"""
+    if not LIFF_ID_PATTERN.match((liff_id or "").strip()):
+        raise HTTPException(status_code=400, detail="Invalid LIFF ID format")
     return {
         "liff_id": liff_id,
         "api_endpoint": "https://rag-api-190389115361.asia-northeast1.run.app",
-        "features": {
-            "chat": True,
-            "file_upload": True,
-            "rich_menu": True
-        }
+        "features": {"chat": True, "file_upload": True, "rich_menu": True},
     }
 
+# =========================
+# ダミー：ユーザー取得 & JWT検証
+# =========================
 async def get_user_by_line_id(line_user_id: str) -> Optional[dict]:
-    """LINE User IDからユーザー情報を取得"""
-    # データベースからユーザー情報を取得
-    # 実際の実装では、PostgreSQLやFirestoreを使用
+    """LINE User IDからユーザー情報を取得（必要ならDB接続に置換）"""
     try:
-        # 簡単な例（実際はDBアクセス）
-        return {
-            "id": line_user_id,
-            "name": "LINE User",
-            "is_registered": True
-        }
+        return {"id": line_user_id, "name": "LINE User", "is_registered": True}
     except Exception as e:
         logger.error(f"Failed to get user: {e}")
         return None
 
-# JWT認証のためのヘルパー関数
 def verify_jwt_token(token: str) -> Optional[dict]:
     """JWTトークンを検証"""
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        return payload
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         return None
     except jwt.InvalidTokenError:
@@ -230,18 +268,17 @@ async def verify_login_token(request: Request):
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="No valid token")
-    
+
     token = auth_header.replace("Bearer ", "")
     payload = verify_jwt_token(token)
-    
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
+
     return {
         "valid": True,
         "user": {
             "id": payload.get("user_id"),
             "name": payload.get("display_name"),
-            "provider": payload.get("provider")
-        }
+            "provider": payload.get("provider"),
+        },
     }

@@ -4,7 +4,7 @@ import logging
 import os
 import asyncio
 import time
-import json  # [ADD] Boot Guard ログ用
+import json
 from datetime import datetime
 from typing import Dict, Any, List
 from uuid import uuid4
@@ -17,16 +17,11 @@ import types
 
 # ================================
 # Boot Guard: ENV 下限の強制 & ブート計測
-# （重い import/初期化の前に実行）
 # ================================
 logger = logging.getLogger(__name__)
 
 def _enforce_env_minimums():
-    mins = {
-        "MAX_NEW_TOKENS": "900",
-        "OPENAI_MAX_TOKENS": "900",
-        "LLM_TIMEOUT": "45",
-    }
+    mins = {"MAX_NEW_TOKENS": "900", "OPENAI_MAX_TOKENS": "900", "LLM_TIMEOUT": "45"}
     bumped = {}
     for k, v in mins.items():
         cur = os.getenv(k)
@@ -34,17 +29,14 @@ def _enforce_env_minimums():
             os.environ[k] = v
             bumped[k] = v
     if bumped:
-        # 起動時に一度だけ警告を出しておく（ログ監視で検知可）
         logger.warning(f"BootGuard: bumped env minimums -> {bumped}")
 
 _BOOT_T0 = time.time()
-# Boot開始ログ（Log-based Metricで監視しやすいようJSONに）
 try:
     logger.info(json.dumps({"evt": "boot", "phase": "start"}))
 except Exception:
     pass
 _enforce_env_minimums()
-# ===== /Boot Guard =====
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,7 +45,7 @@ from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # =================================
-# パス（ローカル/Cloud Run での import 安定化）
+# パス安定化
 # =================================
 ROOT = pathlib.Path(__file__).resolve().parent
 for p in [ROOT, ROOT / "services", ROOT / "llm", ROOT / "rag", ROOT / "api", ROOT / "api" / "routers"]:
@@ -61,21 +53,13 @@ for p in [ROOT, ROOT / "services", ROOT / "llm", ROOT / "rag", ROOT / "api", ROO
     if s not in sys.path:
         sys.path.insert(0, s)
 
-# -------------------------------
-# “utils.web_search” を強制的に生やす（存在しない環境を吸収）
-# -------------------------------
+# utils.web_search の別名解決
 def ensure_utils_web_search_alias() -> bool:
-    """
-    プロジェクト直下に web_search.py だけがある/パッケージが無い場合でも
-    `from utils.web_search import ...` が通るように別名登録する。
-    戻り値: 何かしらの方法で alias/読み込みに成功したら True
-    """
     try:
         import utils.web_search  # type: ignore
         return True
     except Exception:
         pass
-
     candidates = [
         ROOT / "utils" / "web_search.py",
         ROOT / "api" / "utils" / "web_search.py",
@@ -102,10 +86,7 @@ def ensure_utils_web_search_alias() -> bool:
 # =================================
 # 基本ログ
 # =================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # =================================
@@ -126,9 +107,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =================================
-# noindex ミドルウェア（本番以外）
-# =================================
+# noindex（本番以外）
 class RobotsNoIndexMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         resp = await call_next(request)
@@ -150,23 +129,24 @@ def _include_optional_router(py_path: str, attr: str = "router", prefix: str = "
     except Exception as e:
         logger.info(f"ℹ️ Router skipped ({py_path}): {e}")
 
+# ここに追記（liff_pages は既に含まれていました）
 _include_optional_router("api.routers.legal_pages")
-_include_optional_router("api.routers.liff_pages")
+_include_optional_router("api.routers.liff_pages")      # /liff, /liff/consent
+_include_optional_router("api.routers.line_login")      # ★ 追加: /line-login/...
 _include_optional_router("api.routers.reconsent_tasks")
-_include_optional_router("api.routers.financial_api")  # 資金計画のAPIを公開
-_include_optional_router("api.routers.financial_api", attr="router_compat")  # [ADD] 旧クライアント互換 (/api/financial-calculate)
+_include_optional_router("api.routers.financial_api")
+_include_optional_router("api.routers.financial_api", attr="router_compat")  # 旧互換 (/api/financial-calculate)
 
 # =================================
 # グローバル（RAG）
 # =================================
 vectorstore = None
-rag_chain_template = None  # .invoke({"query": ...}) を持つ想定
+rag_chain_template = None
 llm_instance = None
 initialization_lock = asyncio.Lock()
 is_initialized = False
 RAG_SHARED_GLOBALLY = False
 
-# 便利フラグ（環境変数で制御）
 ENABLE_RAG_INITIALIZATION = os.getenv("DISABLE_RAG_INIT", "false").lower() != "true"
 ENABLE_UNIFIED_CHAT = True
 ENABLE_LINE_INTEGRATION = True
@@ -178,7 +158,6 @@ DEFAULT_RESPONSE_MODE = "auto"
 INCLUDE_SOURCES = os.getenv("INCLUDE_SOURCES", "false").lower() == "true"
 startup_time = time.time()
 
-# 診断情報
 rag_diagnostics = {
     "initialization_attempts": 0,
     "initialization_success": False,
@@ -194,7 +173,7 @@ rag_diagnostics = {
 }
 
 # =================================
-# RAG 初期化（fast 優先 → services にフォールバック）
+# RAG 初期化
 # =================================
 async def initialize_rag_components():
     global vectorstore, rag_chain_template, llm_instance, is_initialized, RAG_SHARED_GLOBALLY, rag_diagnostics
@@ -213,10 +192,9 @@ async def initialize_rag_components():
         logger.info("🚀 Initializing RAG components (fast first, then services front-door) ...")
 
         try:
-            # ---- STEP 0: import guards ----
             ensure_utils_web_search_alias()
 
-            # ---- STEP 1: LLM ----
+            # LLM
             llm_t = time.time()
             try:
                 llm_instance = None
@@ -249,7 +227,7 @@ async def initialize_rag_components():
                 rag_diagnostics["component_status"]["llm_instance"]["error"] = str(e)
                 logger.warning(f"⚠️ LLM load failed (continue without): {e}")
 
-            # ---- STEP 2: Vectorstore + Chain ----
+            # Vectorstore + Chain
             vs_t = time.time()
             try:
                 try:
@@ -269,7 +247,6 @@ async def initialize_rag_components():
                     class _FrontDoorChain:
                         def __init__(self, include_sources: bool):
                             self.include_sources = include_sources
-
                         def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
                             q = (inputs.get("query") or inputs.get("question") or "").strip()
                             ans, srcs = get_rag_response(q)
@@ -343,10 +320,8 @@ def get_shared_rag_components():
     }
 
 # =================================
-# 診断系 API
+# 診断API
 # =================================
-from fastapi import APIRouter  # 追加 import はこの位置でもOK
-
 @app.get("/debug/rag-status")
 async def get_rag_detailed_status():
     live_health = {
@@ -443,7 +418,7 @@ async def system_status():
     }
 
 # =================================
-# パフォーマンスモニタ（簡略）
+# パフォーマンスモニタ
 # =================================
 class PerfMon:
     def __init__(self):
@@ -501,7 +476,7 @@ class UnifiedChatRequest(BaseModel):
     debug_mode: bool | None = False
 
 # =================================
-# メインチャット
+# /chat
 # =================================
 @app.post("/chat")
 @app.post("/chat/")
@@ -512,13 +487,11 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
     mode = req.mode or "auto"
 
     try:
-        # 事前に alias を必ず張る（chat_unified 内の `from utils.web_search ...` 対策）
         ensure_utils_web_search_alias()
 
         if not is_initialized and ENABLE_RAG_INITIALIZATION:
             await initialize_rag_components()
 
-        # chat_unified の場所が repo により変わるので動的 import
         unified_generator = None
         last_err = None
         for m in ("api.routers.chat_unified", "routers.chat_unified", "chat_unified"):
@@ -533,7 +506,6 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
         if unified_generator is None:
             raise ModuleNotFoundError(f"chat_unified not found: {last_err}")
 
-        # 統一の generate_response を想定
         response = await unified_generator.generate_response(req.question, platform, username, mode)
 
         rt = time.time() - t0
@@ -598,19 +570,16 @@ async def health_check():
     return {"status": "healthy" if is_initialized else "degraded", "uptime": uptime, "rag_quick_test": quick}
 
 # =================================
-# 起動時処理
+# 起動時
 # =================================
 @app.on_event("startup")
 async def startup_event():
     logger.info("🚀 Starting Unified RAG System (Diagnostics Super-Enhanced)")
-
-    # 先に alias を張っておく（LINE / web 共通の import 安定化）
     ensure_utils_web_search_alias()
 
     if ENABLE_RAG_INITIALIZATION:
         await initialize_rag_components()
 
-    # LINE ルーター（存在すれば取り込む）
     if ENABLE_LINE_INTEGRATION:
         try:
             try:
@@ -623,7 +592,6 @@ async def startup_event():
         except Exception as e:
             logger.error(f"ℹ️ LINE router not included: {e}")
 
-    # Boot 完了ログ（所要ms）
     try:
         logger.info(json.dumps({"evt": "boot", "phase": "ready", "ms": int((time.time() - _BOOT_T0) * 1000)}))
     except Exception:
