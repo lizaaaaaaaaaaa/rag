@@ -171,6 +171,7 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 
 → ＜AI相談（24h）＞ 
 ※ AIの回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。
+※ご質問の内容により、AIの回答までお時間を頂戴する場合がございます。何卒ご理解賜りますようお願い申し上げます。
 ※ご使用の前に、必ず以下の取り扱いをご確認ください。
 プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
