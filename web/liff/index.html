@@ -1,160 +1,146 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>AI相談をはじめる</title>
-  <!-- LIFF SDK -->
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
-    :root { color-scheme: light dark; }
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:24px;line-height:1.6}
-    h1{margin:0 0 8px}
-    .ok{color:#2c7} .warn{color:#c60} .err{color:#c22}
-    .box{border:1px solid #ddd;border-radius:12px;padding:16px;margin:16px 0}
+    body {font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", Helvetica, Arial; line-height:1.6; padding:24px;}
     .links a{margin-right:12px}
-    button{padding:10px 16px;border:0;border-radius:8px;cursor:pointer}
-    #btnConsent{background:#0a7cff;color:#fff}
-    #btnLogin{background:#444;color:#fff}
+    .consent-box{border:1px solid #ddd;border-radius:8px;padding:16px;margin:16px 0;max-width:560px}
+    .consent-box h3{margin:0 0 8px 0;font-size:1.1rem}
+    .checks label{display:flex;gap:8px;margin:6px 0}
+    button[disabled]{opacity:.5;cursor:not-allowed}
+    .ok{background:#10b981;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:1rem}
+    .notice{color:#666;font-size:.9rem}
   </style>
 </head>
 <body>
   <h1>AI相談をはじめる</h1>
-  <p id="status">initializing…</p>
+  <p class="notice">ご利用前に以下をご確認ください。</p>
+  <p class="links">
+    <a href="/privacy" target="_blank">プライバシーポリシー</a>
+    <a href="/terms" target="_blank">利用規約</a>
+    <a href="/cookie" target="_blank">Cookie・外部送信</a>
+  </p>
 
-  <!-- 未ログイン時に表示（法務リンクを見せてからログイン誘導） -->
-  <div class="box" id="preLogin" style="display:none">
-    <p>ご利用前に以下をご確認ください。</p>
-    <p class="links">
-      <a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>
-      <a href="/terms"   target="_blank" rel="noopener">利用規約</a>
-      <a href="/cookie"  target="_blank" rel="noopener">Cookie・外部送信</a>
-    </p>
-    <p>同意のうえ「ログインして開始」を押してください。</p>
-    <button id="btnLogin">ログインして開始</button>
+  <div class="consent-box" id="consentBox">
+    <h3>ご利用前に同意が必要です</h3>
+    <p class="notice">以下の5項目すべてにチェックのうえ「同意して開始」を押してください。</p>
+    <div class="checks">
+      <label><input type="checkbox" name="c" value="pp">プライバシーポリシーに同意します</label>
+      <label><input type="checkbox" name="c" value="tos">利用規約に同意します</label>
+      <label><input type="checkbox" name="c" value="cookie">Cookie・外部送信に同意します</label>
+      <label><input type="checkbox" name="c" value="xfer">入力内容が外部送信される可能性を理解しました</label>
+      <label><input type="checkbox" name="c" value="ai_limits">AIの誤答可能性を理解しました</label>
+    </div>
+    <div style="margin-top:12px">
+      <button class="ok" id="beginBtn" disabled>同意して開始</button>
+    </div>
   </div>
 
-  <!-- ログイン済み・未同意時に表示（明示ボタンで consent へ） -->
-  <div class="box" id="needConsent" style="display:none">
-    <p class="warn">ご利用前に同意が必要です。以下の5項目すべてにチェックのうえ同意してください。</p>
-    <p class="links">
-      <a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>
-      <a href="/terms"   target="_blank" rel="noopener">利用規約</a>
-      <a href="/cookie"  target="_blank" rel="noopener">Cookie・外部送信</a>
-    </p>
-    <button id="btnConsent">同意して開始</button>
-  </div>
+  <p class="notice" id="status">initializing…</p>
 
   <script>
-  (async () => {
-    // ★ 必要に応じて値を調整してください（版管理は PDF に合わせる）
-    const LIFF_ID = "2007887876-vMNe74eX";     // ←あなたの LIFF ID
+    // ===== 設定 =====
+    const LIFF_ID = "<あなたのLIFF ID>";           // ←差し替え
     const POLICY_VERSION = "2025-09-01";
     const TOS_VERSION    = "2025-09-01";
+    const CHAT_REDIRECT  = "/liff/consent?next=chat"; // 保存後に遷移（既存のconsent.html/チャット導線に合わせてOK）
+    // =================
 
-    const statusEl   = document.getElementById("status");
-    const preLogin   = document.getElementById("preLogin");
-    const needConsent= document.getElementById("needConsent");
-    const btnLogin   = document.getElementById("btnLogin");
-    const btnConsent = document.getElementById("btnConsent");
+    const $ = (s)=>document.querySelector(s);
 
-    // utm / state などを保持して consent に引き継ぐ
-    const allQS   = new URLSearchParams(location.search);
-    const liffQS  = new URLSearchParams(allQS.get("liff.state") || "");
-    const state   = liffQS.get("state") || "rag_home";
-    const ab      = liffQS.get("ab") || "A";
-    const utm_campaign = liffQS.get("utm_campaign") || allQS.get("utm_campaign") || "";
+    const allChecked = () => {
+      const boxes = document.querySelectorAll('input[name="c"]');
+      return Array.from(boxes).every(b => b.checked);
+    };
 
-    const goConsent = (userId) => {
-      const qp = new URLSearchParams({
+    const collectFlags = () => {
+      const f = {pp:false,tos:false,cookie:false,xfer:false,ai_limits:false};
+      document.querySelectorAll('input[name="c"]').forEach(b=>{ f[b.value]=b.checked; });
+      return f;
+    };
+
+    const saveConsent = async (userId, flags) => {
+      const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const body = {
+        consent_id: crypto.randomUUID(),
         user_id: userId,
-        liff_id: LIFF_ID,
+        consented_at: now,
         policy_version: POLICY_VERSION,
         tos_version: TOS_VERSION,
-        state, utm_campaign, ab
-      });
-      // ボタンクリックで consent へ遷移（自動遷移は行わない）
-      btnConsent.onclick = () => location.replace("/liff/consent?" + qp.toString());
-      needConsent.style.display = "block";
-      statusEl.textContent = "同意が必要です。『同意して開始』を押してください。";
-      statusEl.className = "warn";
-    };
-
-    const afterLogin = async () => {
-      // userId をできる方法で取得
-      let userId = liff.getDecodedIDToken()?.sub;
-      if (!userId && liff.getProfile) {
-        try { userId = (await liff.getProfile()).userId; } catch(_) {}
-      }
-      if (!userId) throw new Error("LINE userId を取得できませんでした。");
-
-      statusEl.textContent = "同意状況を確認しています…";
-      statusEl.className = "";
-
-      // サーバに同意確認（失敗時は未同意扱いで安全側）
-      try {
-        const r = await fetch("/consent/check", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            user_id: userId,
-            policy_version: POLICY_VERSION,
-            tos_version: TOS_VERSION
-          })
-        });
-        const j = await r.json();
-        if (j && j.valid) {
-          statusEl.textContent = "同意済みです。トークでご相談いただけます。";
-          statusEl.className = "ok";
-          // 必要に応じてトップやチャットへ誘導
-          const next = "/?consented=1&state=" + encodeURIComponent(state) + "&ab=" + encodeURIComponent(ab);
-          // location.replace(next); // 自動遷移したい場合は有効化
-        } else {
-          goConsent(userId);
-        }
-      } catch (e) {
-        // エラー時も同意導線を出しておく
-        console.warn("consent check failed:", e);
-        goConsent(userId);
-      }
-    };
-
-    try {
-      await liff.init({ liffId: LIFF_ID });
-
-      // ログインボタン
-      btnLogin.onclick = () => {
-        if (!liff.isLoggedIn()) {
-          const url = new URL(location.href);
-          url.searchParams.set("from", "postlogin"); // 戻り目印
-          liff.login({ redirectUri: url.toString() });
-        }
+        flags,
+        source: "line-liff"
       };
+      const res = await fetch("/consent/save", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(body)
+      });
+      if(!res.ok) throw new Error("consent/save failed");
+      return res.json();
+    };
 
+    const afterSaved = () => {
+      // 既存の導線に合わせて：consent.html 経由 or そのままチャットへ
+      location.href = CHAT_REDIRECT;
+    };
+
+    const initPage = async () => {
+      // 5チェック監視
+      document.querySelectorAll('input[name="c"]').forEach(b=>{
+        b.addEventListener('change', ()=> { $('#beginBtn').disabled = !allChecked(); });
+      });
+
+      // ボタンクリック → ログイン → 保存
+      $('#beginBtn').addEventListener('click', async ()=>{
+        try {
+          const flags = collectFlags();
+          localStorage.setItem("pref_flags", JSON.stringify(flags));
+
+          if (!liff.isLoggedIn()) {
+            // ログイン後に戻ってくる
+            liff.login({ redirectUri: location.href });
+            return;
+          }
+
+          $('#status').textContent = "保存しています…";
+          const profile = await liff.getProfile();
+          await saveConsent(profile.userId, flags);
+          afterSaved();
+        } catch(e){
+          console.error(e);
+          alert("保存に失敗しました。時間を置いてお試しください。");
+        }
+      });
+
+      // LIFF 初期化
+      await liff.init({ liffId: LIFF_ID });
+      $('#status').textContent = liff.isLoggedIn() ? "ログイン済みです" : "ログインが必要です";
+
+      // ログイン直後に戻ってきた場合：保存を自動継続
       if (liff.isLoggedIn()) {
-        await afterLogin();
-        return;
+        const json = localStorage.getItem("pref_flags");
+        if (json) {
+          try {
+            const flags = JSON.parse(json);
+            // 画面側にも反映しておく（任意）
+            Object.entries(flags).forEach(([k,v])=>{
+              const box = document.querySelector(`input[value="${k}"]`);
+              if (box) box.checked = !!v;
+            });
+            $('#beginBtn').disabled = !allChecked();
+          } catch {}
+        }
       }
+    };
 
-      // 未ログイン：法務リンクを見せてからログイン促し
-      preLogin.style.display = "block";
-      statusEl.textContent = "未ログインです。内容をご確認のうえ、ログインして開始してください。";
-      statusEl.className = "";
-
-      // ログイン直後の戻り（ネットワーク差で isLoggedIn が遅れる対策）
-      if (allQS.get("from") === "postlogin") {
-        const wait = () => new Promise(r => setTimeout(r, 150));
-        for (let i=0;i<10;i++){ if (liff.isLoggedIn()) break; await wait(); }
-        if (liff.isLoggedIn()) await afterLogin();
-      }
-
-    } catch (e) {
-      statusEl.textContent = "Error: " + (e && e.message || e);
-      statusEl.className = "err";
+    initPage().catch(e=>{
       console.error(e);
-    }
-  })();
+      $('#status').textContent = "初期化に失敗しました";
+    });
   </script>
 </body>
 </html>

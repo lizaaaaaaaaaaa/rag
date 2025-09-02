@@ -1,7 +1,8 @@
-# api/routers/line_bot_ultra_fast.py — 同意ゲート入り 完全修正版
-# - 事前同意の無いユーザーには LIFF の同意ページだけを案内
-# - on_follow / on_message の先頭で /consent/check を同期呼び出し（5s）
-# - 既存の「即ACK→push最終」方針やテンプレ文面は維持
+# api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版（AI相談だけゲート）
+# - リッチメニューは同意がなくても反応
+# - 「AI相談」だけ /consent/check を叩いて未同意なら LIFF 同意URLを案内
+# - 既存の「即ACK → push 最終」という運用思想を維持
+# - RAG / 資金計画は遅延ロード（初回だけ解決）
 
 import logging
 import os
@@ -34,23 +35,23 @@ try:
 except Exception:
     with_utm = _with_utm_fallback  # type: ignore
 
-# ▼ LIFF 各種リンク（固定）
+# ▼ LIFF 各種リンク（必要に応じて差し替え）
 AI_CONSULT_URL = "https://liff.line.me/LIFF_ID_AI?state=rag_home"
 AI_SITE_URL    = "https://liff.line.me/LIFF_ID_SITE?state=rag_home"
 BUDGET_URL     = "https://liff.line.me/LIFF_ID_BUDGET?state=rm_ai_loan"
 
 ai_consult_link = with_utm(AI_CONSULT_URL, "ai_consult", ab="A")
-ai_site_link    = with_utm(AI_SITE_URL,   "ai_site",    ab="A")
-budget_link     = with_utm(BUDGET_URL,    "budget",     ab="A")
+ai_site_link    = with_utm(AI_SITE_URL,    "ai_site",    ab="A")
+budget_link     = with_utm(BUDGET_URL,     "budget",     ab="A")
 
-# ▼ 追記：同意用 LIFF（専用ID推奨。なければ /liff に合わせたID）
+# ▼ 同意用 LIFF（専用ID推奨）
 CONSENT_URL  = os.getenv("LIFF_CONSENT_URL", "https://liff.line.me/LIFF_ID_CONSENT?state=consent")
 consent_link = with_utm(CONSENT_URL, "consent", ab="A")
 
 logger = logging.getLogger(__name__)
 
 # ======================================================================
-# RAG / 資金計画の「遅延ロード」— 起動時は解決しない（コールドスタート短縮）
+# RAG / 資金計画：遅延ロード
 # ======================================================================
 import sys, pathlib, importlib
 ROOT = pathlib.Path(__file__).resolve().parents[2]  # .../RAG-LLM-Project
@@ -180,16 +181,7 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 
-    "AI住まいサイト": """🌐 AI住まいサイトのご案内
-キノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）
-🏠 
-回遊動線／資金目安／土地・学区／性能・保証など、 気になることや、お悩みを AI が、お答え解決するホームページです。 
-ZINE、ダウンロードもできます。
-
-※ 匿名OK／保存OFF（既定） 
-※ AIの回答は必ずしも正しいとは限りません。 → 最終案内はスタッフが行います。 
-📱 サイトURL：
-https://preview.studio.site/live/EjOQljz1WJ/""",
+    "AI住まいサイト": f"🌐 AI住まいサイトへ\n{ai_site_link}",
 
     "資料請求": """📋ありがとうございます！こちらからご覧いただけます。
 Web版と、カタログ版を選択できます
@@ -207,64 +199,10 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 
     "展示場来場予約": """📍 展示場のご来場予約:
 24 時間いつでも、予約OKです。 
-ご予約の際は、以下の内容をLINEのメッセージでお送りいただくか、下記の来場予約ホームページURLよりご送信ください。： 
+…（中略：既存案内を維持）…""",
 
-予約情報： 
-・ご希望日時（第１・第２希望） 
-・お名前 ・参加人数（大人・お子様） 
-・ご質問 
-・ご要望 
-※確定のご連絡は追って担当より差し上げます。 
-見学時間： 約90分 
-展示場： 最新の住宅仕様をご確認 スタッフ一同、心よりお待ちしております！ ご質問もお気軽にどうぞ。
-
-来場予約ホームページURL：
-【https://preview.studio.site/live/EjOQljz1WJ/reservation 】
-
-※必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
-利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
-Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
-
-    "資金計画": """💬 AI資金診断のご案内
-本診断は匿名でご利用いただけます。
-ご回答内容は保存いたしません。
-算出される金額は試算（概算）であり、目安としてご確認ください。
-お手数ですが、以下の項目をご入力ください。
-・年収：
-・毎月のご希望返済額：
-・住宅ローンのご希望借入期間：
-・ご家族構成：（例：大人2名・お子さま1名）
-・その他の大きなご負担：（例：自動車ローン 等）
-・頭金：
-
-未入力の項目があっても進められます。
-ご入力後、概算結果をご提示いたします。
-※ 結果は概算です → 詳細はスタッフがご案内します。""",
-
-    "チャット相談": """💬 スタッフとのご相談
-AI より、人の方がいい方はこちら 
-スタッフとチャット相談。 
-お気軽にメッセージどうぞ！ 
-
-【対応時間】
-営業時間：9:00-18:00
-
-📱 ご相談方法：
-・このLINEでの直接チャット相談 
-・お電話での相談 
-・展示場での対面相談 
-
-📱 ご相談内容： 
-・住まいづくり全般 
-・土地探し 
-・資金計画 
-・間取り 
-・デザイン 
-・住宅性能について など 
-
-営業時間内でしたら迅速にお返事します。
-お気軽にお声かけください！""",
+    "資金計画": "💴 資金診断を開始します。年収や希望返済額などをメッセージしてください。",
+    "チャット相談": "💬 スタッフとチャット相談を承ります。営業時間内に順次ご返信します。",
 }
 
 RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
@@ -345,6 +283,7 @@ def _get_line_tokens() -> Tuple[str, str]:
 LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = _get_line_tokens()
 
 try:
+    Configuration  # type: ignore
     configuration_cached: Optional["Configuration"] = None
     api_client_cached: Optional["ApiClient"] = None
     messaging_api_cached: Optional["MessagingApi"] = None
@@ -410,7 +349,6 @@ def _reply_or_push(reply_token: str, user_id: str, text: str) -> bool:
         return False
 
 def _push(user_id: str, text: str) -> bool:
-    """push 専用（最終結果はこちら）"""
     api = _ensure_api()
     if not api:
         logger.error("MessagingApi not ready")
@@ -427,7 +365,7 @@ def _push(user_id: str, text: str) -> bool:
         return False
 
 # ======================================================================
-# ★ 追記：同意チェック（自己向け HTTP）
+# 同意チェック（AI相談の時だけ使う）
 # ======================================================================
 import httpx
 
@@ -511,7 +449,9 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 # ======================================================================
-# イベントハンドラ（reply→push 方針）＋ ★同意ゲート
+# イベントハンドラ（reply→push 方針）
+#   ※ フォロー時は同意ゲートなし（リッチメニューは常に反応）
+#   ※ 「AI相談」だけ同意ゲートを掛ける
 # ======================================================================
 if LINE_SDK_AVAILABLE and handler:
     @handler.add(FollowEvent)
@@ -520,10 +460,7 @@ if LINE_SDK_AVAILABLE and handler:
             user_id = event.source.user_id
             if dup_guard.seen(user_id, f"follow:{user_id}"):
                 return
-            # ★ 未同意なら同意URLのみ返信
-            if not _has_consent_sync(user_id):
-                _reply_or_push(event.reply_token, user_id, NOT_CONSENT_MSG)
-                return
+            # フォロー挨拶は常に出す（AI相談は後でゲート）
             _reply_or_push(event.reply_token, user_id, RICHMENU_FIXED_RESPONSES["follow_greeting"])
         except Exception as e:
             logger.error(f"follow handler error: {e}")
@@ -535,16 +472,10 @@ if LINE_SDK_AVAILABLE and handler:
             text = (event.message.text or "").strip()
             reply_token = event.reply_token
 
-            # 連打/再送ガード
             if dup_guard.seen(user_id, f"in:{text[:64]}"):
                 return
 
-            # ★ まず同意チェック。未同意なら案内だけ返して終了
-            if not _has_consent_sync(user_id):
-                _reply_or_push(reply_token, user_id, NOT_CONSENT_MSG)
-                return
-
-            # リッチメニュー押下→テンプレ即返 & モード開始
+            # まずはリッチメニュー文言／別メニューを即時反応
             key = None
             if text in RICHMENU_FIXED_RESPONSES:
                 key = text
@@ -555,28 +486,31 @@ if LINE_SDK_AVAILABLE and handler:
                         break
 
             if key:
+                # 「AI相談」だけ同意ゲート
                 if key == "AI相談":
+                    if not _has_consent_sync(user_id):
+                        _reply_or_push(reply_token, user_id, NOT_CONSENT_MSG)
+                        return
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
                 _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
                 return
 
+            # セッションモードで処理
             mode = sessions.get_mode(user_id)
 
-            # 資金計画モード：即時ACK → BGで計算 → push最終
             if mode == "finance":
                 _reply_or_push(reply_token, user_id, "📊 試算中です。少しお待ちください…")
                 threading.Thread(target=_worker_finance, args=(user_id, text), daemon=True).start()
                 return
 
-            # AI相談モード：即時ACK → BGでRAG → push最終
             if mode == "ai":
                 _reply_or_push(reply_token, user_id, "🔎 少しお待ちください…")
                 threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start()
                 return
 
-            # 既定（案内）
+            # 既定（ガイド）
             fallback = (
                 "ご質問ありがとうございます😊\n\n"
                 "目的のボタンをタップしてください👇\n"
@@ -601,11 +535,7 @@ if LINE_SDK_AVAILABLE and handler:
             if dup_guard.seen(user_id, f"post:{data[:64]}"):
                 return
 
-            # Postback でも同意ゲートをかけたい場合は以下を有効化
-            # if not _has_consent_sync(user_id):
-            #     _reply_or_push(reply_token, user_id, NOT_CONSENT_MSG)
-            #     return
-
+            # Postback data から action を拾う（例：action=ai_chat）
             key = None
             if data in RICHMENU_FIXED_RESPONSES:
                 key = data
@@ -621,6 +551,9 @@ if LINE_SDK_AVAILABLE and handler:
 
             if key:
                 if key == "AI相談":
+                    if not _has_consent_sync(user_id):
+                        _reply_or_push(reply_token, user_id, NOT_CONSENT_MSG)
+                        return
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")

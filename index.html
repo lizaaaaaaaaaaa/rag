@@ -1,593 +1,359 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI住まい相談 - RAG対応版</title>
-    <style>
-        body {
-            background: #e5edf5;
-            min-height: 100vh;
-            margin: 0;
-            padding: 0;
-            font-family: 'Segoe UI', 'Hiragino Sans', 'Meiryo', sans-serif;
-            display: flex;
-            /* ▼ 追記: フッターを下に配置しやすくするため縦並びに */
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-        }
-        .chat-container {
-            width: 100%;
-            max-width: 420px;
-            height: 640px;
-            background: #fff;
-            border-radius: 20px;
-            box-shadow: 0 4px 32px rgba(0,0,0,0.12);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-        .chat-header {
-            background: #10c041;
-            color: #fff;
-            padding: 20px 16px;
-            font-size: 1.2rem;
-            font-weight: bold;
-            text-align: center;
-            letter-spacing: 2px;
-            position: relative;
-        }
-        .rag-indicator {
-            position: absolute;
-            right: 16px;
-            top: 50%;
-            transform: translateY(-50%);
-            font-size: 0.7rem;
-            background: rgba(255,255,255,0.2);
-            padding: 2px 6px;
-            border-radius: 8px;
-        }
-        .platform-indicator {
-            position: absolute;
-            left: 16px;
-            top: 50%;
-            transform: translateY(-50%);
-            font-size: 0.7rem;
-            background: rgba(255,255,255,0.15);
-            padding: 1px 4px;
-            border-radius: 4px;
-        }
-        .chat-messages {
-            flex: 1;
-            padding: 18px 12px;
-            background: #e5edf5;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        .welcome-message {
-            text-align: center;
-            color: #666;
-            font-size: 0.95rem;
-            padding: 20px;
-            margin: auto 0;
-        }
-        .message {
-            display: flex;
-            align-items: flex-end;
-        }
-        .message.user { justify-content: flex-end; }
-        .message.ai   { justify-content: flex-start; }
-        .message-content {
-            max-width: 70%;
-            padding: 12px 16px;
-            border-radius: 16px;
-            font-size: 1rem;
-            line-height: 1.5;
-            word-break: break-word;
-            background: #10c041;
-            color: #fff;
-            border-bottom-right-radius: 4px;
-            position: relative;
-        }
-        .message.user .message-content {
-            background: #10c041; color: #fff;
-            border-bottom-right-radius: 4px; border-bottom-left-radius: 16px;
-        }
-        .message.ai .message-content {
-            background: #fff; color: #222;
-            border: 1px solid #d2e7d9;
-            border-bottom-left-radius: 4px; border-bottom-right-radius: 16px;
-        }
-        .response-info {
-            font-size: 0.7rem; color: #666; margin-top: 4px; text-align: right;
-        }
-        .rag-source        { border-left: 3px solid #4caf50; }
-        .search-verified   { border-left: 3px solid #2196f3; }
-        .chatgpt-source    { border-left: 3px solid #ff9800; }
-        .template-source   { border-left: 3px solid #9c27b0; }
-        .confidence-indicator { display:inline-block; width:8px; height:8px; border-radius:50%; margin-left:4px; }
-        .confidence-high   { background-color: #4caf50; }
-        .confidence-medium { background-color: #ff9800; }
-        .confidence-low    { background-color: #f44336; }
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI住まい相談 - RAG対応版</title>
 
-        .chat-input-container { background: #fafbfc; padding: 12px; border-top: 1px solid #e0e0e0; }
-        .chat-input-wrapper { display:flex; gap:8px; align-items:flex-end; }
-        .chat-input {
-            flex:1; min-height:40px; max-height:120px; padding:10px 14px;
-            border:1.5px solid #c6e2d7; border-radius:24px; font-size:1rem; outline:none; resize:none; background:#fff; transition:border-color .2s;
-        }
-        .chat-input:focus { border-color:#10c041; }
-        .send-button {
-            width:44px; height:44px; background:#10c041; border:none; border-radius:50%; color:#fff; cursor:pointer; font-size:1.4rem; display:flex; align-items:center; justify-content:center; transition: box-shadow .2s, transform .2s;
-        }
-        .send-button:disabled { opacity:.5; cursor:not-allowed; }
+  <!-- ▼ APIベースを rag-api に固定（別オリジンでも確実に動く） -->
+  <script>
+    window.__API_BASE = 'https://rag-api-190389115361.asia-northeast1.run.app';
+    // （フロントは rag-frontend で配信）
+  </script>
 
-        .typing-indicator { margin:0 0 8px 8px; color:#666; font-size:.95rem; display:flex; align-items:center; gap:3px; }
-        .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#b6dab9; margin-right:2px; animation: typing 1.2s infinite; }
-        .dot:nth-child(2){animation-delay:.2s;}
-        .dot:nth-child(3){animation-delay:.4s;}
-        @keyframes typing { 0%,80%,100%{transform:translateY(0);} 40%{transform:translateY(-8px);} }
+  <style>
+    body{
+      background:#e5edf5; min-height:100vh; margin:0; padding:0;
+      font-family:'Segoe UI','Hiragino Sans','Meiryo',sans-serif;
+      display:flex; flex-direction:column; justify-content:center; align-items:center;
+    }
+    .chat-container{
+      width:100%; max-width:420px; height:640px; background:#fff; border-radius:20px;
+      box-shadow:0 4px 32px rgba(0,0,0,.12); display:flex; flex-direction:column; overflow:hidden;
+    }
+    .chat-header{
+      background:#10c041; color:#fff; padding:20px 16px; font-size:1.2rem; font-weight:bold;
+      text-align:center; letter-spacing:2px; position:relative;
+    }
+    .rag-indicator{
+      position:absolute; right:16px; top:50%; transform:translateY(-50%);
+      font-size:.7rem; background:rgba(255,255,255,.2); padding:2px 6px; border-radius:8px;
+    }
+    .platform-indicator{
+      position:absolute; left:16px; top:50%; transform:translateY(-50%);
+      font-size:.7rem; background:rgba(255,255,255,.15); padding:1px 4px; border-radius:4px;
+    }
+    .chat-messages{
+      flex:1; padding:18px 12px; background:#e5edf5; overflow-y:auto; display:flex; flex-direction:column; gap:10px;
+    }
+    .welcome-message{ text-align:center; color:#666; font-size:.95rem; padding:20px; margin:auto 0; }
+    .message{ display:flex; align-items:flex-end; }
+    .message.user{ justify-content:flex-end; }
+    .message.ai{ justify-content:flex-start; }
+    .message-content{
+      max-width:70%; padding:12px 16px; border-radius:16px; font-size:1rem; line-height:1.5; word-break:break-word;
+      background:#10c041; color:#fff; border-bottom-right-radius:4px; position:relative;
+    }
+    .message.user .message-content{
+      background:#10c041; color:#fff; border-bottom-right-radius:4px; border-bottom-left-radius:16px;
+    }
+    .message.ai .message-content{
+      background:#fff; color:#222; border:1px solid #d2e7d9; border-bottom-left-radius:4px; border-bottom-right-radius:16px;
+    }
+    .response-info{ font-size:.7rem; color:#666; margin-top:4px; text-align:right; }
+    .rag-source{ border-left:3px solid #4caf50; }
+    .search-verified{ border-left:3px solid #2196f3; }
+    .chatgpt-source{ border-left:3px solid #ff9800; }
+    .template-source{ border-left:3px solid #9c27b0; }
+    .confidence-indicator{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-left:4px; }
+    .confidence-high{ background:#4caf50; }
+    .confidence-medium{ background:#ff9800; }
+    .confidence-low{ background:#f44336; }
 
-        .error-message { background:#fff2f2; color:#d32f2f; padding:10px 14px; border-radius:10px; border-left:4px solid #d32f2f; margin:6px 0; font-size:.92rem; }
+    .chat-input-container{ background:#fafbfc; padding:12px; border-top:1px solid #e0e0e0; }
+    .chat-input-wrapper{ display:flex; gap:8px; align-items:flex-end; }
+    .chat-input{
+      flex:1; min-height:40px; max-height:120px; padding:10px 14px; border:1.5px solid #c6e2d7; border-radius:24px;
+      font-size:1rem; outline:none; resize:none; background:#fff; transition:border-color .2s;
+    }
+    .chat-input:focus{ border-color:#10c041; }
+    .send-button{
+      width:44px; height:44px; background:#10c041; border:none; border-radius:50%; color:#fff; cursor:pointer;
+      font-size:1.4rem; display:flex; align-items:center; justify-content:center; transition: box-shadow .2s, transform .2s;
+    }
+    .send-button:disabled{ opacity:.5; cursor:not-allowed; }
 
-        /* ▼ 追記: フッター用の軽いスタイル */
-        footer { margin-top: 12px; font-size: .85rem; color: #3a3a3a; }
-        footer a { color:#2f6db0; text-decoration:none; }
-        footer a:hover { text-decoration:underline; }
+    .typing-indicator{ margin:0 0 8px 8px; color:#666; font-size:.95rem; display:flex; align-items:center; gap:3px; }
+    .dot{ display:inline-block; width:7px; height:7px; border-radius:50%; background:#b6dab9; margin-right:2px; animation:typing 1.2s infinite; }
+    .dot:nth-child(2){ animation-delay:.2s; } .dot:nth-child(3){ animation-delay:.4s; }
+    @keyframes typing{ 0%,80%,100%{transform:translateY(0);} 40%{transform:translateY(-8px);} }
 
-        /* モバイルレスポンシブ */
-        @media (max-width: 480px) {
-            .chat-container { height: 100vh; max-width: 100vw; border-radius: 0;}
-            .chat-header { padding: 14px 4px; font-size: 1.05rem;}
-            .chat-messages { padding: 8px 2px;}
-        }
+    .error-message{ background:#fff2f2; color:#d32f2f; padding:10px 14px; border-radius:10px; border-left:4px solid #d32f2f; margin:6px 0; font-size:.92rem; }
 
-        /* ▼▼▼ 追加: 同意モーダルのスタイル ▼▼▼ */
-        #consent-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:9999}
-        #consent-card{max-width:720px;width:92%;background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.2);padding:20px;font-family:system-ui}
-        #consent-card h3{margin:0 0 10px;font-size:1.1rem}
-        #consent-card ul{margin:10px 0 14px 1.1em}
-        #consent-card li{margin:8px 0}
-        #consent-links a{margin-right:12px}
-        #consent-go{width:100%;padding:12px 16px;border-radius:12px;border:0;background:#0a7cff;color:#fff;font-weight:600}
-        #consent-go:disabled{background:#aac8f5}
-        #consent-msg{font-size:.9rem;color:#666;margin-top:8px;min-height:1.2em}
-    </style>
+    footer{ margin-top:12px; font-size:.85rem; color:#3a3a3a; }
+    footer a{ color:#2f6db0; text-decoration:none; } footer a:hover{ text-decoration:underline; }
 
-    <!-- ▼▼▼ 追記: GA4（IDを差し替え） ▼▼▼ -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-B8988S3RCZ"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config', 'G-B8988S3RCZ'); // ←あなたの GA4 ID
+    @media (max-width:480px){
+      .chat-container{ height:100vh; max-width:100vw; border-radius:0; }
+      .chat-header{ padding:14px 4px; font-size:1.05rem; }
+      .chat-messages{ padding:8px 2px; }
+    }
 
-      const p = new URLSearchParams(location.search);
-      const ab = p.get('ab') || 'A';
-      const state = p.get('state') || 'rag_home';
-      const utm_campaign = p.get('utm_campaign') || 'unknown';
-      gtag('event', 'liff_open', {ab, state, utm_campaign});
-      // 例: RAG の質問時に以下を送る（必要時のみ）
-      // gtag('event','rag_ask',{ab, state, utm_campaign});
-    </script>
-    <!-- ▲▲▲ 追記ここまで ▲▲▲ -->
+    /* 同意モーダル */
+    #consent-overlay{
+      position:fixed; inset:0; background:rgba(0,0,0,.45);
+      display:flex; align-items:center; justify-content:center; z-index:2147483647; /* いちばん上に */
+    }
+    #consent-card{
+      max-width:720px; width:92%; background:#fff; border-radius:16px;
+      box-shadow:0 10px 30px rgba(0,0,0,.2); padding:20px; font-family:system-ui;
+    }
+    #consent-card h3{ margin:0 0 10px; font-size:1.1rem; }
+    #consent-card ul{ margin:10px 0 14px 1.1em; }
+    #consent-card li{ margin:8px 0; }
+    #consent-links a{ margin-right:12px; }
+    #consent-go{ width:100%; padding:12px 16px; border-radius:12px; border:0; background:#0a7cff; color:#fff; font-weight:600; }
+    #consent-go:disabled{ background:#aac8f5; }
+    #consent-msg{ font-size:.9rem; color:#666; margin-top:8px; min-height:1.2em; }
+  </style>
 
+  <!-- GA4（必要なら差し替え） -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-B8988S3RCZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){ dataLayer.push(arguments); }
+    gtag('js', new Date());
+    gtag('config', 'G-B8988S3RCZ');
+
+    const p = new URLSearchParams(location.search);
+    gtag('event','liff_open',{
+      ab: p.get('ab')||'A',
+      state: p.get('state')||'rag_home',
+      utm_campaign: p.get('utm_campaign')||'unknown'
+    });
+  </script>
 </head>
 <body>
-    <div class="chat-container">
-        <div class="chat-header">
-            AI住まい相談
-            <span class="platform-indicator">Web</span>
-            <span class="rag-indicator">🧠RAG対応</span>
-            <!-- ▼ 追記: βラベル（ヘッダー内に1行） -->
-            <div aria-label="beta" style="font-size:.8rem;opacity:.7;margin-top:6px;">β版</div>
-        </div>
-        <div class="chat-messages" id="chatMessages">
-            <div class="welcome-message" id="welcomeMessage">
-                <strong>🏠 AI住まい相談へようこそ！</strong><br><br>
-                住宅に関するご質問をお気軽にどうぞ。<br>
-                社内資料とWeb検索を活用して、正確な情報をお答えします。<br><br>
-                <small>例：坪単価について教えて、耐震性能はどのくらい？など</small>
-            </div>
-        </div>
-        <div class="typing-indicator" id="typingIndicator" style="display:none;">
-            <span class="dot"></span>
-            <span class="dot"></span>
-            <span class="dot"></span>
-            <span>資料を検索中...</span>
-        </div>
-        <div class="chat-input-container">
-            <div class="chat-input-wrapper">
-                <textarea class="chat-input" id="chatInput" placeholder="住宅についてお聞きください..." rows="1"></textarea>
-                <button class="send-button" id="sendButton" type="button">➤</button>
-            </div>
-        </div>
+  <div class="chat-container">
+    <div class="chat-header">
+      AI住まい相談
+      <span class="platform-indicator">Web</span>
+      <span class="rag-indicator">🧠RAG対応</span>
+      <div aria-label="beta" style="font-size:.8rem;opacity:.7;margin-top:6px;">β版</div>
     </div>
-
-    <!-- ▼ 追記: フッター常設リンク -->
-    <footer>
-      <a href="/privacy">Privacy</a> |
-      <a href="/terms">Terms</a> |
-      <a href="/cookie">Cookie</a>
-    </footer>
-
-    <!-- ▼▼▼ 追加: 同意モーダル（HTML） ▼▼▼ -->
-    <div id="consent-overlay" hidden>
-      <div id="consent-card" role="dialog" aria-modal="true" aria-labelledby="consent-title">
-        <h3 id="consent-title">AIチャットのご利用前にご確認ください</h3>
-        <p>以下の<strong>5項目</strong>すべてに同意が必要です。</p>
-        <ul>
-          <li><label><input type="checkbox" id="c_pp"> プライバシーポリシーに同意します</label></li>
-          <li><label><input type="checkbox" id="c_tos"> 利用規約に同意します</label></li>
-          <li><label><input type="checkbox" id="c_cookie"> Cookie・類似技術の利用に同意します</label></li>
-          <li><label><input type="checkbox" id="c_xfer"> 入力内容等が外部送信される可能性に同意します</label></li>
-          <li><label><input type="checkbox" id="c_ai"> 生成AIの誤答可能性（限界）を理解しました</label></li>
-        </ul>
-        <p id="consent-links">
-          <a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>
-          <a href="/terms"   target="_blank" rel="noopener">利用規約</a>
-          <a href="/cookie"  target="_blank" rel="noopener">Cookie・外部送信</a>
-        </p>
-        <button id="consent-go" disabled>同意して始める</button>
-        <div id="consent-msg"></div>
+    <div class="chat-messages" id="chatMessages">
+      <div class="welcome-message" id="welcomeMessage">
+        <strong>🏠 AI住まい相談へようこそ！</strong><br/><br/>
+        住宅に関するご質問をお気軽にどうぞ。<br/>
+        社内資料とWeb検索を活用して、正確な情報をお答えします。<br/><br/>
+        <small>例：坪単価について教えて、耐震性能はどのくらい？など</small>
       </div>
     </div>
+    <div class="typing-indicator" id="typingIndicator" style="display:none;">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span><span>資料を検索中...</span>
+    </div>
+    <div class="chat-input-container">
+      <div class="chat-input-wrapper">
+        <textarea class="chat-input" id="chatInput" placeholder="同意が必要です" rows="1" disabled></textarea>
+        <button class="send-button" id="sendButton" type="button" disabled>➤</button>
+      </div>
+    </div>
+  </div>
 
-    <script>
-        class RAGEnabledChatUI {
-            constructor() {
-                // RAG対応エンドポイント
-                this.API_URL = 'https://rag-api-190389115361.asia-northeast1.run.app/chat';
-                this.PLATFORM = 'web';
+  <footer>
+    <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a> | <a href="/cookie">Cookie</a>
+  </footer>
 
-                this.chatMessages   = document.getElementById('chatMessages');
-                this.chatInput      = document.getElementById('chatInput');
-                this.sendButton     = document.getElementById('sendButton');
-                this.typingIndicator= document.getElementById('typingIndicator');
-                this.welcomeMessage = document.getElementById('welcomeMessage');
+  <!-- 同意モーダル：初期は常に表示（JS失敗時でも見える） -->
+  <div id="consent-overlay">
+    <div id="consent-card" role="dialog" aria-modal="true" aria-labelledby="consent-title">
+      <h3 id="consent-title">AIチャットのご利用前にご確認ください</h3>
+      <p>以下の<strong>5項目</strong>すべてに同意が必要です。</p>
+      <ul>
+        <li><label><input type="checkbox" id="c_pp"/> プライバシーポリシーに同意します</label></li>
+        <li><label><input type="checkbox" id="c_tos"/> 利用規約に同意します</label></li>
+        <li><label><input type="checkbox" id="c_cookie"/> Cookie・類似技術の利用に同意します</label></li>
+        <li><label><input type="checkbox" id="c_xfer"/> 入力内容等が外部送信される可能性に同意します</label></li>
+        <li><label><input type="checkbox" id="c_ai"/> 生成AIの誤答可能性（限界）を理解しました</label></li>
+      </ul>
+      <p id="consent-links">
+        <a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>
+        <a href="/terms"   target="_blank" rel="noopener">利用規約</a>
+        <a href="/cookie"  target="_blank" rel="noopener">Cookie・外部送信</a>
+      </p>
+      <button id="consent-go" disabled>同意して始める</button>
+      <div id="consent-msg"></div>
+    </div>
+  </div>
 
-                this.initializeEventListeners();
-                this.adjustTextareaHeight();
-
-                // RAGパフォーマンス監視
-                this.responseMetrics = [];
-                this.ragEnabled = true;
-                this.hasFirstMessage = false;
-            }
-
-            initializeEventListeners() {
-                this.sendButton.addEventListener('click', () => this.sendMessage());
-                this.chatInput.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        this.sendMessage();
-                    }
-                });
-                this.chatInput.addEventListener('input', () => this.adjustTextareaHeight());
-            }
-
-            adjustTextareaHeight() {
-                this.chatInput.style.height = 'auto';
-                this.chatInput.style.height = Math.min(this.chatInput.scrollHeight, 120) + 'px';
-            }
-
-            async sendMessage() {
-                const message = this.chatInput.value.trim();
-                if (!message || this.chatInput.disabled || this.sendButton.disabled) return;
-
-                // 初回メッセージ時にウェルカムメッセージを削除
-                if (!this.hasFirstMessage && this.welcomeMessage) {
-                    this.welcomeMessage.remove();
-                    this.hasFirstMessage = true;
-                }
-
-                this.addUserMessage(message);
-                this.chatInput.value = '';
-                this.adjustTextareaHeight();
-                this.setLoading(true);
-                this.updateTypingText("資料を検索中...");
-
-                const startTime = performance.now();
-
-                try {
-                    const response = await this.callRAGAPI(message);
-                    const responseTime = performance.now() - startTime;
-
-                    this.recordPerformance(responseTime, response);
-                    this.addAIMessage(response.answer, response, responseTime);
-
-                } catch (error) {
-                    console.error('RAG API Error:', error);
-                    this.showError('エラーが発生しました。時間を置いて再度お試しください。');
-                } finally {
-                    this.setLoading(false);
-                }
-            }
-
-            async callRAGAPI(question) {
-                /**
-                 * RAG対応API呼び出し
-                 * ▼ ここに“同意ゲート向けのユーザー識別ヘッダ”を追加（web_uidを使用）
-                 */
-                try {
-                    const webUid = localStorage.getItem('web_uid') || '';
-                    const headers = {
-                        'Content-Type': 'application/json',
-                    };
-                    // 既存ロジック維持（id_token / user_id があれば送る）
-                    const idt = localStorage.getItem('id_token');
-                    if (idt) headers['Authorization'] = `Bearer ${idt}`;
-                    if (webUid) {
-                        headers['X-User-Id'] = webUid;
-                        localStorage.setItem('user_id', webUid); // 既存コード互換
-                    }
-
-                    const response = await fetch(this.API_URL, {
-                        method: 'POST',
-                        headers,
-                        body: JSON.stringify({
-                            question,
-                            username: webUid || `web-user-${Date.now()}`,
-                            platform: 'web'
-                        })
-                    });
-
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-                    const data = await response.json();
-                    return {
-                        answer: data.answer || 'すみません、回答できませんでした。',
-                        source: data.performance?.source || 'unknown',
-                        platform: data.performance?.platform || 'web',
-                        processing_time: data.performance?.processing_time || 0,
-                        confidence: data.performance?.confidence || 0.8,
-                        search_used: data.performance?.search_used || false,
-                        source_docs_count: data.performance?.source_docs_count || 0
-                    };
-
-                } catch (error) {
-                    console.error('RAG API call failed:', error);
-                    throw error;
-                }
-            }
-
-            recordPerformance(responseTime, response) {
-                this.responseMetrics.push({
-                    timestamp: Date.now(),
-                    responseTime,
-                    source: response.source,
-                    confidence: response.confidence,
-                    searchUsed: response.search_used
-                });
-
-                if (responseTime > 10000) {
-                    console.warn('Very slow RAG response:', responseTime + 'ms');
-                }
-                if (this.responseMetrics.length > 100) {
-                    this.responseMetrics = this.responseMetrics.slice(-50);
-                }
-            }
-
-            addUserMessage(message) {
-                const messageDiv = document.createElement('div');
-                messageDiv.className = 'message user';
-                messageDiv.innerHTML = `<div class="message-content">${this.escapeHtml(message)}</div>`;
-                this.chatMessages.appendChild(messageDiv);
-                this.scrollToBottom();
-            }
-
-            addAIMessage(message, metadata = {}, responseTime = 0) {
-                const messageDiv = document.createElement('div');
-                messageDiv.className = 'message ai';
-
-                const sourceClass = this.getSourceClass(metadata.source);
-                const confidenceClass = this.getConfidenceClass(metadata.confidence || 0.8);
-                const confidenceIndicator = `<span class="confidence-indicator ${confidenceClass}"></span>`;
-
-                const showDebug = window.location.search.includes('debug=true');
-                const responseInfo = showDebug && responseTime > 0 ?
-                    `<div class="response-info">
-                        ${this.getSourceIcon(metadata.source)} ${responseTime.toFixed(0)}ms |
-                        信頼度: ${(metadata.confidence * 100).toFixed(0)}% ${confidenceIndicator} |
-                        検索: ${metadata.search_used ? '✓' : '✗'} |
-                        文書: ${metadata.source_docs_count || 0}件
-                     </div>` : '';
-
-                messageDiv.innerHTML = `
-                    <div class="message-content ${sourceClass}">
-                        ${this.formatMessage(message)}
-                        ${responseInfo}
-                    </div>
-                `;
-                this.chatMessages.appendChild(messageDiv);
-                this.scrollToBottom();
-            }
-
-            getSourceClass(source) {
-                switch(source) {
-                    case 'rag_verified': return 'search-verified';
-                    case 'rag':         return 'rag-source';
-                    case 'chatgpt':     return 'chatgpt-source';
-                    case 'template':    return 'template-source';
-                    default:            return '';
-                }
-            }
-            getConfidenceClass(confidence) {
-                if (confidence >= 0.8) return 'confidence-high';
-                if (confidence >= 0.6) return 'confidence-medium';
-                return 'confidence-low';
-            }
-            getSourceIcon(source) {
-                switch(source) {
-                    case 'rag_verified': return '🔍✓';
-                    case 'rag':          return '📚';
-                    case 'chatgpt':      return '🤖';
-                    case 'template':     return '📋';
-                    case 'cache':        return '⚡';
-                    default:             return '🔄';
-                }
-            }
-            formatMessage(message) { return this.escapeHtml(message).replace(/\n/g, '<br>'); }
-            escapeHtml(text) { const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
-
-            setLoading(isLoading) {
-                this.sendButton.disabled = isLoading;
-                this.chatInput.disabled  = isLoading;
-                this.typingIndicator.style.display = isLoading ? 'flex' : 'none';
-                if (isLoading) this.scrollToBottom();
-            }
-            updateTypingText(text) {
-                const typingText = this.typingIndicator.querySelector('span:last-child');
-                if (typingText) typingText.textContent = text;
-            }
-            showError(message) {
-                const errorDiv = document.createElement('div');
-                errorDiv.className = 'error-message';
-                errorDiv.textContent = message;
-                this.chatMessages.appendChild(errorDiv);
-                this.scrollToBottom();
-                setTimeout(() => errorDiv.remove(), 5000);
-            }
-            scrollToBottom() { this.chatMessages.scrollTop = this.chatMessages.scrollHeight; }
-
-            showRAGPerformanceStats() {
-                if (this.responseMetrics.length === 0) return;
-                const avgResponseTime = this.responseMetrics.reduce((s, m)=>s+m.responseTime,0) / this.responseMetrics.length;
-                const ragResponses    = this.responseMetrics.filter(m => m.source === 'rag' || m.source === 'rag_verified').length;
-                const searchUsedCount = this.responseMetrics.filter(m => m.searchUsed).length;
-                const avgConfidence   = this.responseMetrics.reduce((s,m)=>s+m.confidence,0) / this.responseMetrics.length;
-                console.log(`RAG Performance Stats:
-                - Platform: Web (RAG Enabled)
-                - Average Response Time: ${avgResponseTime.toFixed(0)}ms
-                - RAG Responses: ${ragResponses}/${this.responseMetrics.length}
-                - Search Verifications: ${searchUsedCount}/${this.responseMetrics.length}
-                - Average Confidence: ${(avgConfidence * 100).toFixed(1)}%
-                - Total Queries: ${this.responseMetrics.length}`);
-            }
-        }
-
-        let chatUI;
-        document.addEventListener('DOMContentLoaded', () => {
-            chatUI = new RAGEnabledChatUI();
-            if (window.location.hostname === 'localhost' || window.location.search.includes('debug=true')) {
-                setInterval(() => chatUI.showRAGPerformanceStats(), 30000);
-                console.log('🧠 RAG Enabled Chat UI initialized');
-            }
-        });
-    </script>
-
-    <!-- ▼▼▼ 追加: 同意ゲート（JS） ▼▼▼ -->
-    <script>
-    (()=>{
-      const POLICY_VERSION = "2025-09-01";
-      const TOS_VERSION    = "2025-09-01";
-
-      const $ = (sel)=>document.querySelector(sel);
-      function uuidv4(){return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,c=>(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16));}
-      function getWebUid(){
-        try{
-          let id = localStorage.getItem("web_uid");
-          if(!id){ id = "web-"+uuidv4(); localStorage.setItem("web_uid", id); }
-          return id;
-        }catch(_){ return "web-"+Math.random().toString(36).slice(2); }
+  <script>
+    class RAGEnabledChatUI{
+      constructor(){
+        // APIは rag-api 側の /chat
+        this.API_URL = 'https://rag-api-190389115361.asia-northeast1.run.app/chat';
+        this.PLATFORM = 'web';
+        this.chatMessages = document.getElementById('chatMessages');
+        this.chatInput = document.getElementById('chatInput');
+        this.sendButton = document.getElementById('sendButton');
+        this.typingIndicator = document.getElementById('typingIndicator');
+        this.welcomeMessage = document.getElementById('welcomeMessage');
+        this.initializeEventListeners();
+        this.adjustTextareaHeight();
+        this.responseMetrics = [];
+        this.ragEnabled = true;
+        this.hasFirstMessage = false;
       }
-      const WEB_UID = getWebUid();
-      // 既存ヘッダ互換のため user_id も保存
-      localStorage.setItem('user_id', WEB_UID);
+      initializeEventListeners(){
+        this.sendButton.addEventListener('click',()=>this.sendMessage());
+        this.chatInput.addEventListener('keydown',(e)=>{
+          if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); this.sendMessage(); }
+        });
+        this.chatInput.addEventListener('input',()=>this.adjustTextareaHeight());
+      }
+      adjustTextareaHeight(){
+        this.chatInput.style.height='auto';
+        this.chatInput.style.height=Math.min(this.chatInput.scrollHeight,120)+'px';
+      }
+      async sendMessage(){
+        const message=this.chatInput.value.trim();
+        if(!message || this.chatInput.disabled || this.sendButton.disabled) return;
+        if(!this.hasFirstMessage && this.welcomeMessage){ this.welcomeMessage.remove(); this.hasFirstMessage=true; }
+        this.addUserMessage(message);
+        this.chatInput.value=''; this.adjustTextareaHeight(); this.setLoading(true);
+        const startTime=performance.now();
+        try{
+          const resp=await this.callRAGAPI(message);
+          const ms=performance.now()-startTime;
+          this.recordPerformance(ms,resp);
+          this.addAIMessage(resp.answer,resp,ms);
+        }catch(e){
+          console.error('RAG API Error:',e);
+          this.showError('エラーが発生しました。時間を置いて再度お試しください。');
+        }finally{ this.setLoading(false); }
+      }
+      async callRAGAPI(question){
+        try{
+          const webUid=localStorage.getItem('web_uid')||'';
+          const headers={'Content-Type':'application/json'};
+          const idt=localStorage.getItem('id_token');
+          if(idt) headers['Authorization']=`Bearer ${idt}`;
+          if(webUid){ headers['X-User-Id']=webUid; localStorage.setItem('user_id',webUid); }
+          const r=await fetch(this.API_URL,{ method:'POST', headers, body:JSON.stringify({question,username:webUid||`web-user-${Date.now()}`,platform:'web'}) });
+          if(!r.ok) throw new Error(`HTTP ${r.status}`);
+          const d=await r.json();
+          return {
+            answer:d.answer||'すみません、回答できませんでした。',
+            source:d.performance?.source||'unknown',
+            platform:d.performance?.platform||'web',
+            processing_time:d.performance?.processing_time||0,
+            confidence:d.performance?.confidence||0.8,
+            search_used:d.performance?.search_used||false,
+            source_docs_count:d.performance?.source_docs_count||0
+          };
+        }catch(e){ console.error('RAG API call failed:',e); throw e; }
+      }
+      recordPerformance(ms,res){
+        this.responseMetrics.push({timestamp:Date.now(),responseTime:ms,source:res.source,confidence:res.confidence,searchUsed:res.search_used});
+        if(ms>10000) console.warn('Very slow RAG response:',ms+'ms');
+        if(this.responseMetrics.length>100) this.responseMetrics=this.responseMetrics.slice(-50);
+      }
+      addUserMessage(message){
+        const el=document.createElement('div'); el.className='message user';
+        el.innerHTML=`<div class="message-content">${this.escapeHtml(message)}</div>`;
+        this.chatMessages.appendChild(el); this.scrollToBottom();
+      }
+      addAIMessage(message,meta={},ms=0){
+        const el=document.createElement('div'); el.className='message ai';
+        const sourceClass=this.getSourceClass(meta.source);
+        const confClass=this.getConfidenceClass(meta.confidence||0.8);
+        const confDot=`<span class="confidence-indicator ${confClass}"></span>`;
+        const debug=window.location.search.includes('debug=true');
+        const info=debug && ms>0 ? `<div class="response-info">
+          ${this.getSourceIcon(meta.source)} ${ms.toFixed(0)}ms | 信頼度: ${(meta.confidence*100).toFixed(0)}% ${confDot} | 検索: ${meta.search_used?'✓':'✗'} | 文書: ${meta.source_docs_count||0}件
+        </div>` : '';
+        el.innerHTML=`<div class="message-content ${sourceClass}">${this.formatMessage(message)}${info}</div>`;
+        this.chatMessages.appendChild(el); this.scrollToBottom();
+      }
+      getSourceClass(s){ return s==='rag_verified'?'search-verified': s==='rag'?'rag-source': s==='chatgpt'?'chatgpt-source': s==='template'?'template-source':''; }
+      getConfidenceClass(c){ return c>=0.8?'confidence-high': c>=0.6?'confidence-medium':'confidence-low'; }
+      getSourceIcon(s){ return s==='rag_verified'?'🔍✓': s==='rag'?'📚': s==='chatgpt'?'🤖': s==='template'?'📋': s==='cache'?'⚡':'🔄'; }
+      formatMessage(t){ return this.escapeHtml(t).replace(/\n/g,'<br>'); }
+      escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
+      setLoading(b){ this.sendButton.disabled=b; this.chatInput.disabled=b; }
+      showError(m){ const e=document.createElement('div'); e.className='error-message'; e.textContent=m; this.chatMessages.appendChild(e); this.scrollToBottom(); setTimeout(()=>e.remove(),5000); }
+      scrollToBottom(){ this.chatMessages.scrollTop=this.chatMessages.scrollHeight; }
+    }
+    let chatUI;
+    document.addEventListener('DOMContentLoaded',()=>{
+      chatUI=new RAGEnabledChatUI();
+      if(location.hostname==='localhost'||location.search.includes('debug=true')){
+        setInterval(()=>chatUI && chatUI.responseMetrics.length&&console.log('RAG metrics',chatUI.responseMetrics.slice(-1)[0]),30000);
+      }
+    });
+  </script>
 
-      // UI制御
-      const input = $("#chatInput");
-      const send  = $("#sendButton");
-      const overlay = $("#consent-overlay");
-      const goBtn   = $("#consent-go");
-      const msg     = $("#consent-msg");
-      const boxes   = ["#c_pp","#c_tos","#c_cookie","#c_xfer","#c_ai"].map($);
+  <!-- 同意ゲート -->
+  <script>
+    (()=>{
+      const POLICY_VERSION="2025-09-01";
+      const TOS_VERSION   ="2025-09-01";
+
+      const DEFAULT_RUN='https://rag-api-190389115361.asia-northeast1.run.app';
+      const API_BASE = (window.__API_BASE ?? location.origin) || DEFAULT_RUN;
+
+      const $ = (s)=>document.querySelector(s);
+      function uuidv4(){return([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,c=>(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16));}
+      function getWebUid(){
+        try{ let id=localStorage.getItem("web_uid"); if(!id){ id="web-"+uuidv4(); localStorage.setItem("web_uid",id); } return id; }
+        catch(_){ return "web-"+Math.random().toString(36).slice(2); }
+      }
+      const WEB_UID=getWebUid(); localStorage.setItem('user_id',WEB_UID);
+
+      const input=$("#chatInput"), send=$("#sendButton"), overlay=$("#consent-overlay"),
+            goBtn=$("#consent-go"), msg=$("#consent-msg"),
+            boxes=["#c_pp","#c_tos","#c_cookie","#c_xfer","#c_ai"].map($);
 
       function setChatEnabled(enabled){
-        if(input) input.disabled = !enabled;
-        if(send)  send.disabled  = !enabled;
+        if(input) input.disabled=!enabled;
+        if(send)  send.disabled=!enabled;
         if(input) input.placeholder = enabled ? "住宅についてお聞きください..." : "同意が必要です";
       }
-      function refreshButton(){
-        const ok = boxes.every(b => b && b.checked);
-        goBtn.disabled = !ok;
-      }
-      boxes.forEach(b => b && b.addEventListener("change", refreshButton));
+      function refreshButton(){ goBtn.disabled = !boxes.every(b=>b && b.checked); }
+      boxes.forEach(b=> b && b.addEventListener('change',refreshButton));
 
       async function consentCheck(){
         try{
-          const r = await fetch("/consent/check",{
-            method:"POST",
-            headers:{ "Content-Type":"application/json" },
-            credentials:"include",
+          const r = await fetch(`${API_BASE}/consent/check`,{
+            method:"POST", headers:{ "Content-Type":"application/json" },
             body: JSON.stringify({ user_id: WEB_UID, policy_version: POLICY_VERSION, tos_version: TOS_VERSION })
           });
-          const j = await r.json();
-          return !!(j && j.valid);
-        }catch(_){ return false; } // エラー時は未同意扱い
+          const j = await r.json(); return !!(j && j.valid);
+        }catch(_){ return false; }
       }
       async function consentSave(flags){
-        const payload = {
-          consent_id: (crypto.randomUUID && crypto.randomUUID()) || String(Date.now()),
-          user_id: WEB_UID,
-          consented_at: new Date().toISOString(),
-          policy_version: POLICY_VERSION,
-          tos_version: TOS_VERSION,
-          flags,
-          source: "web",
-          ua: navigator.userAgent,
-          locale: navigator.language || "ja-JP",
-          withdrawn: false
+        const payload={
+          consent_id:(crypto.randomUUID&&crypto.randomUUID())||String(Date.now()),
+          user_id:WEB_UID, consented_at:new Date().toISOString(),
+          policy_version:POLICY_VERSION, tos_version:TOS_VERSION,
+          flags, source:"web", ua:navigator.userAgent, locale:navigator.language||"ja-JP", withdrawn:false
         };
-        const r = await fetch("/consent/save",{
-          method:"POST",
-          headers:{ "Content-Type":"application/json" },
-          credentials:"include",
-          body: JSON.stringify(payload)
+        const r = await fetch(`${API_BASE}/consent/save`,{
+          method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
         });
-        const j = await r.json().catch(()=> ({}));
-        if(!r.ok || !j.success) throw new Error("save failed");
-        return j;
+        const j = await r.json().catch(()=>({})); if(!r.ok || !j.success) throw new Error("save failed"); return j;
       }
 
-      goBtn.addEventListener("click", async ()=>{
+      goBtn.addEventListener('click', async ()=>{
         try{
-          goBtn.disabled = true;
-          msg.textContent = "保存中…";
+          goBtn.disabled=true; msg.textContent="保存中…";
           const flags = {
-            pp: $("#c_pp").checked,
-            tos: $("#c_tos").checked,
-            cookie: $("#c_cookie").checked,
-            xfer: $("#c_xfer").checked,
+            pp: $("#c_pp").checked, tos: $("#c_tos").checked,
+            cookie: $("#c_cookie").checked, xfer: $("#c_xfer").checked,
             ai_limits: $("#c_ai").checked
           };
           await consentSave(flags);
-          overlay.hidden = true;
-          setChatEnabled(true);
-          msg.textContent = "";
-        }catch(e){
-          console.error(e);
-          msg.textContent = "保存に失敗しました。時間をおいて再度お試しください。";
-          goBtn.disabled = false;
-        }
+          overlay.style.display='none'; setChatEnabled(true); msg.textContent="";
+        }catch(e){ console.error(e); msg.textContent="保存に失敗しました。時間をおいて再度お試しください。"; goBtn.disabled=false; }
       });
 
-      // 初期判定：未同意ならモーダル表示＆入力無効
+      // 初期：未同意ならモーダルを残す／同意済みなら閉じて入力解放
       (async ()=>{
         setChatEnabled(false);
         const ok = await consentCheck();
-        if(ok){
-          overlay.hidden = true;
-          setChatEnabled(true);
-        }else{
-          overlay.hidden = false;
-          refreshButton();
-        }
+        if(ok){ overlay.style.display='none'; setChatEnabled(true); }
+        else{ refreshButton(); /* そのまま表示 */ }
       })();
     })();
-    </script>
+  </script>
 </body>
 </html>
