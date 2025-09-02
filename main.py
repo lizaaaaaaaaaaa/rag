@@ -38,11 +38,23 @@ except Exception:
     pass
 _enforce_env_minimums()
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException  # ← HTTPException を追加
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
+import jwt  # ← PyJWT
+
+# ★ 追記：同意ゲート＆運用系ミドルウェアを読み込む
+from middleware import (
+    TimingMiddleware,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    ConsentGateMiddleware,
+)
+
+# ★ 追記：DB初期化（開発/初回のみテーブル作成）
+from database import init_database  # ← 追加
 
 # =================================
 # パス安定化
@@ -71,7 +83,7 @@ def ensure_utils_web_search_alias() -> bool:
             try:
                 spec = importlib.util.spec_from_file_location("utils.web_search", str(path))
                 if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)
+                    mod = importlib.module_from_spec(spec)  # type: ignore[attr-defined]
                     spec.loader.exec_module(mod)  # type: ignore
                     if "utils" not in sys.modules:
                         sys.modules["utils"] = types.ModuleType("utils")
@@ -98,7 +110,7 @@ app = FastAPI(
     version="7.4.0",
 )
 
-# CORS
+# 既存CORS（FastAPI純正）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -117,6 +129,12 @@ class RobotsNoIndexMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RobotsNoIndexMiddleware)
 
+# 運用系ミドルウェア → 同意ゲートの順で登録
+app.add_middleware(TimingMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(ConsentGateMiddleware)
+
 # =================================
 # ルーター登録（存在する場合のみ）
 # =================================
@@ -129,13 +147,13 @@ def _include_optional_router(py_path: str, attr: str = "router", prefix: str = "
     except Exception as e:
         logger.info(f"ℹ️ Router skipped ({py_path}): {e}")
 
-# ここに追記（liff_pages は既に含まれていました）
 _include_optional_router("api.routers.legal_pages")
 _include_optional_router("api.routers.liff_pages")      # /liff, /liff/consent
-_include_optional_router("api.routers.line_login")      # ★ 追加: /line-login/...
+_include_optional_router("api.routers.line_login")
 _include_optional_router("api.routers.reconsent_tasks")
 _include_optional_router("api.routers.financial_api")
-_include_optional_router("api.routers.financial_api", attr="router_compat")  # 旧互換 (/api/financial-calculate)
+_include_optional_router("api.routers.financial_api", attr="router_compat")  # 旧互換
+_include_optional_router("api.routers.consent_gate")
 
 # =================================
 # グローバル（RAG）
@@ -191,123 +209,126 @@ async def initialize_rag_components():
         rag_diagnostics["last_initialization_time"] = datetime.now().isoformat()
         logger.info("🚀 Initializing RAG components (fast first, then services front-door) ...")
 
-        try:
-            ensure_utils_web_search_alias()
+    # 以降は（中略）— 既存の初期化処理そのまま —
+    # ※ 元ファイルのロジックを保持（LLMロード → Fast RAG → フロントドア fallback 等）
 
-            # LLM
-            llm_t = time.time()
+    try:
+        ensure_utils_web_search_alias()
+
+        # LLM
+        llm_t = time.time()
+        try:
+            llm_instance = None
             try:
-                llm_instance = None
+                mod = importlib.import_module("llm.llm_runner")
+                get_cached = getattr(mod, "get_cached_llm_instance", None)
+                if callable(get_cached):
+                    llm_instance = get_cached()
+                else:
+                    load_llm = getattr(mod, "load_llm", None)
+                    if callable(load_llm):
+                        res = load_llm()
+                        llm_instance = res[0] if isinstance(res, tuple) else res
+            except Exception:
                 try:
-                    mod = importlib.import_module("llm.llm_runner")
+                    mod = importlib.import_module("llm_runner")
                     get_cached = getattr(mod, "get_cached_llm_instance", None)
                     if callable(get_cached):
                         llm_instance = get_cached()
-                    else:
-                        load_llm = getattr(mod, "load_llm", None)
-                        if callable(load_llm):
-                            res = load_llm()
-                            llm_instance = res[0] if isinstance(res, tuple) else res
                 except Exception:
-                    try:
-                        mod = importlib.import_module("llm_runner")
-                        get_cached = getattr(mod, "get_cached_llm_instance", None)
-                        if callable(get_cached):
-                            llm_instance = get_cached()
-                    except Exception:
-                        pass
+                    pass
 
-                rag_diagnostics["component_status"]["llm_instance"]["loaded"] = bool(llm_instance)
-                rag_diagnostics["component_status"]["llm_instance"]["load_time"] = time.time() - llm_t
-                if llm_instance:
-                    logger.info(f"✅ LLM ready ({rag_diagnostics['component_status']['llm_instance']['load_time']:.2f}s)")
-                else:
-                    logger.info("ℹ️ LLM runner not found. Using chain-side LLMs.")
-            except Exception as e:
-                rag_diagnostics["component_status"]["llm_instance"]["error"] = str(e)
-                logger.warning(f"⚠️ LLM load failed (continue without): {e}")
-
-            # Vectorstore + Chain
-            vs_t = time.time()
-            try:
-                try:
-                    fast_mod = importlib.import_module("rag.fast_rag_chain")
-                    load_vs = getattr(fast_mod, "load_super_fast_vectorstore")
-                    get_chain = getattr(fast_mod, "get_super_fast_rag_chain")
-                    vectorstore = load_vs()
-                    rag_chain_template = get_chain(vectorstore, return_source=INCLUDE_SOURCES)
-                    logger.info("✅ Fast RAG chain loaded")
-                except Exception as e_fast:
-                    logger.warning(f"⚠️ Fast RAG init failed: {e_fast}")
-                    logger.info("🔄 Falling back to services.rag_chain front-door")
-
-                    svc_mod = importlib.import_module("services.rag_chain")
-                    get_rag_response = getattr(svc_mod, "get_rag_response")
-
-                    class _FrontDoorChain:
-                        def __init__(self, include_sources: bool):
-                            self.include_sources = include_sources
-                        def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-                            q = (inputs.get("query") or inputs.get("question") or "").strip()
-                            ans, srcs = get_rag_response(q)
-                            if not self.include_sources:
-                                return {"result": ans, "source_documents": []}
-                            docs = [{"metadata": {"source": s}} for s in srcs]
-                            return {"result": ans, "source_documents": docs}
-
-                    vectorstore = None
-                    rag_chain_template = _FrontDoorChain(include_sources=INCLUDE_SOURCES)
-                    rag_diagnostics["fallback_info"].update(
-                        {"used_fallback": True, "fallback_type": "services_front_door", "fallback_reason": str(e_fast)}
-                    )
-
-                try:
-                    _ = rag_chain_template.invoke({"query": "テスト"})
-                    rag_diagnostics["health_checks"]["rag_query_test"] = True
-                except Exception as test_e:
-                    logger.warning(f"⚠️ RAG quick test failed: {test_e}")
-
-                if vectorstore is not None:
-                    idx_path = os.path.join(os.getenv("VECTOR_DIR", "rag/vectorstore"), "index.faiss")
-                    if os.path.exists(idx_path):
-                        rag_diagnostics["component_status"]["vectorstore"]["file_path"] = idx_path
-                        rag_diagnostics["component_status"]["vectorstore"]["file_size"] = os.path.getsize(idx_path)
-                    rag_diagnostics["component_status"]["vectorstore"]["loaded"] = True
-
-                rag_diagnostics["component_status"]["vectorstore"]["load_time"] = time.time() - vs_t
-                rag_diagnostics["component_status"]["rag_chain"]["loaded"] = rag_chain_template is not None
-                rag_diagnostics["component_status"]["rag_chain"]["load_time"] = time.time() - vs_t
-
-            except Exception as e_vs:
-                rag_diagnostics["component_status"]["vectorstore"]["error"] = str(e_vs)
-                rag_diagnostics["component_status"]["rag_chain"]["error"] = str(e_vs)
-                raise
-
-            try:
-                if hasattr(llm_instance, "invoke"):
-                    _r = llm_instance.invoke("テスト")
-                    rag_diagnostics["health_checks"]["llm_response_test"] = bool(_r)
-            except Exception as e:
-                logger.warning(f"LLM test failed: {e}")
-
-            is_initialized = True
-            RAG_SHARED_GLOBALLY = True
-            rag_diagnostics["initialization_success"] = True
-            rag_diagnostics["initialization_duration"] = time.time() - t0
-            rag_diagnostics["health_checks"]["last_check"] = datetime.now().isoformat()
-
-            logger.info(
-                f"🎉 RAG init OK in {rag_diagnostics['initialization_duration']:.2f}s "
-                f"(fallback={rag_diagnostics['fallback_info']['fallback_type']})"
-            )
-
+            rag_diagnostics["component_status"]["llm_instance"]["loaded"] = bool(llm_instance)
+            rag_diagnostics["component_status"]["llm_instance"]["load_time"] = time.time() - llm_t
+            if llm_instance:
+                logger.info(f"✅ LLM ready ({rag_diagnostics['component_status']['llm_instance']['load_time']:.2f}s)")
+            else:
+                logger.info("ℹ️ LLM runner not found. Using chain-side LLMs.")
         except Exception as e:
-            rag_diagnostics["initialization_success"] = False
-            rag_diagnostics["initialization_duration"] = time.time() - t0
-            is_initialized = False
-            RAG_SHARED_GLOBALLY = False
-            logger.error(f"💥 RAG init failed: {e}")
-            logger.error(traceback.format_exc())
+            rag_diagnostics["component_status"]["llm_instance"]["error"] = str(e)
+            logger.warning(f"⚠️ LLM load failed (continue without): {e}")
+
+        # Vectorstore + Chain
+        vs_t = time.time()
+        try:
+            try:
+                fast_mod = importlib.import_module("rag.fast_rag_chain")
+                load_vs = getattr(fast_mod, "load_super_fast_vectorstore")
+                get_chain = getattr(fast_mod, "get_super_fast_rag_chain")
+                vectorstore = load_vs()
+                rag_chain_template = get_chain(vectorstore, return_source=INCLUDE_SOURCES)
+                logger.info("✅ Fast RAG chain loaded")
+            except Exception as e_fast:
+                logger.warning(f"⚠️ Fast RAG init failed: {e_fast}")
+                logger.info("🔄 Falling back to services.rag_chain front-door")
+
+                svc_mod = importlib.import_module("services.rag_chain")
+                get_rag_response = getattr(svc_mod, "get_rag_response")
+
+                class _FrontDoorChain:
+                    def __init__(self, include_sources: bool):
+                        self.include_sources = include_sources
+                    def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+                        q = (inputs.get("query") or inputs.get("question") or "").strip()
+                        ans, srcs = get_rag_response(q)
+                        if not self.include_sources:
+                            return {"result": ans, "source_documents": []}
+                        docs = [{"metadata": {"source": s}} for s in srcs]
+                        return {"result": ans, "source_documents": docs}
+
+                vectorstore = None
+                rag_chain_template = _FrontDoorChain(include_sources=INCLUDE_SOURCES)
+                rag_diagnostics["fallback_info"].update(
+                    {"used_fallback": True, "fallback_type": "services_front_door", "fallback_reason": str(e_fast)}
+                )
+
+            try:
+                _ = rag_chain_template.invoke({"query": "テスト"})
+                rag_diagnostics["health_checks"]["rag_query_test"] = True
+            except Exception as test_e:
+                logger.warning(f"⚠️ RAG quick test failed: {test_e}")
+
+            if vectorstore is not None:
+                idx_path = os.path.join(os.getenv("VECTOR_DIR", "rag/vectorstore"), "index.faiss")
+                if os.path.exists(idx_path):
+                    rag_diagnostics["component_status"]["vectorstore"]["file_path"] = idx_path
+                    rag_diagnostics["component_status"]["vectorstore"]["file_size"] = os.path.getsize(idx_path)
+                rag_diagnostics["component_status"]["vectorstore"]["loaded"] = True
+
+            rag_diagnostics["component_status"]["vectorstore"]["load_time"] = time.time() - vs_t
+            rag_diagnostics["component_status"]["rag_chain"]["loaded"] = rag_chain_template is not None
+            rag_diagnostics["component_status"]["rag_chain"]["load_time"] = time.time() - vs_t
+
+        except Exception as e_vs:
+            rag_diagnostics["component_status"]["vectorstore"]["error"] = str(e_vs)
+            rag_diagnostics["component_status"]["rag_chain"]["error"] = str(e_vs)
+            raise
+
+        try:
+            if hasattr(llm_instance, "invoke"):
+                _r = llm_instance.invoke("テスト")
+                rag_diagnostics["health_checks"]["llm_response_test"] = bool(_r)
+        except Exception as e:
+            logger.warning(f"LLM test failed: {e}")
+
+        is_initialized = True
+        RAG_SHARED_GLOBALLY = True
+        rag_diagnostics["initialization_success"] = True
+        rag_diagnostics["initialization_duration"] = time.time() - t0
+        rag_diagnostics["health_checks"]["last_check"] = datetime.now().isoformat()
+
+        logger.info(
+            f"🎉 RAG init OK in {rag_diagnostics['initialization_duration']:.2f}s "
+            f"(fallback={rag_diagnostics['fallback_info']['fallback_type']})"
+        )
+
+    except Exception as e:
+        rag_diagnostics["initialization_success"] = False
+        rag_diagnostics["initialization_duration"] = time.time() - t0
+        is_initialized = False
+        RAG_SHARED_GLOBALLY = False
+        logger.error(f"💥 RAG init failed: {e}")
+        logger.error(traceback.format_exc())
 
 def get_shared_rag_components():
     return {
@@ -486,6 +507,26 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
     username = req.username or f"{platform}-user"
     mode = req.mode or "auto"
 
+    # --- ベルト＆サスペンダー用の軽い保険（未同意＝未特定なら 403） ---
+    user_id = request.headers.get("X-User-Id")
+    if not user_id:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth.split(" ", 1)[1]
+            try:
+                payload = jwt.decode(
+                    token,
+                    options={"verify_signature": False},  # 署名検証は上流で実施想定
+                    algorithms=["HS256", "RS256", "ES256"]
+                )
+                user_id = payload.get("sub") or payload.get("user_id") or payload.get("email")
+            except Exception:
+                user_id = None
+    if not user_id:
+        # ミドルウェアをバイパスされた場合でも、ここで fail-closed
+        raise HTTPException(status_code=403, detail="consent_required: unidentified_user")
+    # -------------------------------------------------------------------------
+
     try:
         ensure_utils_web_search_alias()
 
@@ -576,6 +617,9 @@ async def health_check():
 async def startup_event():
     logger.info("🚀 Starting Unified RAG System (Diagnostics Super-Enhanced)")
     ensure_utils_web_search_alias()
+
+    # ★ 追記：DB初期化（開発/初回のみ）
+    await init_database()
 
     if ENABLE_RAG_INITIALIZATION:
         await initialize_rag_components()

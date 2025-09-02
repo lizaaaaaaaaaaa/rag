@@ -219,12 +219,12 @@
     </style>
 
     <!-- ▼▼▼ 追記: GA4（IDを差し替え） ▼▼▼ -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXX"></script>
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-B8988S3RCZ"></script>
     <script>
       window.dataLayer = window.dataLayer || [];
       function gtag(){dataLayer.push(arguments);}
       gtag('js', new Date());
-      gtag('config', 'G-XXXXXXX'); // ←あなたの GA4 ID
+      gtag('config', 'G-B8988S3RCZ'); // ←あなたの GA4 ID
 
       const p = new URLSearchParams(location.search);
       const ab = p.get('ab') || 'A';
@@ -350,11 +350,16 @@
             async callRAGAPI(question) {
                 /**
                  * RAG対応API呼び出し
+                 * ▼ ここに“同意ゲート向けのユーザー識別ヘッダ”を追加
                  */
                 try {
                     const response = await fetch(this.API_URL, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            ...(localStorage.getItem('id_token') ? { 'Authorization': `Bearer ${localStorage.getItem('id_token')}` } : {}),
+                            ...(localStorage.getItem('user_id') ? { 'X-User-Id': localStorage.getItem('user_id') } : {})
+                        },
                         body: JSON.stringify({ 
                             question, 
                             username: `web-user-${Date.now()}`,
