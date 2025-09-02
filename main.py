@@ -83,7 +83,7 @@ def ensure_utils_web_search_alias() -> bool:
             try:
                 spec = importlib.util.spec_from_file_location("utils.web_search", str(path))
                 if spec and spec.loader:
-                    mod = importlib.module_from_spec(spec)  # type: ignore[attr-defined]
+                    mod = importlib.util.module_from_spec(spec)  # ← util.module_from_spec を使用
                     spec.loader.exec_module(mod)  # type: ignore
                     if "utils" not in sys.modules:
                         sys.modules["utils"] = types.ModuleType("utils")
@@ -210,8 +210,6 @@ async def initialize_rag_components():
         logger.info("🚀 Initializing RAG components (fast first, then services front-door) ...")
 
     # 以降は（中略）— 既存の初期化処理そのまま —
-    # ※ 元ファイルのロジックを保持（LLMロード → Fast RAG → フロントドア fallback 等）
-
     try:
         ensure_utils_web_search_alias()
 
@@ -262,7 +260,11 @@ async def initialize_rag_components():
                 logger.warning(f"⚠️ Fast RAG init failed: {e_fast}")
                 logger.info("🔄 Falling back to services.rag_chain front-door")
 
-                svc_mod = importlib.import_module("services.rag_chain")
+                # ★ 修正：services.rag_chain が無ければトップレベル rag_chain を使用
+                try:
+                    svc_mod = importlib.import_module("services.rag_chain")
+                except ModuleNotFoundError:
+                    svc_mod = importlib.import_module("rag_chain")
                 get_rag_response = getattr(svc_mod, "get_rag_response")
 
                 class _FrontDoorChain:

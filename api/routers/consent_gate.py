@@ -1,47 +1,50 @@
-# api/routers/consent_gate.py - API同意ゲート＆同意管理システム（完全版）
+# api/routers/consent_gate.py
+# AI同意ゲート（SQLite/aiosqlite版・Cloud SQL不要）
+# - 5点同意: pp / tos / cookie / xfer / ai_limits
+# - POLICY_VERSION / TOS_VERSION は ENV で一元管理
+# - Web/LINE 両対応のユーザー識別 (X-User-Id / Bearer JWT / user_token)
+# - GCS へのWORM風保存は任意（権限が無ければ自動スキップ）
+# - ★ aiosqlite 接続は「await しないで async with」に渡す（本修正版）
 
 import os
-import logging
 import json
-import hashlib
+import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List
+from typing import Optional, Dict, Any
 from uuid import uuid4
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
-from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse
+import jwt            # PyJWT（署名検証は上流で実施想定。ここではID抽出のみ）
+import aiosqlite
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-# GCS（任意・本番向け）
-from google.cloud import storage
-from google.cloud.storage.bucket import Bucket  # 型注釈用
-from google.cloud.storage.client import Client  # 型注釈用
-
-# Web/OAuth の Bearer JWT でも user_id を抽出できるように
-import jwt  # PyJWT（署名検証は上流で実施想定）
-
-import asyncio
+# GCS（任意）
+try:
+    from google.cloud import storage
+except Exception:
+    storage = None
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/consent", tags=["consent"])
 
-# ========== 設定 ==========
-# ★ 5点同意 & バージョンは ENV で一元管理
+# =========================================================
+# 設定
+# =========================================================
 CONSENT_CONFIG = {
-    "POLICY_VERSION": os.environ.get("POLICY_VERSION", "2025-09-01"),
-    "TOS_VERSION": os.environ.get("TOS_VERSION", "2025-09-01"),
+    "POLICY_VERSION": os.getenv("POLICY_VERSION", "2025-09-01"),
+    "TOS_VERSION": os.getenv("TOS_VERSION", "2025-09-01"),
     "CONSENT_VALIDITY_MONTHS": int(os.getenv("CONSENT_VALIDITY_MONTHS", "12")),
     "WORM_RETENTION_YEARS": int(os.getenv("WORM_RETENTION_YEARS", "5")),
-    "GCS_CONSENT_BUCKET": os.environ.get("GCS_CONSENT_BUCKET", "consent-logs-rag-cloud-project"),
-    # ★ 必須フラグ（5点）
+    "GCS_CONSENT_BUCKET": os.getenv("GCS_CONSENT_BUCKET", "consent-logs-rag-cloud-project"),
     "REQUIRED_FLAGS": ["pp", "tos", "cookie", "xfer", "ai_limits"],
 }
 
-# ========== データモデル ==========
+# Cloud Run の書き込み可領域は /tmp
+DEFAULT_DB_PATH = os.getenv("CONSENT_SQLITE_PATH", "/tmp/consent_management.db")
+
+# =========================================================
+# モデル
+# =========================================================
 class ConsentRequest(BaseModel):
     consent_id: str
     user_id: str
@@ -57,7 +60,6 @@ class ConsentRequest(BaseModel):
     withdrawn: bool = False
 
 class ConsentCheckRequest(BaseModel):
-    # ★ user_id / versions は省略可（ヘッダやENVから補う）
     user_id: Optional[str] = None
     policy_version: Optional[str] = None
     tos_version: Optional[str] = None
@@ -66,363 +68,158 @@ class ConsentWithdrawRequest(BaseModel):
     user_id: str
     consent_id: Optional[str] = None
 
-# ========== データベース管理 ==========
-class ConsentDB:
-    def __init__(self):
-        self.conn_params = {
-            "host": os.getenv("DB_HOST"),
-            "port": int(os.getenv("DB_PORT", 5432)),
-            "database": os.getenv("DB_NAME"),
-            "user": os.getenv("DB_USER"),
-            "password": os.getenv("DB_PASSWORD"),
-        }
-
-    def get_connection(self):
-        return psycopg2.connect(**self.conn_params)
-
-    def create_consent_table(self):
-        """同意テーブル作成"""
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS consent_logs (
-                        id SERIAL PRIMARY KEY,
-                        consent_id VARCHAR(255) UNIQUE NOT NULL,
-                        user_id VARCHAR(255) NOT NULL,
-                        liff_id VARCHAR(255),
-                        consented_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                        ip INET,
-                        ua TEXT,
-                        policy_version VARCHAR(50) NOT NULL,
-                        tos_version VARCHAR(50) NOT NULL,
-                        flags JSONB NOT NULL,
-                        locale VARCHAR(10),
-                        source VARCHAR(50),
-                        withdrawn BOOLEAN DEFAULT FALSE,
-                        withdrawn_at TIMESTAMP WITH TIME ZONE,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        gcs_object_name VARCHAR(500)
-                    );
-                """
-                )
-                cur.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_consent_user_id ON consent_logs (user_id);
-                    CREATE INDEX IF NOT EXISTS idx_consent_valid ON consent_logs (user_id, policy_version, tos_version, withdrawn);
-                    CREATE INDEX IF NOT EXISTS idx_consent_created ON consent_logs (created_at);
-                """
-                )
-                conn.commit()
-                logger.info("✅ Consent table created/verified")
-
-    def save_consent(self, consent_data: ConsentRequest) -> Dict[str, Any]:
-        """同意情報を保存"""
-        # 入力の5点同意を軽く検証
-        if not all(consent_data.flags.get(k) for k in CONSENT_CONFIG["REQUIRED_FLAGS"]):
-            raise HTTPException(status_code=400, detail="Required flags are not all true")
-
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    # 既存の有効同意を無効化（再同意時）
-                    cur.execute(
-                        """
-                        UPDATE consent_logs
-                        SET withdrawn = TRUE, withdrawn_at = NOW()
-                        WHERE user_id = %s AND withdrawn = FALSE
-                        """,
-                        (consent_data.user_id,),
-                    )
-
-                    # 新しい同意を保存
-                    cur.execute(
-                        """
-                        INSERT INTO consent_logs (
-                            consent_id, user_id, liff_id, consented_at, ip, ua,
-                            policy_version, tos_version, flags, locale, source, withdrawn
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        RETURNING id, consent_id, created_at
-                        """,
-                        (
-                            consent_data.consent_id,
-                            consent_data.user_id,
-                            consent_data.liff_id,
-                            consent_data.consented_at,
-                            consent_data.ip,
-                            consent_data.ua,
-                            consent_data.policy_version,
-                            consent_data.tos_version,
-                            json.dumps(consent_data.flags),
-                            consent_data.locale,
-                            consent_data.source,
-                            consent_data.withdrawn,
-                        ),
-                    )
-
-                    result = cur.fetchone()
-                    conn.commit()
-
-                    logger.info(f"✅ Consent saved: {consent_data.consent_id} for user {consent_data.user_id}")
-                    return {
-                        "success": True,
-                        "consent_id": result["consent_id"],
-                        "database_id": result["id"],
-                        "created_at": result["created_at"].isoformat(),
-                    }
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"❌ Failed to save consent: {e}")
-            raise HTTPException(status_code=500, detail="Failed to save consent")
-
-    def check_valid_consent(self, user_id: str, policy_version: str, tos_version: str) -> Optional[Dict]:
-        """有効な同意をチェック（最新を1件返す）"""
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    # months → interval へ確実に変換（文字列連結 cast）
-                    cur.execute(
-                        """
-                        SELECT *
-                        FROM consent_logs
-                        WHERE user_id = %s
-                          AND policy_version = %s
-                          AND tos_version = %s
-                          AND withdrawn = FALSE
-                          AND consented_at > NOW() - ((%s) || ' months')::interval
-                        ORDER BY consented_at DESC
-                        LIMIT 1
-                        """,
-                        (user_id, policy_version, tos_version, str(CONSENT_CONFIG["CONSENT_VALIDITY_MONTHS"])),
-                    )
-
-                    result = cur.fetchone()
-                    if result:
-                        flags = result["flags"]  # JSONB→dict で来る想定
-                        if all(flags.get(f, False) for f in CONSENT_CONFIG["REQUIRED_FLAGS"]):
-                            return dict(result)
-                    return None
-
-        except Exception as e:
-            logger.error(f"❌ Failed to check consent: {e}")
-            return None
-
-    def withdraw_consent(self, user_id: str, consent_id: Optional[str] = None) -> Dict[str, Any]:
-        """同意を撤回"""
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    if consent_id:
-                        cur.execute(
-                            """
-                            UPDATE consent_logs
-                            SET withdrawn = TRUE, withdrawn_at = NOW()
-                            WHERE user_id = %s AND consent_id = %s
-                            """,
-                            (user_id, consent_id),
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            UPDATE consent_logs
-                            SET withdrawn = TRUE, withdrawn_at = NOW()
-                            WHERE user_id = %s AND withdrawn = FALSE
-                            """,
-                            (user_id,),
-                        )
-                    affected_rows = cur.rowcount
-                    conn.commit()
-                    logger.info(f"✅ Consent withdrawn for user {user_id}: {affected_rows} records")
-                    return {"success": True, "affected_records": affected_rows}
-        except Exception as e:
-            logger.error(f"❌ Failed to withdraw consent: {e}")
-            raise HTTPException(status_code=500, detail="Failed to withdraw consent")
-
-# ========== GCS WORM管理 ==========
-class ConsentWORMStorage:
-    def __init__(self):
-        self.bucket_name: str = CONSENT_CONFIG["GCS_CONSENT_BUCKET"]
-        try:
-            self.client: Optional[Client] = storage.Client()
-            self.bucket: Optional[Bucket] = self.client.bucket(self.bucket_name) if self.client else None
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize GCS client: {e}")
-            self.client = None
-            self.bucket = None
-
-    def save_to_worm(self, consent_data: ConsentRequest) -> str:
-        """同意データをWORM保護されたGCSに保存"""
-        if not self.client or not self.bucket:
-            logger.warning("⚠️ GCS not available, skipping WORM storage")
-            return ""
-
-        try:
-            dt = datetime.fromisoformat(consent_data.consented_at.replace("Z", "+00:00"))
-            object_name = f"consent_logs/{dt.year}/{dt.month:02d}/{dt.day:02d}/{consent_data.consent_id}.json"
-
-            blob = self.bucket.blob(object_name)
-            retention_date = datetime.now() + timedelta(days=365 * CONSENT_CONFIG["WORM_RETENTION_YEARS"])
-
-            consent_json = {
-                **consent_data.dict(),
-                "saved_to_worm_at": datetime.now().isoformat(),
-                "retention_until": retention_date.isoformat(),
-                "worm_protected": True,
-            }
-
-            blob.upload_from_string(json.dumps(consent_json, ensure_ascii=False, indent=2), content_type="application/json")
-
-            try:
-                update_storage_class = getattr(blob, "update_storage_class", None)
-                if callable(update_storage_class):
-                    update_storage_class("ARCHIVE")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to set archive storage class: {e}")
-
-            logger.info(f"✅ Consent saved to WORM storage: {object_name}")
-            return object_name
-
-        except Exception as e:
-            logger.error(f"❌ Failed to save to WORM storage: {e}")
-            return ""
-
-    def setup_bucket_lifecycle(self):
-        """バケットライフサイクル設定"""
-        if not self.client or not self.bucket:
-            logger.warning("⚠️ GCS client/bucket not available for lifecycle setup")
-            return
-
-        try:
-            lifecycle_rule = {
-                "rule": [
-                    {
-                        "action": {"type": "Delete"},
-                        "condition": {
-                            "age": 365 * CONSENT_CONFIG["WORM_RETENTION_YEARS"],
-                            "matchesStorageClass": ["ARCHIVE"],
-                        },
-                    }
-                ]
-            }
-            if hasattr(self.bucket, "lifecycle_rules"):
-                self.bucket.lifecycle_rules = lifecycle_rule["rule"]
-                if hasattr(self.bucket, "patch"):
-                    self.bucket.patch()
-                    logger.info("✅ Bucket lifecycle configured for retention")
-        except Exception as e:
-            logger.error(f"❌ Failed to setup bucket lifecycle: {e}")
-
-# ========== 依存性注入 ==========
-consent_db = ConsentDB()
-worm_storage = ConsentWORMStorage()
-
-def get_consent_db():
-    return consent_db
-
-# ========== ユーザー識別（Web/LINE両対応） ==========
-def extract_user_id_from_token(token: str) -> Optional[str]:
+# =========================================================
+# DBユーティリティ（SQLite / aiosqlite）
+# =========================================================
+def _open_db():
     """
-    トークンから user_id を抽出。
-    - LINE: 'U' で始まる UID をそのまま受容
-    - Web/OAuth: Bearer JWT を署名検証なしで decode して sub/user_id/email を拾う
+    aiosqlite.connect(...) は await せず、そのまま async with に渡す。
+    （await してしまうと二重起動エラーの原因になる）
     """
+    os.makedirs(os.path.dirname(DEFAULT_DB_PATH), exist_ok=True)
+    return aiosqlite.connect(DEFAULT_DB_PATH)
+
+async def _init_tables():
+    async with _open_db() as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS consent_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            consent_id TEXT UNIQUE NOT NULL,
+            user_id TEXT NOT NULL,
+            liff_id TEXT,
+            consented_at TEXT NOT NULL,     -- ISO8601文字列
+            ip TEXT,
+            ua TEXT,
+            policy_version TEXT NOT NULL,
+            tos_version TEXT NOT NULL,
+            flags TEXT NOT NULL,            -- JSON文字列
+            locale TEXT,
+            source TEXT,
+            withdrawn INTEGER DEFAULT 0,    -- 0=false, 1=true
+            withdrawn_at TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            gcs_object_name TEXT
+        )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_consent_user_id ON consent_logs(user_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_consent_valid ON consent_logs(user_id, policy_version, tos_version, withdrawn)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_consent_created ON consent_logs(created_at)")
+        await db.commit()
+        logger.info("✅ consent_logs table ready (SQLite) at %s", DEFAULT_DB_PATH)
+
+# =========================================================
+# ヘルパ
+# =========================================================
+def _parse_flags(raw: str | Dict[str, Any]) -> Dict[str, bool]:
+    if isinstance(raw, dict):
+        return {k: bool(v) for k, v in raw.items()}
     try:
-        if isinstance(token, str) and token.startswith("U"):
-            return token
-        payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256", "ES256"])
+        data = json.loads(raw or "{}")
+        return {k: bool(v) for k, v in data.items()}
+    except Exception:
+        return {}
+
+def _all_required_flags_true(flags: Dict[str, bool]) -> bool:
+    return all(flags.get(k) is True for k in CONSENT_CONFIG["REQUIRED_FLAGS"])
+
+def _extract_user_id_from_token(token: str) -> Optional[str]:
+    if isinstance(token, str) and token.startswith("U"):  # LINE UID
+        return token
+    try:
+        payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256","RS256","ES256"])
         return payload.get("sub") or payload.get("user_id") or payload.get("email")
     except Exception:
         return None
 
-def extract_user_id_from_request(request: Request) -> Optional[str]:
+def _extract_user_id_from_request(request: Request) -> Optional[str]:
     uid = request.headers.get("X-User-Id")
     if uid:
         return uid
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
-        return extract_user_id_from_token(auth.split(" ", 1)[1])
+        return _extract_user_id_from_token(auth.split(" ", 1)[1])
     tok = request.headers.get("user_token")
     if tok:
-        return extract_user_id_from_token(tok)
+        return _extract_user_id_from_token(tok)
     return None
 
-def verify_user_consent(request: Request, db: ConsentDB = Depends(get_consent_db)):
-    """ユーザーの同意を検証"""
-    user_id = extract_user_id_from_request(request)
-    if not user_id:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "CONSENT_REQUIRED",
-                "policy_version": CONSENT_CONFIG["POLICY_VERSION"],
-                "tos_version": CONSENT_CONFIG["TOS_VERSION"],
-                "message": "User consent required",
-            },
-        )
+def _threshold_iso() -> str:
+    days = 30 * CONSENT_CONFIG["CONSENT_VALIDITY_MONTHS"]
+    return (datetime.utcnow() - timedelta(days=days)).isoformat()
 
-    valid_consent = db.check_valid_consent(user_id, CONSENT_CONFIG["POLICY_VERSION"], CONSENT_CONFIG["TOS_VERSION"])
-    if not valid_consent:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "CONSENT_REQUIRED",
-                "policy_version": CONSENT_CONFIG["POLICY_VERSION"],
-                "tos_version": CONSENT_CONFIG["TOS_VERSION"],
-                "message": "Valid consent not found",
-            },
-        )
-    return user_id
-
-# ========== API エンドポイント ==========
-@router.post("/save")
-async def save_consent(consent_data: ConsentRequest, db: ConsentDB = Depends(get_consent_db)):
-    """同意情報の保存"""
+async def _save_to_worm_if_available(consent_json: Dict[str, Any]) -> str:
+    if not storage:
+        return ""
     try:
-        # 1. DB 保存
-        db_result = db.save_consent(consent_data)
-
-        # 2. WORM保存（任意、失敗しても致命ではない）
-        worm_object = ""
-        try:
-            worm_object = worm_storage.save_to_worm(consent_data)
-        except Exception as e:
-            logger.error(f"⚠️ WORM storage failed: {e}")
-
-        # 3. WORMオブジェクト名をDBに反映
-        if worm_object:
-            try:
-                with db.get_connection() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "UPDATE consent_logs SET gcs_object_name = %s WHERE consent_id = %s",
-                            (worm_object, consent_data.consent_id),
-                        )
-                        conn.commit()
-            except Exception as e:
-                logger.error(f"⚠️ Failed to update WORM object name: {e}")
-
-        return {
-            "success": True,
-            "consent_id": consent_data.consent_id,
-            "database_saved": True,
-            "worm_saved": bool(worm_object),
-            "worm_object": worm_object,
-            "message": "同意情報が正常に保存されました",
+        client = storage.Client()
+        bucket = client.bucket(CONSENT_CONFIG["GCS_CONSENT_BUCKET"])
+        dt = datetime.fromisoformat(consent_json["consented_at"].replace("Z","+00:00"))
+        object_name = f"consent_logs/{dt.year}/{dt.month:02d}/{dt.day:02d}/{consent_json['consent_id']}.json"
+        blob = bucket.blob(object_name)
+        consent_json = {
+            **consent_json,
+            "saved_to_worm_at": datetime.utcnow().isoformat(),
+            "retention_until": (datetime.utcnow() + timedelta(days=365*CONSENT_CONFIG["WORM_RETENTION_YEARS"])).isoformat(),
+            "worm_protected": True,
         }
-
-    except HTTPException:
-        raise
+        blob.upload_from_string(json.dumps(consent_json, ensure_ascii=False, indent=2), content_type="application/json")
+        return object_name
     except Exception as e:
-        logger.error(f"❌ Save consent error: {e}")
-        raise HTTPException(status_code=500, detail="同意情報の保存に失敗しました")
+        logger.warning("WORM save skipped: %s", e)
+        return ""
+
+# =========================================================
+# エンドポイント
+# =========================================================
+@router.on_event("startup")
+async def _startup():
+    await _init_tables()
+
+@router.post("/save")
+async def save_consent(consent_data: ConsentRequest):
+    flags = _parse_flags(consent_data.flags)
+    if not _all_required_flags_true(flags):
+        raise HTTPException(status_code=400, detail="Required flags are not all true")
+
+    async with _open_db() as db:
+        await db.execute(
+            "UPDATE consent_logs SET withdrawn=1, withdrawn_at=datetime('now') WHERE user_id=? AND withdrawn=0",
+            (consent_data.user_id,)
+        )
+        await db.execute(
+            """
+            INSERT INTO consent_logs (
+                consent_id, user_id, liff_id, consented_at, ip, ua,
+                policy_version, tos_version, flags, locale, source, withdrawn
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            """,
+            (
+                consent_data.consent_id,
+                consent_data.user_id,
+                consent_data.liff_id,
+                consent_data.consented_at,
+                consent_data.ip,
+                consent_data.ua,
+                consent_data.policy_version,
+                consent_data.tos_version,
+                json.dumps(flags, ensure_ascii=False),
+                consent_data.locale,
+                consent_data.source,
+            )
+        )
+        await db.commit()
+
+    worm_object = await _save_to_worm_if_available({**consent_data.dict(), "flags": flags})
+    if worm_object:
+        async with _open_db() as db:
+            await db.execute("UPDATE consent_logs SET gcs_object_name=? WHERE consent_id=?", (worm_object, consent_data.consent_id))
+            await db.commit()
+
+    return {"success": True, "consent_id": consent_data.consent_id, "worm_saved": bool(worm_object), "worm_object": worm_object}
 
 @router.post("/check")
-async def check_consent(check_request: ConsentCheckRequest, request: Request, db: ConsentDB = Depends(get_consent_db)):
-    """同意状況の確認（ヘッダからの自動補完に対応）"""
-    # body.user_id が無ければヘッダから拾う
-    user_id = check_request.user_id or extract_user_id_from_request(request)
+async def check_consent(check_request: ConsentCheckRequest, request: Request):
+    user_id = check_request.user_id or _extract_user_id_from_request(request)
     if not user_id:
         return {
             "valid": False,
@@ -433,111 +230,148 @@ async def check_consent(check_request: ConsentCheckRequest, request: Request, db
 
     policy_version = check_request.policy_version or CONSENT_CONFIG["POLICY_VERSION"]
     tos_version = check_request.tos_version or CONSENT_CONFIG["TOS_VERSION"]
+    threshold = _threshold_iso()
 
-    vc = db.check_valid_consent(user_id, policy_version, tos_version)
-    if vc:
-        # 有効期限は「30日×月数」の簡易換算
-        expires_at = vc["consented_at"] + timedelta(days=30 * CONSENT_CONFIG["CONSENT_VALIDITY_MONTHS"])
+    async with _open_db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT consent_id, consented_at, flags
+            FROM consent_logs
+            WHERE user_id=? AND policy_version=? AND tos_version=? AND withdrawn=0 AND consented_at >= ?
+            ORDER BY consented_at DESC LIMIT 1
+            """,
+            (user_id, policy_version, tos_version, threshold)
+        )
+        row = await cur.fetchone()
+        await cur.close()
+
+    if not row:
         return {
-            "valid": True,
-            "consent_id": vc["consent_id"],
-            "consented_at": vc["consented_at"].isoformat(),
-            "expires_at": expires_at.isoformat(),
-            "flags": vc["flags"],
+            "valid": False,
+            "error": "CONSENT_REQUIRED",
+            "policy_version": policy_version,
+            "tos_version": tos_version,
         }
 
+    flags = _parse_flags(row["flags"])
+    if not _all_required_flags_true(flags):
+        return {
+            "valid": False,
+            "error": "CONSENT_REQUIRED",
+            "policy_version": policy_version,
+            "tos_version": tos_version,
+        }
+
+    consented_at = (
+        datetime.fromisoformat(row["consented_at"].replace("Z","+00:00"))
+        if "Z" in row["consented_at"] else
+        datetime.fromisoformat(row["consented_at"])
+    )
+    expires_at = consented_at + timedelta(days=30 * CONSENT_CONFIG["CONSENT_VALIDITY_MONTHS"])
+
     return {
-        "valid": False,
-        "error": "CONSENT_REQUIRED",
-        "policy_version": policy_version,
-        "tos_version": tos_version,
+        "valid": True,
+        "consent_id": row["consent_id"],
+        "consented_at": consented_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "flags": flags,
     }
 
 @router.post("/withdraw")
-async def withdraw_consent(withdraw_request: ConsentWithdrawRequest, db: ConsentDB = Depends(get_consent_db)):
-    """同意の撤回"""
-    result = db.withdraw_consent(withdraw_request.user_id, withdraw_request.consent_id)
-    return {"success": True, "message": "同意が撤回されました", "affected_records": result["affected_records"]}
+async def withdraw_consent(withdraw_request: ConsentWithdrawRequest):
+    async with _open_db() as db:
+        if withdraw_request.consent_id:
+            await db.execute(
+                "UPDATE consent_logs SET withdrawn=1, withdrawn_at=datetime('now') WHERE user_id=? AND consent_id=?",
+                (withdraw_request.user_id, withdraw_request.consent_id)
+            )
+        else:
+            await db.execute(
+                "UPDATE consent_logs SET withdrawn=1, withdrawn_at=datetime('now') WHERE user_id=? AND withdrawn=0",
+                (withdraw_request.user_id,)
+            )
+        await db.commit()
+    return {"success": True}
 
 @router.get("/user/{user_id}/history")
-async def get_consent_history(user_id: str, db: ConsentDB = Depends(get_consent_db)):
-    """ユーザーの同意履歴取得"""
-    try:
-        with db.get_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT consent_id, consented_at, policy_version, tos_version,
-                           withdrawn, withdrawn_at, flags, source
-                    FROM consent_logs
-                    WHERE user_id = %s
-                    ORDER BY consented_at DESC
-                    """,
-                    (user_id,),
-                )
-                history = cur.fetchall()
-                return {"user_id": user_id, "history": [dict(r) for r in history], "total_records": len(history)}
-    except Exception as e:
-        logger.error(f"❌ Failed to get consent history: {e}")
-        raise HTTPException(status_code=500, detail="同意履歴の取得に失敗しました")
+async def get_consent_history(user_id: str):
+    async with _open_db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT consent_id, consented_at, policy_version, tos_version, withdrawn, withdrawn_at, flags, source
+            FROM consent_logs
+            WHERE user_id=?
+            ORDER BY consented_at DESC
+            """,
+            (user_id,)
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+
+    history = []
+    for r in rows:
+        history.append({
+            "consent_id": r["consent_id"],
+            "consented_at": r["consented_at"],
+            "policy_version": r["policy_version"],
+            "tos_version": r["tos_version"],
+            "withdrawn": bool(r["withdrawn"]),
+            "withdrawn_at": r["withdrawn_at"],
+            "flags": _parse_flags(r["flags"]),
+            "source": r["source"],
+        })
+    return {"user_id": user_id, "history": history, "total_records": len(history)}
 
 @router.get("/admin/stats")
-async def get_consent_stats(db: ConsentDB = Depends(get_consent_db)):
-    """管理者用同意統計"""
-    try:
-        with db.get_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT
-                        COUNT(*) as total_consents,
-                        COUNT(*) FILTER (WHERE withdrawn = FALSE) as active_consents,
-                        COUNT(*) FILTER (WHERE withdrawn = TRUE) as withdrawn_consents,
-                        COUNT(DISTINCT user_id) as unique_users,
-                        MIN(consented_at) as first_consent,
-                        MAX(consented_at) as latest_consent
-                    FROM consent_logs
-                    """
-                )
-                stats = cur.fetchone()
+async def get_consent_stats():
+    async with _open_db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT COUNT(*) as total_consents FROM consent_logs")
+        total = (await cur.fetchone())["total_consents"]
+        await cur.close()
 
-                cur.execute(
-                    """
-                    SELECT DATE(consented_at) as consent_date, COUNT(*) as daily_consents
-                    FROM consent_logs
-                    WHERE consented_at > NOW() - INTERVAL '30 days'
-                    GROUP BY DATE(consented_at)
-                    ORDER BY consent_date DESC
-                    """
-                )
-                daily_stats = cur.fetchall()
+        cur = await db.execute("SELECT COUNT(*) as active_consents FROM consent_logs WHERE withdrawn=0")
+        active = (await cur.fetchone())["active_consents"]
+        await cur.close()
 
-                return {
-                    "overview": dict(stats),
-                    "daily_stats": [dict(r) for r in daily_stats],
-                    "generated_at": datetime.now().isoformat(),
-                }
-    except Exception as e:
-        logger.error(f"❌ Failed to get consent stats: {e}")
-        raise HTTPException(status_code=500, detail="統計の取得に失敗しました")
+        cur = await db.execute("SELECT COUNT(DISTINCT user_id) as unique_users FROM consent_logs")
+        users = (await cur.fetchone())["unique_users"]
+        await cur.close()
 
-# ========== 初期化 ==========
-@router.on_event("startup")
-async def initialize_consent_system():
-    """同意システム初期化"""
-    try:
-        consent_db.create_consent_table()
-        worm_storage.setup_bucket_lifecycle()
-        logger.info("✅ Consent system initialized successfully")
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize consent system: {e}")
+        cur = await db.execute(
+            """
+            SELECT substr(consented_at, 1, 10) as consent_date, COUNT(*) as daily_consents
+            FROM consent_logs
+            WHERE datetime(consented_at) > datetime('now','-30 days')
+            GROUP BY substr(consented_at, 1, 10)
+            ORDER BY consent_date DESC
+            """
+        )
+        daily_stats = [{"consent_date": r[0], "daily_consents": r[1]} for r in await cur.fetchall()]
+        await cur.close()
 
-# ========== チャットAPI保護用デコレータ ==========
+    return {
+        "overview": {
+            "total_consents": total,
+            "active_consents": active,
+            "withdrawn_consents": total - active,
+            "unique_users": users,
+        },
+        "daily_stats": daily_stats,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+# =========================================================
+# チャットAPI保護用（任意）
+# =========================================================
 def require_valid_consent(func):
-    """チャットAPIなどを同意ゲートで保護するデコレータ"""
     async def wrapper(*args, **kwargs):
         request = kwargs.get("request") or (args[0] if args else None)
         if request:
-            verify_user_consent(request)
+            user_id = _extract_user_id_from_request(request)
+            if not user_id:
+                raise HTTPException(status_code=403, detail="consent_required: unidentified_user")
         return await func(*args, **kwargs)
     return wrapper

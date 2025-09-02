@@ -66,3 +66,4 @@ python-docx
 PyPDF2
 openpyxl
 click
+aiosqlite
