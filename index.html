@@ -3,144 +3,49 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AI住まい相談 - RAG対応版</title>
+  <title>AI住まい相談 - Webチャット</title>
 
-  <!-- ▼ APIベースを rag-api に固定（別オリジンでも確実に動く） -->
-  <script>
-    window.__API_BASE = 'https://rag-api-190389115361.asia-northeast1.run.app';
-    // （フロントは rag-frontend で配信）
-  </script>
+  <!-- rag-api を固定（別オリジンでも確実に動かす） -->
+  <script>window.__API_BASE='https://rag-api-190389115361.asia-northeast1.run.app';</script>
 
   <style>
-    body{
-      background:#e5edf5; min-height:100vh; margin:0; padding:0;
-      font-family:'Segoe UI','Hiragino Sans','Meiryo',sans-serif;
-      display:flex; flex-direction:column; justify-content:center; align-items:center;
-    }
-    .chat-container{
-      width:100%; max-width:420px; height:640px; background:#fff; border-radius:20px;
-      box-shadow:0 4px 32px rgba(0,0,0,.12); display:flex; flex-direction:column; overflow:hidden;
-    }
-    .chat-header{
-      background:#10c041; color:#fff; padding:20px 16px; font-size:1.2rem; font-weight:bold;
-      text-align:center; letter-spacing:2px; position:relative;
-    }
-    .rag-indicator{
-      position:absolute; right:16px; top:50%; transform:translateY(-50%);
-      font-size:.7rem; background:rgba(255,255,255,.2); padding:2px 6px; border-radius:8px;
-    }
-    .platform-indicator{
-      position:absolute; left:16px; top:50%; transform:translateY(-50%);
-      font-size:.7rem; background:rgba(255,255,255,.15); padding:1px 4px; border-radius:4px;
-    }
-    .chat-messages{
-      flex:1; padding:18px 12px; background:#e5edf5; overflow-y:auto; display:flex; flex-direction:column; gap:10px;
-    }
-    .welcome-message{ text-align:center; color:#666; font-size:.95rem; padding:20px; margin:auto 0; }
-    .message{ display:flex; align-items:flex-end; }
-    .message.user{ justify-content:flex-end; }
-    .message.ai{ justify-content:flex-start; }
-    .message-content{
-      max-width:70%; padding:12px 16px; border-radius:16px; font-size:1rem; line-height:1.5; word-break:break-word;
-      background:#10c041; color:#fff; border-bottom-right-radius:4px; position:relative;
-    }
-    .message.user .message-content{
-      background:#10c041; color:#fff; border-bottom-right-radius:4px; border-bottom-left-radius:16px;
-    }
-    .message.ai .message-content{
-      background:#fff; color:#222; border:1px solid #d2e7d9; border-bottom-left-radius:4px; border-bottom-right-radius:16px;
-    }
-    .response-info{ font-size:.7rem; color:#666; margin-top:4px; text-align:right; }
-    .rag-source{ border-left:3px solid #4caf50; }
-    .search-verified{ border-left:3px solid #2196f3; }
-    .chatgpt-source{ border-left:3px solid #ff9800; }
-    .template-source{ border-left:3px solid #9c27b0; }
-    .confidence-indicator{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-left:4px; }
-    .confidence-high{ background:#4caf50; }
-    .confidence-medium{ background:#ff9800; }
-    .confidence-low{ background:#f44336; }
-
-    .chat-input-container{ background:#fafbfc; padding:12px; border-top:1px solid #e0e0e0; }
-    .chat-input-wrapper{ display:flex; gap:8px; align-items:flex-end; }
-    .chat-input{
-      flex:1; min-height:40px; max-height:120px; padding:10px 14px; border:1.5px solid #c6e2d7; border-radius:24px;
-      font-size:1rem; outline:none; resize:none; background:#fff; transition:border-color .2s;
-    }
-    .chat-input:focus{ border-color:#10c041; }
-    .send-button{
-      width:44px; height:44px; background:#10c041; border:none; border-radius:50%; color:#fff; cursor:pointer;
-      font-size:1.4rem; display:flex; align-items:center; justify-content:center; transition: box-shadow .2s, transform .2s;
-    }
-    .send-button:disabled{ opacity:.5; cursor:not-allowed; }
-
-    .typing-indicator{ margin:0 0 8px 8px; color:#666; font-size:.95rem; display:flex; align-items:center; gap:3px; }
-    .dot{ display:inline-block; width:7px; height:7px; border-radius:50%; background:#b6dab9; margin-right:2px; animation:typing 1.2s infinite; }
-    .dot:nth-child(2){ animation-delay:.2s; } .dot:nth-child(3){ animation-delay:.4s; }
-    @keyframes typing{ 0%,80%,100%{transform:translateY(0);} 40%{transform:translateY(-8px);} }
-
-    .error-message{ background:#fff2f2; color:#d32f2f; padding:10px 14px; border-radius:10px; border-left:4px solid #d32f2f; margin:6px 0; font-size:.92rem; }
-
-    footer{ margin-top:12px; font-size:.85rem; color:#3a3a3a; }
-    footer a{ color:#2f6db0; text-decoration:none; } footer a:hover{ text-decoration:underline; }
-
-    @media (max-width:480px){
-      .chat-container{ height:100vh; max-width:100vw; border-radius:0; }
-      .chat-header{ padding:14px 4px; font-size:1.05rem; }
-      .chat-messages{ padding:8px 2px; }
-    }
-
-    /* 同意モーダル */
-    #consent-overlay{
-      position:fixed; inset:0; background:rgba(0,0,0,.45);
-      display:flex; align-items:center; justify-content:center; z-index:2147483647; /* いちばん上に */
-    }
-    #consent-card{
-      max-width:720px; width:92%; background:#fff; border-radius:16px;
-      box-shadow:0 10px 30px rgba(0,0,0,.2); padding:20px; font-family:system-ui;
-    }
-    #consent-card h3{ margin:0 0 10px; font-size:1.1rem; }
-    #consent-card ul{ margin:10px 0 14px 1.1em; }
-    #consent-card li{ margin:8px 0; }
-    #consent-links a{ margin-right:12px; }
-    #consent-go{ width:100%; padding:12px 16px; border-radius:12px; border:0; background:#0a7cff; color:#fff; font-weight:600; }
-    #consent-go:disabled{ background:#aac8f5; }
-    #consent-msg{ font-size:.9rem; color:#666; margin-top:8px; min-height:1.2em; }
+    body{background:#e5edf5;min-height:100vh;margin:0;display:flex;flex-direction:column;align-items:center;font-family:system-ui,"Hiragino Sans","Meiryo",sans-serif}
+    .chat-container{width:100%;max-width:420px;height:640px;background:#fff;border-radius:20px;box-shadow:0 4px 32px rgba(0,0,0,.12);display:flex;flex-direction:column;overflow:hidden;margin:24px 0}
+    .chat-header{background:#10c041;color:#fff;padding:18px 16px;font-size:1.1rem;font-weight:700;text-align:center;letter-spacing:2px;position:relative}
+    .chat-messages{flex:1;padding:14px 10px;background:#e5edf5;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+    .welcome-message{color:#666;font-size:.95rem;padding:20px;text-align:center;margin:auto 0}
+    .message{display:flex}.message.user{justify-content:flex-end}.message.ai{justify-content:flex-start}
+    .message-content{max-width:70%;padding:12px 16px;border-radius:16px;line-height:1.5}
+    .message.user .message-content{background:#10c041;color:#fff;border-bottom-right-radius:4px}
+    .message.ai .message-content{background:#fff;color:#222;border:1px solid #d2e7d9;border-bottom-left-radius:4px}
+    .chat-input-container{background:#fafbfc;padding:12px;border-top:1px solid #e0e0e0}
+    .chat-input-wrapper{display:flex;gap:8px;align-items:flex-end}
+    .chat-input{flex:1;min-height:40px;max-height:120px;padding:10px 14px;border:1.5px solid #c6e2d7;border-radius:24px;outline:0;resize:none}
+    .send-button{width:44px;height:44px;background:#10c041;border:0;border-radius:50%;color:#fff;font-size:1.3rem}
+    .send-button:disabled,.chat-input:disabled{opacity:.55;cursor:not-allowed}
+    .error-message{background:#fff2f2;color:#d32f2f;padding:10px 14px;border-left:4px solid #d32f2f;border-radius:10px}
+    /* モーダル（最優先に重ねる） */
+    #consent-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:2147483647}
+    #consent-card{max-width:720px;width:92%;background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.2);padding:20px}
+    #consent-card h3{margin:0 0 10px}
+    #consent-card ul{margin:8px 0 14px 1.1em}
+    #consent-card li{margin:8px 0}
+    #consent-go{width:100%;padding:12px 16px;border-radius:12px;border:0;background:#0a7cff;color:#fff;font-weight:600}
+    #consent-go:disabled{background:#aac8f5}
+    /* チャット内フォールバック */
+    .consent-inline{background:#fff;border:1px solid #d2e7d9;border-radius:12px;padding:12px}
+    .consent-inline h4{margin:0 0 8px;font-size:1rem}
+    .consent-inline ul{margin:6px 0 8px 1.1em}
+    .consent-inline button{padding:8px 12px;border-radius:10px;border:0;background:#0a7cff;color:#fff}
   </style>
-
-  <!-- GA4（必要なら差し替え） -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-B8988S3RCZ"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag(){ dataLayer.push(arguments); }
-    gtag('js', new Date());
-    gtag('config', 'G-B8988S3RCZ');
-
-    const p = new URLSearchParams(location.search);
-    gtag('event','liff_open',{
-      ab: p.get('ab')||'A',
-      state: p.get('state')||'rag_home',
-      utm_campaign: p.get('utm_campaign')||'unknown'
-    });
-  </script>
 </head>
 <body>
   <div class="chat-container">
-    <div class="chat-header">
-      AI住まい相談
-      <span class="platform-indicator">Web</span>
-      <span class="rag-indicator">🧠RAG対応</span>
-      <div aria-label="beta" style="font-size:.8rem;opacity:.7;margin-top:6px;">β版</div>
-    </div>
+    <div class="chat-header">AI住まい相談</div>
     <div class="chat-messages" id="chatMessages">
       <div class="welcome-message" id="welcomeMessage">
-        <strong>🏠 AI住まい相談へようこそ！</strong><br/><br/>
-        住宅に関するご質問をお気軽にどうぞ。<br/>
-        社内資料とWeb検索を活用して、正確な情報をお答えします。<br/><br/>
-        <small>例：坪単価について教えて、耐震性能はどのくらい？など</small>
+        <strong>🏠 ようこそ！</strong><br>はじめにご同意が必要です。画面の案内に従ってください。
       </div>
-    </div>
-    <div class="typing-indicator" id="typingIndicator" style="display:none;">
-      <span class="dot"></span><span class="dot"></span><span class="dot"></span><span>資料を検索中...</span>
     </div>
     <div class="chat-input-container">
       <div class="chat-input-wrapper">
@@ -150,210 +55,176 @@
     </div>
   </div>
 
-  <footer>
-    <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a> | <a href="/cookie">Cookie</a>
-  </footer>
-
-  <!-- 同意モーダル：初期は常に表示（JS失敗時でも見える） -->
+  <!-- 同意モーダル（まずはこれを表示。見えなければフォールバックに切替） -->
   <div id="consent-overlay">
-    <div id="consent-card" role="dialog" aria-modal="true" aria-labelledby="consent-title">
-      <h3 id="consent-title">AIチャットのご利用前にご確認ください</h3>
+    <div id="consent-card" role="dialog" aria-modal="true">
+      <h3>AIチャットのご利用前にご確認ください</h3>
       <p>以下の<strong>5項目</strong>すべてに同意が必要です。</p>
       <ul>
-        <li><label><input type="checkbox" id="c_pp"/> プライバシーポリシーに同意します</label></li>
-        <li><label><input type="checkbox" id="c_tos"/> 利用規約に同意します</label></li>
-        <li><label><input type="checkbox" id="c_cookie"/> Cookie・類似技術の利用に同意します</label></li>
-        <li><label><input type="checkbox" id="c_xfer"/> 入力内容等が外部送信される可能性に同意します</label></li>
-        <li><label><input type="checkbox" id="c_ai"/> 生成AIの誤答可能性（限界）を理解しました</label></li>
+        <li><label><input type="checkbox" id="c_pp"> プライバシーポリシーに同意します</label></li>
+        <li><label><input type="checkbox" id="c_tos"> 利用規約に同意します</label></li>
+        <li><label><input type="checkbox" id="c_cookie"> Cookie・類似技術の利用に同意します</label></li>
+        <li><label><input type="checkbox" id="c_xfer"> 入力内容が外部送信される可能性に同意します</label></li>
+        <li><label><input type="checkbox" id="c_ai"> 生成AIの誤答可能性を理解しました</label></li>
       </ul>
-      <p id="consent-links">
-        <a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>
-        <a href="/terms"   target="_blank" rel="noopener">利用規約</a>
-        <a href="/cookie"  target="_blank" rel="noopener">Cookie・外部送信</a>
+      <p>
+        <a href="/privacy" target="_blank">プライバシーポリシー</a> /
+        <a href="/terms" target="_blank">利用規約</a> /
+        <a href="/cookie" target="_blank">Cookie・外部送信</a>
       </p>
       <button id="consent-go" disabled>同意して始める</button>
-      <div id="consent-msg"></div>
+      <div id="consent-msg" style="color:#666;margin-top:6px;min-height:1.2em"></div>
     </div>
   </div>
 
   <script>
-    class RAGEnabledChatUI{
+    /************** 共通ユーティリティ **************/
+    const API_BASE = window.__API_BASE || location.origin;
+    const POLICY_VERSION="2025-09-01";
+    const TOS_VERSION   ="2025-09-01";
+    const $ = (s)=>document.querySelector(s);
+
+    function uuid4(){return([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,c=>(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16));}
+    function getWebUid(){try{let id=localStorage.getItem("web_uid");if(!id){id="web-"+uuid4();localStorage.setItem("web_uid",id)}return id}catch(_){return "web-"+Math.random().toString(36).slice(2)}}
+    const WEB_UID=getWebUid(); localStorage.setItem('user_id',WEB_UID);
+
+    async function consentCheck(){
+      const r = await fetch(`${API_BASE}/consent/check`,{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({user_id:WEB_UID,policy_version:POLICY_VERSION,tos_version:TOS_VERSION})
+      }).catch(()=>null);
+      if(!r) return false;
+      try{const j=await r.json();return !!j.valid}catch(_){return false}
+    }
+    async function consentSave(flags){
+      const payload={consent_id:crypto.randomUUID?crypto.randomUUID():String(Date.now()),
+        user_id:WEB_UID,consented_at:new Date().toISOString(),
+        policy_version:POLICY_VERSION,tos_version:TOS_VERSION,
+        flags,source:"web",ua:navigator.userAgent,locale:navigator.language||"ja-JP",withdrawn:false};
+      const r = await fetch(`${API_BASE}/consent/save`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+      if(!r.ok) throw new Error("save failed"); const j=await r.json(); if(!j.success) throw new Error("save failed"); return j;
+    }
+    function setChatEnabled(b){
+      const input=$("#chatInput"), send=$("#sendButton");
+      input.disabled=!b; send.disabled=!b;
+      input.placeholder= b ? "住宅についてお聞きください…" : "同意が必要です";
+    }
+
+    /************** チャット本体 **************/
+    class ChatUI{
       constructor(){
-        // APIは rag-api 側の /chat
-        this.API_URL = 'https://rag-api-190389115361.asia-northeast1.run.app/chat';
-        this.PLATFORM = 'web';
-        this.chatMessages = document.getElementById('chatMessages');
-        this.chatInput = document.getElementById('chatInput');
-        this.sendButton = document.getElementById('sendButton');
-        this.typingIndicator = document.getElementById('typingIndicator');
-        this.welcomeMessage = document.getElementById('welcomeMessage');
-        this.initializeEventListeners();
-        this.adjustTextareaHeight();
-        this.responseMetrics = [];
-        this.ragEnabled = true;
-        this.hasFirstMessage = false;
+        this.API_URL=`${API_BASE}/chat`;
+        this.chatMessages=$("#chatMessages");
+        this.chatInput=$("#chatInput"); this.sendButton=$("#sendButton");
+        this.bind();
       }
-      initializeEventListeners(){
-        this.sendButton.addEventListener('click',()=>this.sendMessage());
-        this.chatInput.addEventListener('keydown',(e)=>{
-          if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); this.sendMessage(); }
-        });
-        this.chatInput.addEventListener('input',()=>this.adjustTextareaHeight());
+      bind(){
+        this.sendButton.addEventListener('click',()=>this.send());
+        this.chatInput.addEventListener('keydown',(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();this.send();}});
       }
-      adjustTextareaHeight(){
-        this.chatInput.style.height='auto';
-        this.chatInput.style.height=Math.min(this.chatInput.scrollHeight,120)+'px';
-      }
-      async sendMessage(){
-        const message=this.chatInput.value.trim();
-        if(!message || this.chatInput.disabled || this.sendButton.disabled) return;
-        if(!this.hasFirstMessage && this.welcomeMessage){ this.welcomeMessage.remove(); this.hasFirstMessage=true; }
-        this.addUserMessage(message);
-        this.chatInput.value=''; this.adjustTextareaHeight(); this.setLoading(true);
-        const startTime=performance.now();
+      addUser(text){const d=document.createElement('div');d.className='message user';d.innerHTML=`<div class="message-content">${this.escape(text)}</div>`;this.chatMessages.appendChild(d);this.scroll()}
+      addAI(text){const d=document.createElement('div');d.className='message ai';d.innerHTML=`<div class="message-content">${this.escape(text).replace(/\n/g,'<br>')}</div>`;this.chatMessages.appendChild(d);this.scroll()}
+      escape(t){const x=document.createElement('div');x.textContent=t;return x.innerHTML}
+      scroll(){this.chatMessages.scrollTop=this.chatMessages.scrollHeight}
+      async send(){
+        const q=this.chatInput.value.trim(); if(!q||this.chatInput.disabled) return;
+        this.addUser(q); this.chatInput.value='';
         try{
-          const resp=await this.callRAGAPI(message);
-          const ms=performance.now()-startTime;
-          this.recordPerformance(ms,resp);
-          this.addAIMessage(resp.answer,resp,ms);
+          const r=await fetch(this.API_URL,{
+            method:"POST",
+            headers:{
+              "Content-Type":"application/json",
+              "X-User-Id": WEB_UID  // ★ 同意ゲート通過のため必須
+            },
+            body:JSON.stringify({question:q,username:WEB_UID,platform:"web"})
+          });
+          if(r.status===403){
+            // 未同意など → フォールバックの同意ボックスを表示
+            injectInlineConsent();
+            this.addAI("ご利用前に同意が必要です。表示されたボックスで同意してください。");
+            return;
+          }
+          const j=await r.json(); this.addAI(j.answer||'すみません、回答できませんでした。');
         }catch(e){
-          console.error('RAG API Error:',e);
-          this.showError('エラーが発生しました。時間を置いて再度お試しください。');
-        }finally{ this.setLoading(false); }
+          this.addAI('エラーが発生しました。時間を置いて再度お試しください。');
+        }
       }
-      async callRAGAPI(question){
-        try{
-          const webUid=localStorage.getItem('web_uid')||'';
-          const headers={'Content-Type':'application/json'};
-          const idt=localStorage.getItem('id_token');
-          if(idt) headers['Authorization']=`Bearer ${idt}`;
-          if(webUid){ headers['X-User-Id']=webUid; localStorage.setItem('user_id',webUid); }
-          const r=await fetch(this.API_URL,{ method:'POST', headers, body:JSON.stringify({question,username:webUid||`web-user-${Date.now()}`,platform:'web'}) });
-          if(!r.ok) throw new Error(`HTTP ${r.status}`);
-          const d=await r.json();
-          return {
-            answer:d.answer||'すみません、回答できませんでした。',
-            source:d.performance?.source||'unknown',
-            platform:d.performance?.platform||'web',
-            processing_time:d.performance?.processing_time||0,
-            confidence:d.performance?.confidence||0.8,
-            search_used:d.performance?.search_used||false,
-            source_docs_count:d.performance?.source_docs_count||0
-          };
-        }catch(e){ console.error('RAG API call failed:',e); throw e; }
-      }
-      recordPerformance(ms,res){
-        this.responseMetrics.push({timestamp:Date.now(),responseTime:ms,source:res.source,confidence:res.confidence,searchUsed:res.search_used});
-        if(ms>10000) console.warn('Very slow RAG response:',ms+'ms');
-        if(this.responseMetrics.length>100) this.responseMetrics=this.responseMetrics.slice(-50);
-      }
-      addUserMessage(message){
-        const el=document.createElement('div'); el.className='message user';
-        el.innerHTML=`<div class="message-content">${this.escapeHtml(message)}</div>`;
-        this.chatMessages.appendChild(el); this.scrollToBottom();
-      }
-      addAIMessage(message,meta={},ms=0){
-        const el=document.createElement('div'); el.className='message ai';
-        const sourceClass=this.getSourceClass(meta.source);
-        const confClass=this.getConfidenceClass(meta.confidence||0.8);
-        const confDot=`<span class="confidence-indicator ${confClass}"></span>`;
-        const debug=window.location.search.includes('debug=true');
-        const info=debug && ms>0 ? `<div class="response-info">
-          ${this.getSourceIcon(meta.source)} ${ms.toFixed(0)}ms | 信頼度: ${(meta.confidence*100).toFixed(0)}% ${confDot} | 検索: ${meta.search_used?'✓':'✗'} | 文書: ${meta.source_docs_count||0}件
-        </div>` : '';
-        el.innerHTML=`<div class="message-content ${sourceClass}">${this.formatMessage(message)}${info}</div>`;
-        this.chatMessages.appendChild(el); this.scrollToBottom();
-      }
-      getSourceClass(s){ return s==='rag_verified'?'search-verified': s==='rag'?'rag-source': s==='chatgpt'?'chatgpt-source': s==='template'?'template-source':''; }
-      getConfidenceClass(c){ return c>=0.8?'confidence-high': c>=0.6?'confidence-medium':'confidence-low'; }
-      getSourceIcon(s){ return s==='rag_verified'?'🔍✓': s==='rag'?'📚': s==='chatgpt'?'🤖': s==='template'?'📋': s==='cache'?'⚡':'🔄'; }
-      formatMessage(t){ return this.escapeHtml(t).replace(/\n/g,'<br>'); }
-      escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
-      setLoading(b){ this.sendButton.disabled=b; this.chatInput.disabled=b; }
-      showError(m){ const e=document.createElement('div'); e.className='error-message'; e.textContent=m; this.chatMessages.appendChild(e); this.scrollToBottom(); setTimeout(()=>e.remove(),5000); }
-      scrollToBottom(){ this.chatMessages.scrollTop=this.chatMessages.scrollHeight; }
     }
     let chatUI;
-    document.addEventListener('DOMContentLoaded',()=>{
-      chatUI=new RAGEnabledChatUI();
-      if(location.hostname==='localhost'||location.search.includes('debug=true')){
-        setInterval(()=>chatUI && chatUI.responseMetrics.length&&console.log('RAG metrics',chatUI.responseMetrics.slice(-1)[0]),30000);
-      }
-    });
-  </script>
 
-  <!-- 同意ゲート -->
-  <script>
-    (()=>{
-      const POLICY_VERSION="2025-09-01";
-      const TOS_VERSION   ="2025-09-01";
+    /************** 同意 UI（モーダル + フォールバック） **************/
+    function boxesOK(){return ["#c_pp","#c_tos","#c_cookie","#c_xfer","#c_ai"].every(s=>$(s)?.checked)}
+    function enableGo(){ $("#consent-go").disabled = !boxesOK(); }
+    ["#c_pp","#c_tos","#c_cookie","#c_xfer","#c_ai"].forEach(s=>$(s)?.addEventListener('change',enableGo));
 
-      const DEFAULT_RUN='https://rag-api-190389115361.asia-northeast1.run.app';
-      const API_BASE = (window.__API_BASE ?? location.origin) || DEFAULT_RUN;
+    async function startIfConsented(){
+      const ok = await consentCheck();
+      if(ok){ $("#consent-overlay").style.display='none'; setChatEnabled(true); return true; }
+      return false;
+    }
 
-      const $ = (s)=>document.querySelector(s);
-      function uuidv4(){return([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,c=>(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16));}
-      function getWebUid(){
-        try{ let id=localStorage.getItem("web_uid"); if(!id){ id="web-"+uuidv4(); localStorage.setItem("web_uid",id); } return id; }
-        catch(_){ return "web-"+Math.random().toString(36).slice(2); }
-      }
-      const WEB_UID=getWebUid(); localStorage.setItem('user_id',WEB_UID);
+    function injectInlineConsent(){
+      // 既に注入済みなら何もしない
+      if(document.getElementById('consent-inline')) return;
 
-      const input=$("#chatInput"), send=$("#sendButton"), overlay=$("#consent-overlay"),
-            goBtn=$("#consent-go"), msg=$("#consent-msg"),
-            boxes=["#c_pp","#c_tos","#c_cookie","#c_xfer","#c_ai"].map($);
+      const wrap=document.createElement('div');
+      wrap.id='consent-inline'; wrap.className='consent-inline';
+      wrap.innerHTML = `
+        <h4>ご利用前に同意が必要です</h4>
+        <ul>
+          <li><label><input type="checkbox" id="ic_pp"> プライバシーポリシーに同意します</label></li>
+          <li><label><input type="checkbox" id="ic_tos"> 利用規約に同意します</label></li>
+          <li><label><input type="checkbox" id="ic_cookie"> Cookie・類似技術の利用に同意します</label></li>
+          <li><label><input type="checkbox" id="ic_xfer"> 入力内容が外部送信される可能性に同意します</label></li>
+          <li><label><input type="checkbox" id="ic_ai"> 生成AIの誤答可能性を理解しました</label></li>
+        </ul>
+        <div style="margin:6px 0">
+          <a href="/privacy" target="_blank">プライバシーポリシー</a> /
+          <a href="/terms" target="_blank">利用規約</a> /
+          <a href="/cookie" target="_blank">Cookie・外部送信</a>
+        </div>
+        <button id="ic_go" disabled>同意して開始</button>
+        <div id="ic_msg" style="color:#666;margin-top:4px;min-height:1.1em"></div>
+      `;
+      $("#chatMessages").prepend(wrap);
 
-      function setChatEnabled(enabled){
-        if(input) input.disabled=!enabled;
-        if(send)  send.disabled=!enabled;
-        if(input) input.placeholder = enabled ? "住宅についてお聞きください..." : "同意が必要です";
-      }
-      function refreshButton(){ goBtn.disabled = !boxes.every(b=>b && b.checked); }
-      boxes.forEach(b=> b && b.addEventListener('change',refreshButton));
+      const chk=()=>{const ok=["#ic_pp","#ic_tos","#ic_cookie","#ic_xfer","#ic_ai"].every(s=>$(s)?.checked); $("#ic_go").disabled=!ok;}
+      ["#ic_pp","#ic_tos","#ic_cookie","#ic_xfer","#ic_ai"].forEach(s=>$(s)?.addEventListener('change',chk)); chk();
 
-      async function consentCheck(){
+      $("#ic_go").addEventListener('click',async()=>{
+        $("#ic_go").disabled=true; $("#ic_msg").textContent="保存中…";
         try{
-          const r = await fetch(`${API_BASE}/consent/check`,{
-            method:"POST", headers:{ "Content-Type":"application/json" },
-            body: JSON.stringify({ user_id: WEB_UID, policy_version: POLICY_VERSION, tos_version: TOS_VERSION })
-          });
-          const j = await r.json(); return !!(j && j.valid);
-        }catch(_){ return false; }
-      }
-      async function consentSave(flags){
-        const payload={
-          consent_id:(crypto.randomUUID&&crypto.randomUUID())||String(Date.now()),
-          user_id:WEB_UID, consented_at:new Date().toISOString(),
-          policy_version:POLICY_VERSION, tos_version:TOS_VERSION,
-          flags, source:"web", ua:navigator.userAgent, locale:navigator.language||"ja-JP", withdrawn:false
-        };
-        const r = await fetch(`${API_BASE}/consent/save`,{
-          method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
-        });
-        const j = await r.json().catch(()=>({})); if(!r.ok || !j.success) throw new Error("save failed"); return j;
-      }
-
-      goBtn.addEventListener('click', async ()=>{
-        try{
-          goBtn.disabled=true; msg.textContent="保存中…";
-          const flags = {
-            pp: $("#c_pp").checked, tos: $("#c_tos").checked,
-            cookie: $("#c_cookie").checked, xfer: $("#c_xfer").checked,
-            ai_limits: $("#c_ai").checked
-          };
-          await consentSave(flags);
-          overlay.style.display='none'; setChatEnabled(true); msg.textContent="";
-        }catch(e){ console.error(e); msg.textContent="保存に失敗しました。時間をおいて再度お試しください。"; goBtn.disabled=false; }
+          await consentSave({pp:$("#ic_pp").checked,tos:$("#ic_tos").checked,cookie:$("#ic_cookie").checked,xfer:$("#ic_xfer").checked,ai_limits:$("#ic_ai").checked});
+          wrap.remove(); setChatEnabled(true);
+        }catch(e){$("#ic_msg").textContent="保存に失敗しました。時間をおいて再度お試しください。"; $("#ic_go").disabled=false;}
       });
+    }
 
-      // 初期：未同意ならモーダルを残す／同意済みなら閉じて入力解放
-      (async ()=>{
-        setChatEnabled(false);
-        const ok = await consentCheck();
-        if(ok){ overlay.style.display='none'; setChatEnabled(true); }
-        else{ refreshButton(); /* そのまま表示 */ }
-      })();
-    })();
+    async function boot(){
+      chatUI=new ChatUI();
+      setChatEnabled(false);
+
+      // 1) 事前チェックで同意済みなら即解放
+      if(await startIfConsented()){ setChatEnabled(true); return; }
+
+      // 2) モーダルの「同意して始める」
+      $("#consent-go").addEventListener('click',async()=>{
+        $("#consent-go").disabled=true; $("#consent-msg").textContent="保存中…";
+        try{
+          await consentSave({pp:$("#c_pp").checked,tos:$("#c_tos").checked,cookie:$("#c_cookie").checked,xfer:$("#c_xfer").checked,ai_limits:$("#c_ai").checked});
+          $("#consent-overlay").style.display='none'; setChatEnabled(true); $("#consent-msg").textContent="";
+        }catch(e){ $("#consent-msg").textContent="保存に失敗しました。"; $("#consent-go").disabled=false; }
+      });
+      enableGo();
+
+      // 3) もし2秒待ってもモーダルが見えない（CSSに潰される等）ならチャット内フォールバックを注入
+      setTimeout(()=>{
+        const ov = $("#consent-overlay");
+        const visible = ov && window.getComputedStyle(ov).display !== 'none' && ov.offsetParent !== null;
+        if(!visible){ injectInlineConsent(); }
+      }, 2000);
+    }
+    document.addEventListener('DOMContentLoaded',boot);
   </script>
 </body>
 </html>

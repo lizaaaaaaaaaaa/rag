@@ -12,10 +12,10 @@ from fastapi import Request, Response, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# 設定のインポート（存在しない環境でも安全にフォールバック）
+# 設定（任意。無ければ安全な既定値で動作）
 try:
-    from config import get_settings  # 任意
-except ImportError:
+    from config import get_settings  # optional
+except ImportError:  # pragma: no cover
     def get_settings():
         class Settings:
             rate_limit_per_minute = 100
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # -----------------------------
-# 共通ユーティリティ
+# utils
 # -----------------------------
 def _starts_with_any(path: str, prefixes: Iterable[str]) -> bool:
     return any(path.startswith(p) for p in prefixes)
@@ -51,17 +51,17 @@ class TimingMiddleware(BaseHTTPMiddleware):
 
         if elapsed > 1.0:
             logger.warning(
-                "Slow request %s %s took %.2fs (Request-ID: %s)",
+                "Slow request %s %s took %.2fs (RID=%s)",
                 request.method, request.url.path, elapsed, request.state.request_id
             )
         return response
 
 
 # -----------------------------
-# レート制限（簡易・メモリ）
+# 簡易レート制限（メモリ）
 # -----------------------------
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """単純なIPベースのレート制限（必要ならRedisへ置換）"""
+    """IPベースの単純なレート制限（必要ならRedisへ置換）"""
 
     def __init__(self, app, requests_per_minute: int = None):
         super().__init__(app)
@@ -69,7 +69,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.client_requests = {}  # {ip: [timestamps]}
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # OPTIONS は事前フライトで弾かない
+        # CORS preflight は素通し
         if request.method == "OPTIONS":
             return await call_next(request)
 
@@ -92,7 +92,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 # セキュリティヘッダー
 # -----------------------------
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """基本的なセキュリティヘッダーの付与"""
+    """基本的なセキュリティヘッダーを付与"""
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         response = await call_next(request)
@@ -100,7 +100,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("X-XSS-Protection", "1; mode=block")
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-        # 必要に応じて CSP を詳細化
+        # 必要に応じて詳細化
         response.headers.setdefault("Content-Security-Policy", "default-src 'self'")
         return response
 
@@ -109,14 +109,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 # CORS（簡易）
 # -----------------------------
 class CORSMiddleware(BaseHTTPMiddleware):
-    """許可オリジンの制御（必要に応じてFastAPI公式CORSへ置換可）"""
+    """許可オリジン制御（必要なら FastAPI の CORSMiddleware に置換可）"""
 
     def __init__(self, app, allowed_origins=None):
         super().__init__(app)
         self.allowed = allowed_origins or getattr(settings, "allowed_origins", ["*"])
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # 事前フライト
+        # preflight は中で Response を生成
         if request.method == "OPTIONS":
             response = Response()
         else:
@@ -133,11 +133,9 @@ class CORSMiddleware(BaseHTTPMiddleware):
 
 
 # -----------------------------
-# 監査ログ（INFO）
+# 監査ログ（PIIは記録しない方針）
 # -----------------------------
 class AuditLoggingMiddleware(BaseHTTPMiddleware):
-    """簡易監査ログ（PIIは原則記録しない）"""
-
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         rid = getattr(request.state, "request_id", "-")
         logger.info("Request %s %s (RID=%s) from %s",
@@ -149,16 +147,16 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
 
 
 # -----------------------------
-# 同意ゲート（本実装）
+# 同意ゲート（本体）
 # -----------------------------
 class ConsentGateMiddleware(BaseHTTPMiddleware):
     """
     同意ゲート:
-      - /chat /upload /ingest /api /line など“AI/個人情報に触れる入口”は同意が必須
-      - 有効同意(5点: pp/tos/cookie/xfer/ai_limits) & policy_version 一致をDBで検証
-      - 未同意/不足は 403 (fail-closed)
+      - /chat /upload /ingest /api /line など“AI/個人情報に触れる入口”は同意必須
+      - 有効同意(5項目: pp/tos/cookie/xfer/ai_limits) & policy_version が一致しているかDBで検証
+      - 未同意/不足は 403（fail-closed）
       - ユーザー識別: Authorization: Bearer <JWT> または X-User-Id
-      - ENFORCE=false でドライラン可（ログのみ）
+      - CONSENT_ENFORCE=false ならドライラン（ログのみ）
     """
 
     def __init__(self, app, excluded_paths: list = None, required_version_env: str = "POLICY_VERSION"):
@@ -166,8 +164,10 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
         self.excluded_prefixes = tuple((excluded_paths or []) + [
             # 法務/同意/認証/診断/静的系は除外
             "/health", "/healthz", "/legal", "/privacy", "/terms", "/cookie",
-            "/liff", "/consent", "/auth", "/debug", "/system-status", "/ops",
-            "/static", "/favicon.ico"
+            "/liff", "/consent", "/consent/", "/auth", "/debug", "/system-status", "/ops",
+            "/static", "/favicon.ico",
+            # ★LINE Webhook は絶対に 403 にしない
+            "/line/webhook",
         ])
         self.required_version = os.getenv(required_version_env, "").strip() or "2025-09-01"
         self.required_flags = {"pp", "tos", "cookie", "xfer", "ai_limits"}
@@ -176,11 +176,11 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         path = request.url.path
 
-        # 事前フライト / 除外パス
+        # 事前フライト or 除外パスは素通し
         if request.method == "OPTIONS" or _starts_with_any(path, self.excluded_prefixes):
             return await call_next(request)
 
-        # GET "/"（トップ）だけは素通し（必要に応じて外してOK）
+        # トップは表示可能（必要なければ外してOK）
         if path == "/" and request.method == "GET":
             return await call_next(request)
 
@@ -189,7 +189,7 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
         if not protected:
             return await call_next(request)
 
-        # ユーザー特定
+        # ユーザー識別
         user_id = request.headers.get("X-User-Id")
         if not user_id:
             auth = request.headers.get("Authorization", "")
@@ -197,7 +197,7 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
                 token = auth.split(" ", 1)[1]
                 try:
                     import jwt  # PyJWT
-                    # 署名検証は上流のAuthで実施想定。ここではID抽出のみ。
+                    # 検証は上流想定。ここでは sub などを拾うのみ
                     payload = jwt.decode(token, options={"verify_signature": False},
                                          algorithms=["HS256", "RS256", "ES256"])
                     user_id = payload.get("sub") or payload.get("user_id") or payload.get("email")
@@ -210,13 +210,12 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
                 return await call_next(request)
             return JSONResponse(status_code=403, content={"detail": "consent_required: unidentified_user"})
 
-        # DB検証
+        # DBで有効同意を確認
         try:
             from database import get_db_context
             from sqlalchemy import select
             from models import ConsentRecord
         except Exception:
-            # 依存解決失敗時は安全側（本番 enforce=True で 403）
             logger.exception("ConsentGate: dependency import error")
             if not self.enforce:
                 return await call_next(request)
@@ -232,11 +231,12 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
 
         if not res:
             if not self.enforce:
-                logger.warning("ConsentGate(drill): consent not found (uid=%s ver=%s) -> allow", user_id, self.required_version)
+                logger.warning("ConsentGate(drill): consent not found (uid=%s ver=%s) -> allow",
+                               user_id, self.required_version)
                 return await call_next(request)
             return JSONResponse(status_code=403, content={"detail": "consent_required: not_found"})
 
-        # 5点同意の担保: data_categories.flags または consent_text 内のキーワード
+        # 5点チェック
         try:
             txt = (res.consent_text or "").lower()
             dc = res.data_categories or {}

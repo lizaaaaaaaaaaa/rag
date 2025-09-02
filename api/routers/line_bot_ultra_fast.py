@@ -1,8 +1,8 @@
 # api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版（AI相談だけゲート）
 # - リッチメニューは同意がなくても反応
 # - 「AI相談」だけ /consent/check を叩いて未同意なら LIFF 同意URLを案内
-# - 既存の「即ACK → push 最終」という運用思想を維持
-# - RAG / 資金計画は遅延ロード（初回だけ解決）
+# - Webhook は常に 200 を返す（LINE の再送ループ防止）
+# - RAG / 資金計画は別スレッドで push（応答遅延を防ぐ）
 
 import logging
 import os
@@ -17,7 +17,7 @@ from fastapi import APIRouter, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 
 # -------------------------------
-# UTM 付与（line_utils が無い環境でも動くフォールバック付）
+# UTM 付与（line_utils が無い環境でも動くフォールバック）
 # -------------------------------
 def _with_utm_fallback(url: str, source: str, ab: str | None = None) -> str:
     from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
@@ -35,7 +35,7 @@ try:
 except Exception:
     with_utm = _with_utm_fallback  # type: ignore
 
-# ▼ LIFF 各種リンク（必要に応じて差し替え）
+# ▼ LIFF / 各種リンク（必要に応じて差し替え）
 AI_CONSULT_URL = "https://liff.line.me/LIFF_ID_AI?state=rag_home"
 AI_SITE_URL    = "https://liff.line.me/LIFF_ID_SITE?state=rag_home"
 BUDGET_URL     = "https://liff.line.me/LIFF_ID_BUDGET?state=rm_ai_loan"
@@ -44,7 +44,7 @@ ai_consult_link = with_utm(AI_CONSULT_URL, "ai_consult", ab="A")
 ai_site_link    = with_utm(AI_SITE_URL,    "ai_site",    ab="A")
 budget_link     = with_utm(BUDGET_URL,     "budget",     ab="A")
 
-# ▼ 同意用 LIFF（専用ID推奨）
+# ▼ 同意用 LIFF（*友だち追加後* の同意だけに絞る運用）
 CONSENT_URL  = os.getenv("LIFF_CONSENT_URL", "https://liff.line.me/LIFF_ID_CONSENT?state=consent")
 consent_link = with_utm(CONSENT_URL, "consent", ab="A")
 
@@ -175,7 +175,6 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 
 → ＜AI相談（24h）＞ 
 ※ AIの回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。
-※ご質問の内容により、AIの回答までお時間を頂戴する場合がございます。何卒ご理解賜りますようお願い申し上げます。
 ※ご使用の前に、必ず以下の取り扱いをご確認ください。
 プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
@@ -250,7 +249,8 @@ class SessionStore:
 
     def get_mode(self, user_id: str) -> str:
         d = self.store.get(user_id)
-        if not d: return ""
+        if not d:
+            return ""
         if d["exp"] < time.time():
             self.store.pop(user_id, None)
             return ""
@@ -429,24 +429,22 @@ def _worker_ai(user_id: str, user_text: str):
         logger.error(f"_worker_ai fatal: {e}")
 
 # ======================================================================
-# Webhook（即ACK）
+# Webhook（**常に 200 で ACK**）
 # ======================================================================
 @router.post("/line/webhook")
 async def line_webhook(request: Request, background_tasks: BackgroundTasks):
-    if not handler:
-        return JSONResponse({"status": "error", "message": "LINE not configured"}, status_code=500)
+    # SDK/秘密鍵が未設定でも 200 を返す
     try:
         body = await request.body()
-        signature = request.headers.get("X-Line-Signature", "")
-        if not signature:
-            return JSONResponse({"status": "error", "message": "Missing signature"}, status_code=400)
-
-        # 即ACK（処理はバックグラウンド）
-        background_tasks.add_task(handler.handle, body.decode("utf-8"), signature)
+        signature = request.headers.get("X-Line-Signature") or request.headers.get("x-line-signature") or ""
+        if handler:
+            # 即ACK（処理はバックグラウンドに回す）
+            background_tasks.add_task(handler.handle, body.decode("utf-8"), signature)
         return JSONResponse({"status": "ok", "ts": datetime.now().isoformat()})
     except Exception as e:
         logger.error(f"webhook error: {e}")
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        # 失敗しても 200 を返す（再送ループ防止）
+        return JSONResponse({"status": "ok", "note": "handled with error"}, status_code=200)
 
 # ======================================================================
 # イベントハンドラ（reply→push 方針）

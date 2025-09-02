@@ -3,144 +3,52 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>AI相談をはじめる</title>
+  <title>LINEで相談をはじめる</title>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
-    body {font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", Helvetica, Arial; line-height:1.6; padding:24px;}
-    .links a{margin-right:12px}
-    .consent-box{border:1px solid #ddd;border-radius:8px;padding:16px;margin:16px 0;max-width:560px}
-    .consent-box h3{margin:0 0 8px 0;font-size:1.1rem}
-    .checks label{display:flex;gap:8px;margin:6px 0}
-    button[disabled]{opacity:.5;cursor:not-allowed}
-    .ok{background:#10b981;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:1rem}
-    .notice{color:#666;font-size:.9rem}
+    body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial;line-height:1.7;margin:0;background:#f0f4f6}
+    .wrap{max-width:560px;margin:48px auto;padding:24px;background:#fff;border-radius:16px;box-shadow:0 10px 28px rgba(0,0,0,.06)}
+    h1{font-size:1.35rem;margin:0 0 8px}
+    p{margin:.2rem 0 1rem;color:#555}
+    .btn{display:block;width:100%;padding:14px 16px;border:0;border-radius:10px;font-weight:700}
+    .primary{background:#06c755;color:#fff}
+    .mute{background:#eef7f0;color:#0a6d33;margin-top:10px}
+    .id{font-family:ui-monospace,Menlo,Consolas,monospace}
   </style>
 </head>
 <body>
-  <h1>AI相談をはじめる</h1>
-  <p class="notice">ご利用前に以下をご確認ください。</p>
-  <p class="links">
-    <a href="/privacy" target="_blank">プライバシーポリシー</a>
-    <a href="/terms" target="_blank">利用規約</a>
-    <a href="/cookie" target="_blank">Cookie・外部送信</a>
-  </p>
+  <div class="wrap">
+    <h1>LINEで相談をはじめる</h1>
+    <p>まずは公式LINEを友だち追加してください。</p>
 
-  <div class="consent-box" id="consentBox">
-    <h3>ご利用前に同意が必要です</h3>
-    <p class="notice">以下の5項目すべてにチェックのうえ「同意して開始」を押してください。</p>
-    <div class="checks">
-      <label><input type="checkbox" name="c" value="pp">プライバシーポリシーに同意します</label>
-      <label><input type="checkbox" name="c" value="tos">利用規約に同意します</label>
-      <label><input type="checkbox" name="c" value="cookie">Cookie・外部送信に同意します</label>
-      <label><input type="checkbox" name="c" value="xfer">入力内容が外部送信される可能性を理解しました</label>
-      <label><input type="checkbox" name="c" value="ai_limits">AIの誤答可能性を理解しました</label>
-    </div>
-    <div style="margin-top:12px">
-      <button class="ok" id="beginBtn" disabled>同意して開始</button>
-    </div>
+    <!-- ★ ここだけ差し替え（@を付けない） -->
+    <script>const LINE_BASIC_ID = "yourbasicid";</script>
+
+    <button id="addBtn" class="btn primary">友だち追加</button>
+    <button id="openWebBtn" class="btn mute">ブラウザで開く</button>
+    <p>アカウント：<span class="id">@<span id="basicId"></span></span></p>
   </div>
 
-  <p class="notice" id="status">initializing…</p>
-
   <script>
-    // ===== 設定 =====
-    const LIFF_ID = "<あなたのLIFF ID>";           // ←差し替え
-    const POLICY_VERSION = "2025-09-01";
-    const TOS_VERSION    = "2025-09-01";
-    const CHAT_REDIRECT  = "/liff/consent?next=chat"; // 保存後に遷移（既存のconsent.html/チャット導線に合わせてOK）
-    // =================
+    const $ = s=>document.querySelector(s);
+    $('#basicId').textContent = LINE_BASIC_ID;
 
-    const $ = (s)=>document.querySelector(s);
+    const addInApp = `line://ti/p/@${LINE_BASIC_ID}`;
+    const addOnWeb = `https://line.me/R/ti/p/%40${LINE_BASIC_ID}`;
 
-    const allChecked = () => {
-      const boxes = document.querySelectorAll('input[name="c"]');
-      return Array.from(boxes).every(b => b.checked);
-    };
-
-    const collectFlags = () => {
-      const f = {pp:false,tos:false,cookie:false,xfer:false,ai_limits:false};
-      document.querySelectorAll('input[name="c"]').forEach(b=>{ f[b.value]=b.checked; });
-      return f;
-    };
-
-    const saveConsent = async (userId, flags) => {
-      const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-      const body = {
-        consent_id: crypto.randomUUID(),
-        user_id: userId,
-        consented_at: now,
-        policy_version: POLICY_VERSION,
-        tos_version: TOS_VERSION,
-        flags,
-        source: "line-liff"
-      };
-      const res = await fetch("/consent/save", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify(body)
-      });
-      if(!res.ok) throw new Error("consent/save failed");
-      return res.json();
-    };
-
-    const afterSaved = () => {
-      // 既存の導線に合わせて：consent.html 経由 or そのままチャットへ
-      location.href = CHAT_REDIRECT;
-    };
-
-    const initPage = async () => {
-      // 5チェック監視
-      document.querySelectorAll('input[name="c"]').forEach(b=>{
-        b.addEventListener('change', ()=> { $('#beginBtn').disabled = !allChecked(); });
-      });
-
-      // ボタンクリック → ログイン → 保存
-      $('#beginBtn').addEventListener('click', async ()=>{
-        try {
-          const flags = collectFlags();
-          localStorage.setItem("pref_flags", JSON.stringify(flags));
-
-          if (!liff.isLoggedIn()) {
-            // ログイン後に戻ってくる
-            liff.login({ redirectUri: location.href });
-            return;
-          }
-
-          $('#status').textContent = "保存しています…";
-          const profile = await liff.getProfile();
-          await saveConsent(profile.userId, flags);
-          afterSaved();
-        } catch(e){
-          console.error(e);
-          alert("保存に失敗しました。時間を置いてお試しください。");
+    async function openAdd(){
+      try{
+        await liff.init({ liffId: "dummy" }).catch(()=>{});
+        if (typeof liff !== 'undefined' && liff.isInClient()){
+          await liff.openWindow({ url: addInApp, external: false });
+          return;
         }
-      });
+      }catch(_){}
+      location.href = addOnWeb;
+    }
 
-      // LIFF 初期化
-      await liff.init({ liffId: LIFF_ID });
-      $('#status').textContent = liff.isLoggedIn() ? "ログイン済みです" : "ログインが必要です";
-
-      // ログイン直後に戻ってきた場合：保存を自動継続
-      if (liff.isLoggedIn()) {
-        const json = localStorage.getItem("pref_flags");
-        if (json) {
-          try {
-            const flags = JSON.parse(json);
-            // 画面側にも反映しておく（任意）
-            Object.entries(flags).forEach(([k,v])=>{
-              const box = document.querySelector(`input[value="${k}"]`);
-              if (box) box.checked = !!v;
-            });
-            $('#beginBtn').disabled = !allChecked();
-          } catch {}
-        }
-      }
-    };
-
-    initPage().catch(e=>{
-      console.error(e);
-      $('#status').textContent = "初期化に失敗しました";
-    });
+    $('#addBtn').addEventListener('click', openAdd);
+    $('#openWebBtn').addEventListener('click', ()=>location.href = addOnWeb);
   </script>
 </body>
 </html>

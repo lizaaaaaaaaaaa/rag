@@ -1,5 +1,4 @@
-# main.py - Unified RAG API (Diagnostics Super-Enhanced) [with Boot Guard]
-
+# main.py - Unified RAG API (Diagnostics Super-Enhanced) [fixed]
 import logging
 import os
 import asyncio
@@ -38,23 +37,24 @@ except Exception:
     pass
 _enforce_env_minimums()
 
-from fastapi import FastAPI, Request, HTTPException  # ← HTTPException を追加
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
-import jwt  # ← PyJWT
+import jwt  # PyJWT
 
-# ★ 追記：同意ゲート＆運用系ミドルウェアを読み込む
+# ★ 同意ゲート＆運用系ミドルウェア
 from middleware import (
     TimingMiddleware,
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
     ConsentGateMiddleware,
+    AuditLoggingMiddleware,   # ← 追加
 )
 
-# ★ 追記：DB初期化（開発/初回のみテーブル作成）
-from database import init_database  # ← 追加
+# ★ DB初期化（開発/初回のみテーブル作成）
+from database import init_database
 
 # =================================
 # パス安定化
@@ -83,7 +83,7 @@ def ensure_utils_web_search_alias() -> bool:
             try:
                 spec = importlib.util.spec_from_file_location("utils.web_search", str(path))
                 if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)  # ← util.module_from_spec を使用
+                    mod = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(mod)  # type: ignore
                     if "utils" not in sys.modules:
                         sys.modules["utils"] = types.ModuleType("utils")
@@ -131,8 +131,10 @@ app.add_middleware(RobotsNoIndexMiddleware)
 
 # 運用系ミドルウェア → 同意ゲートの順で登録
 app.add_middleware(TimingMiddleware)
-app.add_middleware(RateLimitMiddleware)
+# app.add_middleware(CORSMiddleware)  # ← 二重適用は削除（上で設定済み）
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(AuditLoggingMiddleware)
 app.add_middleware(ConsentGateMiddleware)
 
 # =================================
@@ -209,7 +211,6 @@ async def initialize_rag_components():
         rag_diagnostics["last_initialization_time"] = datetime.now().isoformat()
         logger.info("🚀 Initializing RAG components (fast first, then services front-door) ...")
 
-    # 以降は（中略）— 既存の初期化処理そのまま —
     try:
         ensure_utils_web_search_alias()
 
@@ -260,7 +261,7 @@ async def initialize_rag_components():
                 logger.warning(f"⚠️ Fast RAG init failed: {e_fast}")
                 logger.info("🔄 Falling back to services.rag_chain front-door")
 
-                # ★ 修正：services.rag_chain が無ければトップレベル rag_chain を使用
+                # services.rag_chain が無ければトップレベル rag_chain を使用
                 try:
                     svc_mod = importlib.import_module("services.rag_chain")
                 except ModuleNotFoundError:
@@ -509,25 +510,20 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
     username = req.username or f"{platform}-user"
     mode = req.mode or "auto"
 
-    # --- ベルト＆サスペンダー用の軽い保険（未同意＝未特定なら 403） ---
+    # --- fail-closed の保険：未特定ユーザーは 403 ---
     user_id = request.headers.get("X-User-Id")
     if not user_id:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth.split(" ", 1)[1]
             try:
-                payload = jwt.decode(
-                    token,
-                    options={"verify_signature": False},  # 署名検証は上流で実施想定
-                    algorithms=["HS256", "RS256", "ES256"]
-                )
+                payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256", "ES256"])
                 user_id = payload.get("sub") or payload.get("user_id") or payload.get("email")
             except Exception:
                 user_id = None
     if not user_id:
-        # ミドルウェアをバイパスされた場合でも、ここで fail-closed
         raise HTTPException(status_code=403, detail="consent_required: unidentified_user")
-    # -------------------------------------------------------------------------
+    # -------------------------------------------------
 
     try:
         ensure_utils_web_search_alias()
@@ -620,7 +616,7 @@ async def startup_event():
     logger.info("🚀 Starting Unified RAG System (Diagnostics Super-Enhanced)")
     ensure_utils_web_search_alias()
 
-    # ★ 追記：DB初期化（開発/初回のみ）
+    # DB初期化
     await init_database()
 
     if ENABLE_RAG_INITIALIZATION:
