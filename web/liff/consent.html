@@ -1,120 +1,146 @@
 <!doctype html>
 <html lang="ja">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>同意のお願い</title>
-<style>
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto;margin:0;background:#f8f9fb}
-  .wrap{max-width:720px;margin:0 auto;padding:24px}
-  .card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:20px}
-  h1{font-size:1.2rem;margin:0 0 12px}
-  .checks{display:grid;gap:10px;margin:14px 0}
-  .links{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0}
-  .links a{font-size:.92rem}
-  button{width:100%;padding:12px 16px;border-radius:12px;border:0;font-weight:600}
-  #go{background:#2c7;color:#fff} #go:disabled{background:#a9d5bd}
-  .beta{position:fixed;left:8px;top:8px;background:#111;color:#fff;padding:4px 8px;border-radius:8px;font-size:.8rem;opacity:.9}
-  .note{font-size:.9rem;color:#666}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>同意の確認</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#f8f9fb}
+    .wrap{max-width:720px;margin:0 auto;padding:24px}
+    .card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:20px}
+    h1{font-size:1.2rem;margin:0 0 12px}
+    ul{padding-left:1.2em;margin:12px 0}
+    li{margin:8px 0}
+    .links{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0}
+    .links a{font-size:.92rem}
+    button{width:100%;padding:12px 16px;border-radius:12px;border:0;font-weight:600;cursor:pointer}
+    #go{background:#0a7cff;color:#fff}
+    #go:disabled{background:#aac8f5;cursor:not-allowed}
+    .note{font-size:.9rem;color:#666;margin-top:10px}
+    .err{color:#c22}
+    .ok{color:#2c7}
+  </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="beta" aria-label="beta">β版</div>
   <div class="card">
-    <h1>ご利用前の同意</h1>
-    <p>以下の3点にご同意の上、「同意して始める」を押してください。</p>
+    <h1>AI相談のご利用にあたって</h1>
+    <p>以下の<strong>5項目</strong>をご確認のうえ、同意して始めてください。</p>
 
-    <div class="checks">
-      <label><input type="checkbox" id="c1"> プライバシーポリシーに同意します</label>
-      <label><input type="checkbox" id="c2"> 外部送信（AI/分析等）の可能性に同意します</label>
-      <label><input type="checkbox" id="c3"> 生成AIの限界（誤り/偏り/責任分界）を理解しました</label>
-    </div>
+    <ul>
+      <li><label><input type="checkbox" id="c_pp"> プライバシーポリシーに同意します</label></li>
+      <li><label><input type="checkbox" id="c_tos"> 利用規約に同意します</label></li>
+      <li><label><input type="checkbox" id="c_cookie"> Cookie・類似技術の利用に同意します</label></li>
+      <li><label><input type="checkbox" id="c_xfer"> 入力内容等が外部送信される可能性に同意します</label></li>
+      <li><label><input type="checkbox" id="c_ai"> 生成AIの誤答可能性（限界）を理解しました</label></li>
+    </ul>
 
     <div class="links">
-      <a href="/privacy" target="_blank" rel="noopener">/privacy</a>
-      <a href="/terms" target="_blank" rel="noopener">/terms</a>
-      <a href="/cookie" target="_blank" rel="noopener">/cookie</a>
+      <a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>
+      <a href="/terms"   target="_blank" rel="noopener">利用規約</a>
+      <a href="/cookie"  target="_blank" rel="noopener">Cookie・外部送信</a>
     </div>
 
     <button id="go" disabled>同意して始める</button>
-    <p id="msg" class="note" style="margin-top:10px"></p>
+    <p id="msg" class="note"></p>
   </div>
 </div>
 
 <script>
-  // ===== 受け渡しパラメータ =====
+  // ===== URLクエリ受け取り =====
   const qs = new URLSearchParams(location.search);
-  const mock = qs.get('mock') === '1';
-
-  // index.html から引き継ぐ値（無ければフォールバック）
-  const LIFF_ID_DEFAULT = '2007887876-vMNe74eX';
-  const POLICY_VERSION  = qs.get('policy_version') || 'pp_v1.3';
-  const TOS_VERSION     = qs.get('tos_version')    || 'tos_v1.4';
-  const USER_ID         = qs.get('user_id')        || '';
-  const LIFF_ID         = qs.get('liff_id')        || LIFF_ID_DEFAULT;
-  const STATE           = qs.get('state')          || 'rag_home';
-  const AB              = qs.get('ab')             || 'A';
+  const LIFF_ID_DEFAULT = '2007887876-vMNe74eX'; // 必要に応じて差し替え
+  const user_id        = qs.get('user_id')        || '';
+  const policy_version = qs.get('policy_version') || '2025-09-01';
+  const tos_version    = qs.get('tos_version')    || '2025-09-01';
+  const liff_id        = qs.get('liff_id')        || LIFF_ID_DEFAULT;
+  const state          = qs.get('state')          || 'rag_home';
+  const ab             = qs.get('ab')             || 'A';
+  const utm_campaign   = qs.get('utm_campaign')   || '';
 
   // ===== 画面要素 =====
-  const c1 = document.getElementById('c1');
-  const c2 = document.getElementById('c2');
-  const c3 = document.getElementById('c3');
-  const go = document.getElementById('go');
-  const msg = document.getElementById('msg');
+  const el = (id)=>document.getElementById(id);
+  const c_pp = el('c_pp');
+  const c_tos = el('c_tos');
+  const c_cookie = el('c_cookie');
+  const c_xfer = el('c_xfer');
+  const c_ai = el('c_ai');
+  const go = el('go');
+  const msg = el('msg');
 
-  function refresh(){ go.disabled = !(c1.checked && c2.checked && c3.checked); }
-  [c1,c2,c3].forEach(el=>el.addEventListener('change', refresh));
+  function refresh() {
+    go.disabled = !(c_pp.checked && c_tos.checked && c_cookie.checked && c_xfer.checked && c_ai.checked && !!user_id);
+  }
+  [c_pp,c_tos,c_cookie,c_xfer,c_ai].forEach(ch => ch.addEventListener('change', refresh));
 
-  // デモ／確認用（?mock=1 でチェック済みに）
-  if (mock) { c1.checked = c2.checked = c3.checked = true; refresh(); }
-
-  // LIFF から来ていない等で user_id が取れなかった場合は注意表示
-  if (!USER_ID) {
-    msg.textContent = 'LINEのLIFF経由で開いてください（ユーザー識別が必要です）。';
+  // LIFF外から直接開かれ user_id が無い場合の注意
+  if (!user_id) {
+    msg.textContent = 'LINE（LIFF）から開いてください。ユーザー識別が必要です。';
+    msg.classList.add('err');
+    refresh();
   }
 
   // ===== 送信処理 =====
-  go.addEventListener('click', async ()=>{
-    go.disabled = true; msg.textContent = '送信中...';
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    msg.textContent = '保存中…';
+    msg.className = 'note';
 
-    // サーバ仕様：/consent/save (ConsentRequest)
-    const flags = { pp: c1.checked, xfer: c2.checked, ai_limits: c3.checked };
+    const flags = {
+      pp: c_pp.checked,
+      tos: c_tos.checked,
+      cookie: c_cookie.checked,
+      xfer: c_xfer.checked,
+      ai_limits: c_ai.checked
+    };
+
     const consent_id = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
     const payload = {
       consent_id,
-      user_id: USER_ID,
-      liff_id: LIFF_ID,
+      user_id,
+      liff_id,
       consented_at: new Date().toISOString(),
-      ip: qs.get('ip') || '0.0.0.0',
+      ip: qs.get('ip') || '',               // サーバ側で取得できるなら空でもOK
       ua: navigator.userAgent,
-      policy_version: POLICY_VERSION,
-      tos_version: TOS_VERSION,
+      policy_version,
+      tos_version,
       flags,
       locale: navigator.language || 'ja-JP',
-      source: 'liff',
+      source: 'line',
       withdrawn: false
     };
 
-    try{
-      const r = await fetch('/consent/save', {  // ★ /consent/accept → /consent/save
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        credentials:'include',
+    try {
+      const r = await fetch('/consent/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(payload)
       });
-      if(!r.ok){ throw new Error('consent save failed: '+r.status); }
-
-      // 同意完了 → 呼び出し元へ戻す（任意で UTM 等も継続可能）
-      location.href = '/?consented=1'
-        + '&state=' + encodeURIComponent(STATE)
-        + '&ab='    + encodeURIComponent(AB);
-    }catch(e){
+      const data = await r.json().catch(()=> ({}));
+      if (r.ok && data && data.success) {
+        msg.textContent = '同意を保存しました。LINEトークでご相談いただけます。';
+        msg.className = 'note ok';
+        // 呼び出し元へ戻す（必要に応じて自動遷移を有効化）
+        const next = '/?consented=1'
+          + '&state=' + encodeURIComponent(state)
+          + '&ab=' + encodeURIComponent(ab)
+          + (utm_campaign ? '&utm_campaign=' + encodeURIComponent(utm_campaign) : '');
+        // location.replace(next);
+      } else {
+        throw new Error('保存に失敗しました');
+      }
+    } catch (e) {
       console.error(e);
-      msg.textContent = 'エラーが発生しました。時間をおいて再度お試しください。';
+      msg.textContent = '保存に失敗しました。時間をおいて再度お試しください。';
+      msg.className = 'note err';
       go.disabled = false;
     }
   });
+
+  // 初期ボタン状態
+  refresh();
 </script>
 </body>
 </html>

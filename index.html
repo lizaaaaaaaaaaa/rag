@@ -78,12 +78,8 @@
             display: flex;
             align-items: flex-end;
         }
-        .message.user {
-            justify-content: flex-end;
-        }
-        .message.ai {
-            justify-content: flex-start;
-        }
+        .message.user { justify-content: flex-end; }
+        .message.ai   { justify-content: flex-start; }
         .message-content {
             max-width: 70%;
             padding: 12px 16px;
@@ -97,118 +93,50 @@
             position: relative;
         }
         .message.user .message-content {
-            background: #10c041;
-            color: #fff;
-            border-bottom-right-radius: 4px;
-            border-bottom-left-radius: 16px;
+            background: #10c041; color: #fff;
+            border-bottom-right-radius: 4px; border-bottom-left-radius: 16px;
         }
         .message.ai .message-content {
-            background: #fff;
-            color: #222;
+            background: #fff; color: #222;
             border: 1px solid #d2e7d9;
-            border-bottom-left-radius: 4px;
-            border-bottom-right-radius: 16px;
+            border-bottom-left-radius: 4px; border-bottom-right-radius: 16px;
         }
         .response-info {
-            font-size: 0.7rem;
-            color: #666;
-            margin-top: 4px;
-            text-align: right;
+            font-size: 0.7rem; color: #666; margin-top: 4px; text-align: right;
         }
-        .rag-source { border-left: 3px solid #4caf50; }
-        .search-verified { border-left: 3px solid #2196f3; }
-        .chatgpt-source { border-left: 3px solid #ff9800; }
-        .template-source { border-left: 3px solid #9c27b0; }
-        .confidence-indicator {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-left: 4px;
-        }
-        .confidence-high { background-color: #4caf50; }
+        .rag-source        { border-left: 3px solid #4caf50; }
+        .search-verified   { border-left: 3px solid #2196f3; }
+        .chatgpt-source    { border-left: 3px solid #ff9800; }
+        .template-source   { border-left: 3px solid #9c27b0; }
+        .confidence-indicator { display:inline-block; width:8px; height:8px; border-radius:50%; margin-left:4px; }
+        .confidence-high   { background-color: #4caf50; }
         .confidence-medium { background-color: #ff9800; }
-        .confidence-low { background-color: #f44336; }
-        .chat-input-container {
-            background: #fafbfc;
-            padding: 12px;
-            border-top: 1px solid #e0e0e0;
-        }
-        .chat-input-wrapper {
-            display: flex;
-            gap: 8px;
-            align-items: flex-end;
-        }
+        .confidence-low    { background-color: #f44336; }
+
+        .chat-input-container { background: #fafbfc; padding: 12px; border-top: 1px solid #e0e0e0; }
+        .chat-input-wrapper { display:flex; gap:8px; align-items:flex-end; }
         .chat-input {
-            flex: 1;
-            min-height: 40px;
-            max-height: 120px;
-            padding: 10px 14px;
-            border: 1.5px solid #c6e2d7;
-            border-radius: 24px;
-            font-size: 1rem;
-            outline: none;
-            resize: none;
-            background: #fff;
-            transition: border-color 0.2s;
+            flex:1; min-height:40px; max-height:120px; padding:10px 14px;
+            border:1.5px solid #c6e2d7; border-radius:24px; font-size:1rem; outline:none; resize:none; background:#fff; transition:border-color .2s;
         }
-        .chat-input:focus { border-color: #10c041; }
+        .chat-input:focus { border-color:#10c041; }
         .send-button {
-            width: 44px;
-            height: 44px;
-            background: #10c041;
-            border: none;
-            border-radius: 50%;
-            color: #fff;
-            cursor: pointer;
-            font-size: 1.4rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: box-shadow 0.2s, transform 0.2s;
+            width:44px; height:44px; background:#10c041; border:none; border-radius:50%; color:#fff; cursor:pointer; font-size:1.4rem; display:flex; align-items:center; justify-content:center; transition: box-shadow .2s, transform .2s;
         }
-        .send-button:disabled { opacity: 0.5; cursor: not-allowed; }
-        .typing-indicator {
-            margin: 0 0 8px 8px;
-            color: #666;
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 3px;
-        }
-        .dot {
-            display: inline-block;
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: #b6dab9;
-            margin-right: 2px;
-            animation: typing 1.2s infinite;
-        }
-        .dot:nth-child(2) {animation-delay: 0.2s;}
-        .dot:nth-child(3) {animation-delay: 0.4s;}
-        @keyframes typing {
-            0%, 80%, 100% {transform: translateY(0);}
-            40% {transform: translateY(-8px);}
-        }
-        .error-message {
-            background: #fff2f2;
-            color: #d32f2f;
-            padding: 10px 14px;
-            border-radius: 10px;
-            border-left: 4px solid #d32f2f;
-            margin: 6px 0;
-            font-size: 0.92rem;
-        }
+        .send-button:disabled { opacity:.5; cursor:not-allowed; }
+
+        .typing-indicator { margin:0 0 8px 8px; color:#666; font-size:.95rem; display:flex; align-items:center; gap:3px; }
+        .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#b6dab9; margin-right:2px; animation: typing 1.2s infinite; }
+        .dot:nth-child(2){animation-delay:.2s;}
+        .dot:nth-child(3){animation-delay:.4s;}
+        @keyframes typing { 0%,80%,100%{transform:translateY(0);} 40%{transform:translateY(-8px);} }
+
+        .error-message { background:#fff2f2; color:#d32f2f; padding:10px 14px; border-radius:10px; border-left:4px solid #d32f2f; margin:6px 0; font-size:.92rem; }
 
         /* ▼ 追記: フッター用の軽いスタイル */
-        footer {
-            margin-top: 12px;
-            font-size: 0.85rem;
-            color: #3a3a3a;
-        }
-        footer a { color: #2f6db0; text-decoration: none; }
-        footer a:hover { text-decoration: underline; }
+        footer { margin-top: 12px; font-size: .85rem; color: #3a3a3a; }
+        footer a { color:#2f6db0; text-decoration:none; }
+        footer a:hover { text-decoration:underline; }
 
         /* モバイルレスポンシブ */
         @media (max-width: 480px) {
@@ -216,6 +144,17 @@
             .chat-header { padding: 14px 4px; font-size: 1.05rem;}
             .chat-messages { padding: 8px 2px;}
         }
+
+        /* ▼▼▼ 追加: 同意モーダルのスタイル ▼▼▼ */
+        #consent-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:9999}
+        #consent-card{max-width:720px;width:92%;background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.2);padding:20px;font-family:system-ui}
+        #consent-card h3{margin:0 0 10px;font-size:1.1rem}
+        #consent-card ul{margin:10px 0 14px 1.1em}
+        #consent-card li{margin:8px 0}
+        #consent-links a{margin-right:12px}
+        #consent-go{width:100%;padding:12px 16px;border-radius:12px;border:0;background:#0a7cff;color:#fff;font-weight:600}
+        #consent-go:disabled{background:#aac8f5}
+        #consent-msg{font-size:.9rem;color:#666;margin-top:8px;min-height:1.2em}
     </style>
 
     <!-- ▼▼▼ 追記: GA4（IDを差し替え） ▼▼▼ -->
@@ -243,7 +182,6 @@
             AI住まい相談
             <span class="platform-indicator">Web</span>
             <span class="rag-indicator">🧠RAG対応</span>
-
             <!-- ▼ 追記: βラベル（ヘッダー内に1行） -->
             <div aria-label="beta" style="font-size:.8rem;opacity:.7;margin-top:6px;">β版</div>
         </div>
@@ -276,6 +214,28 @@
       <a href="/cookie">Cookie</a>
     </footer>
 
+    <!-- ▼▼▼ 追加: 同意モーダル（HTML） ▼▼▼ -->
+    <div id="consent-overlay" hidden>
+      <div id="consent-card" role="dialog" aria-modal="true" aria-labelledby="consent-title">
+        <h3 id="consent-title">AIチャットのご利用前にご確認ください</h3>
+        <p>以下の<strong>5項目</strong>すべてに同意が必要です。</p>
+        <ul>
+          <li><label><input type="checkbox" id="c_pp"> プライバシーポリシーに同意します</label></li>
+          <li><label><input type="checkbox" id="c_tos"> 利用規約に同意します</label></li>
+          <li><label><input type="checkbox" id="c_cookie"> Cookie・類似技術の利用に同意します</label></li>
+          <li><label><input type="checkbox" id="c_xfer"> 入力内容等が外部送信される可能性に同意します</label></li>
+          <li><label><input type="checkbox" id="c_ai"> 生成AIの誤答可能性（限界）を理解しました</label></li>
+        </ul>
+        <p id="consent-links">
+          <a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>
+          <a href="/terms"   target="_blank" rel="noopener">利用規約</a>
+          <a href="/cookie"  target="_blank" rel="noopener">Cookie・外部送信</a>
+        </p>
+        <button id="consent-go" disabled>同意して始める</button>
+        <div id="consent-msg"></div>
+      </div>
+    </div>
+
     <script>
         class RAGEnabledChatUI {
             constructor() {
@@ -283,15 +243,15 @@
                 this.API_URL = 'https://rag-api-190389115361.asia-northeast1.run.app/chat';
                 this.PLATFORM = 'web';
 
-                this.chatMessages = document.getElementById('chatMessages');
-                this.chatInput = document.getElementById('chatInput');
-                this.sendButton = document.getElementById('sendButton');
-                this.typingIndicator = document.getElementById('typingIndicator');
+                this.chatMessages   = document.getElementById('chatMessages');
+                this.chatInput      = document.getElementById('chatInput');
+                this.sendButton     = document.getElementById('sendButton');
+                this.typingIndicator= document.getElementById('typingIndicator');
                 this.welcomeMessage = document.getElementById('welcomeMessage');
 
                 this.initializeEventListeners();
                 this.adjustTextareaHeight();
-                
+
                 // RAGパフォーマンス監視
                 this.responseMetrics = [];
                 this.ragEnabled = true;
@@ -316,14 +276,14 @@
 
             async sendMessage() {
                 const message = this.chatInput.value.trim();
-                if (!message) return;
-                
+                if (!message || this.chatInput.disabled || this.sendButton.disabled) return;
+
                 // 初回メッセージ時にウェルカムメッセージを削除
                 if (!this.hasFirstMessage && this.welcomeMessage) {
                     this.welcomeMessage.remove();
                     this.hasFirstMessage = true;
                 }
-                
+
                 this.addUserMessage(message);
                 this.chatInput.value = '';
                 this.adjustTextareaHeight();
@@ -335,10 +295,10 @@
                 try {
                     const response = await this.callRAGAPI(message);
                     const responseTime = performance.now() - startTime;
-                    
+
                     this.recordPerformance(responseTime, response);
                     this.addAIMessage(response.answer, response, responseTime);
-                    
+
                 } catch (error) {
                     console.error('RAG API Error:', error);
                     this.showError('エラーが発生しました。時間を置いて再度お試しください。');
@@ -350,27 +310,33 @@
             async callRAGAPI(question) {
                 /**
                  * RAG対応API呼び出し
-                 * ▼ ここに“同意ゲート向けのユーザー識別ヘッダ”を追加
+                 * ▼ ここに“同意ゲート向けのユーザー識別ヘッダ”を追加（web_uidを使用）
                  */
                 try {
+                    const webUid = localStorage.getItem('web_uid') || '';
+                    const headers = {
+                        'Content-Type': 'application/json',
+                    };
+                    // 既存ロジック維持（id_token / user_id があれば送る）
+                    const idt = localStorage.getItem('id_token');
+                    if (idt) headers['Authorization'] = `Bearer ${idt}`;
+                    if (webUid) {
+                        headers['X-User-Id'] = webUid;
+                        localStorage.setItem('user_id', webUid); // 既存コード互換
+                    }
+
                     const response = await fetch(this.API_URL, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            ...(localStorage.getItem('id_token') ? { 'Authorization': `Bearer ${localStorage.getItem('id_token')}` } : {}),
-                            ...(localStorage.getItem('user_id') ? { 'X-User-Id': localStorage.getItem('user_id') } : {})
-                        },
-                        body: JSON.stringify({ 
-                            question, 
-                            username: `web-user-${Date.now()}`,
+                        headers,
+                        body: JSON.stringify({
+                            question,
+                            username: webUid || `web-user-${Date.now()}`,
                             platform: 'web'
                         })
                     });
-                    
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`);
-                    }
-                    
+
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
                     const data = await response.json();
                     return {
                         answer: data.answer || 'すみません、回答できませんでした。',
@@ -381,7 +347,7 @@
                         search_used: data.performance?.search_used || false,
                         source_docs_count: data.performance?.source_docs_count || 0
                     };
-                    
+
                 } catch (error) {
                     console.error('RAG API call failed:', error);
                     throw error;
@@ -396,13 +362,10 @@
                     confidence: response.confidence,
                     searchUsed: response.search_used
                 });
-                
-                // 長時間応答の監視
+
                 if (responseTime > 10000) {
                     console.warn('Very slow RAG response:', responseTime + 'ms');
                 }
-                
-                // メトリクス履歴のクリーンアップ
                 if (this.responseMetrics.length > 100) {
                     this.responseMetrics = this.responseMetrics.slice(-50);
                 }
@@ -419,31 +382,26 @@
             addAIMessage(message, metadata = {}, responseTime = 0) {
                 const messageDiv = document.createElement('div');
                 messageDiv.className = 'message ai';
-                
-                // ソース別のスタイリング
+
                 const sourceClass = this.getSourceClass(metadata.source);
                 const confidenceClass = this.getConfidenceClass(metadata.confidence || 0.8);
-                
-                // 信頼性指標
                 const confidenceIndicator = `<span class="confidence-indicator ${confidenceClass}"></span>`;
-                
-                // 応答情報（デバッグモード時のみ表示）
+
                 const showDebug = window.location.search.includes('debug=true');
-                const responseInfo = showDebug && responseTime > 0 ? 
+                const responseInfo = showDebug && responseTime > 0 ?
                     `<div class="response-info">
-                        ${this.getSourceIcon(metadata.source)} ${responseTime.toFixed(0)}ms | 
+                        ${this.getSourceIcon(metadata.source)} ${responseTime.toFixed(0)}ms |
                         信頼度: ${(metadata.confidence * 100).toFixed(0)}% ${confidenceIndicator} |
                         検索: ${metadata.search_used ? '✓' : '✗'} |
                         文書: ${metadata.source_docs_count || 0}件
                      </div>` : '';
-                
+
                 messageDiv.innerHTML = `
                     <div class="message-content ${sourceClass}">
                         ${this.formatMessage(message)}
                         ${responseInfo}
                     </div>
                 `;
-                
                 this.chatMessages.appendChild(messageDiv);
                 this.scrollToBottom();
             }
@@ -451,54 +409,40 @@
             getSourceClass(source) {
                 switch(source) {
                     case 'rag_verified': return 'search-verified';
-                    case 'rag': return 'rag-source';
-                    case 'chatgpt': return 'chatgpt-source';
-                    case 'template': return 'template-source';
-                    default: return '';
+                    case 'rag':         return 'rag-source';
+                    case 'chatgpt':     return 'chatgpt-source';
+                    case 'template':    return 'template-source';
+                    default:            return '';
                 }
             }
-
             getConfidenceClass(confidence) {
                 if (confidence >= 0.8) return 'confidence-high';
                 if (confidence >= 0.6) return 'confidence-medium';
                 return 'confidence-low';
             }
-
             getSourceIcon(source) {
                 switch(source) {
                     case 'rag_verified': return '🔍✓';
-                    case 'rag': return '📚';
-                    case 'chatgpt': return '🤖';
-                    case 'template': return '📋';
-                    case 'cache': return '⚡';
-                    default: return '🔄';
+                    case 'rag':          return '📚';
+                    case 'chatgpt':      return '🤖';
+                    case 'template':     return '📋';
+                    case 'cache':        return '⚡';
+                    default:             return '🔄';
                 }
             }
-
-            formatMessage(message) {
-                return this.escapeHtml(message).replace(/\n/g, '<br>');
-            }
-
-            escapeHtml(text) {
-                const div = document.createElement('div');
-                div.textContent = text;
-                return div.innerHTML;
-            }
+            formatMessage(message) { return this.escapeHtml(message).replace(/\n/g, '<br>'); }
+            escapeHtml(text) { const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
 
             setLoading(isLoading) {
                 this.sendButton.disabled = isLoading;
-                this.chatInput.disabled = isLoading;
+                this.chatInput.disabled  = isLoading;
                 this.typingIndicator.style.display = isLoading ? 'flex' : 'none';
                 if (isLoading) this.scrollToBottom();
             }
-
             updateTypingText(text) {
                 const typingText = this.typingIndicator.querySelector('span:last-child');
-                if (typingText) {
-                    typingText.textContent = text;
-                }
+                if (typingText) typingText.textContent = text;
             }
-
             showError(message) {
                 const errorDiv = document.createElement('div');
                 errorDiv.className = 'error-message';
@@ -507,20 +451,14 @@
                 this.scrollToBottom();
                 setTimeout(() => errorDiv.remove(), 5000);
             }
+            scrollToBottom() { this.chatMessages.scrollTop = this.chatMessages.scrollHeight; }
 
-            scrollToBottom() {
-                this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-            }
-
-            // RAGパフォーマンス統計表示（デバッグ用）
             showRAGPerformanceStats() {
                 if (this.responseMetrics.length === 0) return;
-                
-                const avgResponseTime = this.responseMetrics.reduce((sum, m) => sum + m.responseTime, 0) / this.responseMetrics.length;
-                const ragResponses = this.responseMetrics.filter(m => m.source === 'rag' || m.source === 'rag_verified').length;
+                const avgResponseTime = this.responseMetrics.reduce((s, m)=>s+m.responseTime,0) / this.responseMetrics.length;
+                const ragResponses    = this.responseMetrics.filter(m => m.source === 'rag' || m.source === 'rag_verified').length;
                 const searchUsedCount = this.responseMetrics.filter(m => m.searchUsed).length;
-                const avgConfidence = this.responseMetrics.reduce((sum, m) => sum + m.confidence, 0) / this.responseMetrics.length;
-                
+                const avgConfidence   = this.responseMetrics.reduce((s,m)=>s+m.confidence,0) / this.responseMetrics.length;
                 console.log(`RAG Performance Stats:
                 - Platform: Web (RAG Enabled)
                 - Average Response Time: ${avgResponseTime.toFixed(0)}ms
@@ -531,18 +469,125 @@
             }
         }
 
-        // グローバルインスタンス
         let chatUI;
-        
         document.addEventListener('DOMContentLoaded', () => {
             chatUI = new RAGEnabledChatUI();
-            
-            // パフォーマンス統計の定期表示（開発時のみ）
             if (window.location.hostname === 'localhost' || window.location.search.includes('debug=true')) {
                 setInterval(() => chatUI.showRAGPerformanceStats(), 30000);
                 console.log('🧠 RAG Enabled Chat UI initialized');
             }
         });
+    </script>
+
+    <!-- ▼▼▼ 追加: 同意ゲート（JS） ▼▼▼ -->
+    <script>
+    (()=>{
+      const POLICY_VERSION = "2025-09-01";
+      const TOS_VERSION    = "2025-09-01";
+
+      const $ = (sel)=>document.querySelector(sel);
+      function uuidv4(){return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,c=>(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16));}
+      function getWebUid(){
+        try{
+          let id = localStorage.getItem("web_uid");
+          if(!id){ id = "web-"+uuidv4(); localStorage.setItem("web_uid", id); }
+          return id;
+        }catch(_){ return "web-"+Math.random().toString(36).slice(2); }
+      }
+      const WEB_UID = getWebUid();
+      // 既存ヘッダ互換のため user_id も保存
+      localStorage.setItem('user_id', WEB_UID);
+
+      // UI制御
+      const input = $("#chatInput");
+      const send  = $("#sendButton");
+      const overlay = $("#consent-overlay");
+      const goBtn   = $("#consent-go");
+      const msg     = $("#consent-msg");
+      const boxes   = ["#c_pp","#c_tos","#c_cookie","#c_xfer","#c_ai"].map($);
+
+      function setChatEnabled(enabled){
+        if(input) input.disabled = !enabled;
+        if(send)  send.disabled  = !enabled;
+        if(input) input.placeholder = enabled ? "住宅についてお聞きください..." : "同意が必要です";
+      }
+      function refreshButton(){
+        const ok = boxes.every(b => b && b.checked);
+        goBtn.disabled = !ok;
+      }
+      boxes.forEach(b => b && b.addEventListener("change", refreshButton));
+
+      async function consentCheck(){
+        try{
+          const r = await fetch("/consent/check",{
+            method:"POST",
+            headers:{ "Content-Type":"application/json" },
+            credentials:"include",
+            body: JSON.stringify({ user_id: WEB_UID, policy_version: POLICY_VERSION, tos_version: TOS_VERSION })
+          });
+          const j = await r.json();
+          return !!(j && j.valid);
+        }catch(_){ return false; } // エラー時は未同意扱い
+      }
+      async function consentSave(flags){
+        const payload = {
+          consent_id: (crypto.randomUUID && crypto.randomUUID()) || String(Date.now()),
+          user_id: WEB_UID,
+          consented_at: new Date().toISOString(),
+          policy_version: POLICY_VERSION,
+          tos_version: TOS_VERSION,
+          flags,
+          source: "web",
+          ua: navigator.userAgent,
+          locale: navigator.language || "ja-JP",
+          withdrawn: false
+        };
+        const r = await fetch("/consent/save",{
+          method:"POST",
+          headers:{ "Content-Type":"application/json" },
+          credentials:"include",
+          body: JSON.stringify(payload)
+        });
+        const j = await r.json().catch(()=> ({}));
+        if(!r.ok || !j.success) throw new Error("save failed");
+        return j;
+      }
+
+      goBtn.addEventListener("click", async ()=>{
+        try{
+          goBtn.disabled = true;
+          msg.textContent = "保存中…";
+          const flags = {
+            pp: $("#c_pp").checked,
+            tos: $("#c_tos").checked,
+            cookie: $("#c_cookie").checked,
+            xfer: $("#c_xfer").checked,
+            ai_limits: $("#c_ai").checked
+          };
+          await consentSave(flags);
+          overlay.hidden = true;
+          setChatEnabled(true);
+          msg.textContent = "";
+        }catch(e){
+          console.error(e);
+          msg.textContent = "保存に失敗しました。時間をおいて再度お試しください。";
+          goBtn.disabled = false;
+        }
+      });
+
+      // 初期判定：未同意ならモーダル表示＆入力無効
+      (async ()=>{
+        setChatEnabled(false);
+        const ok = await consentCheck();
+        if(ok){
+          overlay.hidden = true;
+          setChatEnabled(true);
+        }else{
+          overlay.hidden = false;
+          refreshButton();
+        }
+      })();
+    })();
     </script>
 </body>
 </html>

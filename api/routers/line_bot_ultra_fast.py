@@ -1,8 +1,7 @@
-# api/routers/line_bot_ultra_fast.py — 完全修正版（lazy-load ＆ 即ACK ＆ push最終）
-# - リッチメニュー押下は即時 reply（定型文）
-# - RAG / 資金計画はバックグラウンドで実行 → push で最終結果
-# - 「出典/参考/資料」等は非表示
-# - Webhook は /line/webhook
+# api/routers/line_bot_ultra_fast.py — 同意ゲート入り 完全修正版
+# - 事前同意の無いユーザーには LIFF の同意ページだけを案内
+# - on_follow / on_message の先頭で /consent/check を同期呼び出し（5s）
+# - 既存の「即ACK→push最終」方針やテンプレ文面は維持
 
 import logging
 import os
@@ -43,6 +42,10 @@ BUDGET_URL     = "https://liff.line.me/LIFF_ID_BUDGET?state=rm_ai_loan"
 ai_consult_link = with_utm(AI_CONSULT_URL, "ai_consult", ab="A")
 ai_site_link    = with_utm(AI_SITE_URL,   "ai_site",    ab="A")
 budget_link     = with_utm(BUDGET_URL,    "budget",     ab="A")
+
+# ▼ 追記：同意用 LIFF（専用ID推奨。なければ /liff に合わせたID）
+CONSENT_URL  = os.getenv("LIFF_CONSENT_URL", "https://liff.line.me/LIFF_ID_CONSENT?state=consent")
+consent_link = with_utm(CONSENT_URL, "consent", ab="A")
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +427,31 @@ def _push(user_id: str, text: str) -> bool:
         return False
 
 # ======================================================================
+# ★ 追記：同意チェック（自己向け HTTP）
+# ======================================================================
+import httpx
+
+PORT = os.getenv("PORT", "8080")
+SELF_BASE = os.getenv("INTERNAL_BASE_URL", f"http://127.0.0.1:{PORT}")
+
+def _has_consent_sync(user_id: str) -> bool:
+    """/consent/check を叩いて同意済みか確認（失敗時は False を返す＝安全側）"""
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            r = client.post(f"{SELF_BASE}/consent/check", json={"user_id": user_id})
+            if r.status_code == 200:
+                return bool(r.json().get("valid"))
+    except Exception as e:
+        logger.warning(f"consent check failed: {e}")
+    return False
+
+NOT_CONSENT_MSG = (
+    "ご利用前に同意が必要です。\n"
+    "以下のボタンから同意ページを開いてください。\n\n"
+    f"{consent_link}"
+)
+
+# ======================================================================
 # バックグラウンド・ワーカー
 # ======================================================================
 def _worker_finance(user_id: str, user_text: str):
@@ -483,7 +511,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 # ======================================================================
-# イベントハンドラ（reply→push 方針）
+# イベントハンドラ（reply→push 方針）＋ ★同意ゲート
 # ======================================================================
 if LINE_SDK_AVAILABLE and handler:
     @handler.add(FollowEvent)
@@ -491,6 +519,10 @@ if LINE_SDK_AVAILABLE and handler:
         try:
             user_id = event.source.user_id
             if dup_guard.seen(user_id, f"follow:{user_id}"):
+                return
+            # ★ 未同意なら同意URLのみ返信
+            if not _has_consent_sync(user_id):
+                _reply_or_push(event.reply_token, user_id, NOT_CONSENT_MSG)
                 return
             _reply_or_push(event.reply_token, user_id, RICHMENU_FIXED_RESPONSES["follow_greeting"])
         except Exception as e:
@@ -505,6 +537,11 @@ if LINE_SDK_AVAILABLE and handler:
 
             # 連打/再送ガード
             if dup_guard.seen(user_id, f"in:{text[:64]}"):
+                return
+
+            # ★ まず同意チェック。未同意なら案内だけ返して終了
+            if not _has_consent_sync(user_id):
+                _reply_or_push(reply_token, user_id, NOT_CONSENT_MSG)
                 return
 
             # リッチメニュー押下→テンプレ即返 & モード開始
@@ -563,6 +600,11 @@ if LINE_SDK_AVAILABLE and handler:
 
             if dup_guard.seen(user_id, f"post:{data[:64]}"):
                 return
+
+            # Postback でも同意ゲートをかけたい場合は以下を有効化
+            # if not _has_consent_sync(user_id):
+            #     _reply_or_push(reply_token, user_id, NOT_CONSENT_MSG)
+            #     return
 
             key = None
             if data in RICHMENU_FIXED_RESPONSES:

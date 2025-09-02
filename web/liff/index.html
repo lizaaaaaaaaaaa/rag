@@ -4,19 +4,25 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AI相談をはじめる</title>
+  <!-- LIFF SDK -->
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
-    body{font-family:system-ui,sans-serif;padding:24px}
-    .ok{color:#2c7}.err{color:#c22}
-    .box{border:1px solid #ddd;border-radius:12px;padding:16px}
-    button{padding:10px 16px;border:0;border-radius:8px;cursor:pointer}
+    :root { color-scheme: light dark; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:24px;line-height:1.6}
+    h1{margin:0 0 8px}
+    .ok{color:#2c7} .warn{color:#c60} .err{color:#c22}
+    .box{border:1px solid #ddd;border-radius:12px;padding:16px;margin:16px 0}
     .links a{margin-right:12px}
+    button{padding:10px 16px;border:0;border-radius:8px;cursor:pointer}
+    #btnConsent{background:#0a7cff;color:#fff}
+    #btnLogin{background:#444;color:#fff}
   </style>
 </head>
 <body>
   <h1>AI相談をはじめる</h1>
   <p id="status">initializing…</p>
 
+  <!-- 未ログイン時に表示（法務リンクを見せてからログイン誘導） -->
   <div class="box" id="preLogin" style="display:none">
     <p>ご利用前に以下をご確認ください。</p>
     <p class="links">
@@ -28,51 +34,101 @@
     <button id="btnLogin">ログインして開始</button>
   </div>
 
+  <!-- ログイン済み・未同意時に表示（明示ボタンで consent へ） -->
+  <div class="box" id="needConsent" style="display:none">
+    <p class="warn">ご利用前に同意が必要です。以下の5項目すべてにチェックのうえ同意してください。</p>
+    <p class="links">
+      <a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>
+      <a href="/terms"   target="_blank" rel="noopener">利用規約</a>
+      <a href="/cookie"  target="_blank" rel="noopener">Cookie・外部送信</a>
+    </p>
+    <button id="btnConsent">同意して開始</button>
+  </div>
+
   <script>
   (async () => {
-    const LIFF_ID = "2007887876-vMNe74eX";
-    const POLICY_VERSION = "pp_v1.3";
-    const TOS_VERSION    = "tos_v1.4";
+    // ★ 必要に応じて値を調整してください（版管理は PDF に合わせる）
+    const LIFF_ID = "2007887876-vMNe74eX";     // ←あなたの LIFF ID
+    const POLICY_VERSION = "2025-09-01";
+    const TOS_VERSION    = "2025-09-01";
 
-    const statusEl = document.getElementById("status");
-    const preLogin = document.getElementById("preLogin");
-    const all = new URLSearchParams(location.search);
-    const stateQS = new URLSearchParams(all.get("liff.state") || "");
-    const state = stateQS.get("state") || "rag_home";
-    const ab    = stateQS.get("ab") || "A";
-    const utm_campaign = stateQS.get("utm_campaign") || "";
+    const statusEl   = document.getElementById("status");
+    const preLogin   = document.getElementById("preLogin");
+    const needConsent= document.getElementById("needConsent");
+    const btnLogin   = document.getElementById("btnLogin");
+    const btnConsent = document.getElementById("btnConsent");
+
+    // utm / state などを保持して consent に引き継ぐ
+    const allQS   = new URLSearchParams(location.search);
+    const liffQS  = new URLSearchParams(allQS.get("liff.state") || "");
+    const state   = liffQS.get("state") || "rag_home";
+    const ab      = liffQS.get("ab") || "A";
+    const utm_campaign = liffQS.get("utm_campaign") || allQS.get("utm_campaign") || "";
+
+    const goConsent = (userId) => {
+      const qp = new URLSearchParams({
+        user_id: userId,
+        liff_id: LIFF_ID,
+        policy_version: POLICY_VERSION,
+        tos_version: TOS_VERSION,
+        state, utm_campaign, ab
+      });
+      // ボタンクリックで consent へ遷移（自動遷移は行わない）
+      btnConsent.onclick = () => location.replace("/liff/consent?" + qp.toString());
+      needConsent.style.display = "block";
+      statusEl.textContent = "同意が必要です。『同意して開始』を押してください。";
+      statusEl.className = "warn";
+    };
+
+    const afterLogin = async () => {
+      // userId をできる方法で取得
+      let userId = liff.getDecodedIDToken()?.sub;
+      if (!userId && liff.getProfile) {
+        try { userId = (await liff.getProfile()).userId; } catch(_) {}
+      }
+      if (!userId) throw new Error("LINE userId を取得できませんでした。");
+
+      statusEl.textContent = "同意状況を確認しています…";
+      statusEl.className = "";
+
+      // サーバに同意確認（失敗時は未同意扱いで安全側）
+      try {
+        const r = await fetch("/consent/check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            user_id: userId,
+            policy_version: POLICY_VERSION,
+            tos_version: TOS_VERSION
+          })
+        });
+        const j = await r.json();
+        if (j && j.valid) {
+          statusEl.textContent = "同意済みです。トークでご相談いただけます。";
+          statusEl.className = "ok";
+          // 必要に応じてトップやチャットへ誘導
+          const next = "/?consented=1&state=" + encodeURIComponent(state) + "&ab=" + encodeURIComponent(ab);
+          // location.replace(next); // 自動遷移したい場合は有効化
+        } else {
+          goConsent(userId);
+        }
+      } catch (e) {
+        // エラー時も同意導線を出しておく
+        console.warn("consent check failed:", e);
+        goConsent(userId);
+      }
+    };
 
     try {
       await liff.init({ liffId: LIFF_ID });
 
-      const goConsent = (userId) => {
-        const qp = new URLSearchParams({
-          user_id: userId, liff_id: LIFF_ID,
-          policy_version: POLICY_VERSION, tos_version: TOS_VERSION,
-          state, utm_campaign, ab
-        });
-        location.replace("/liff/consent?"+qp.toString());
-      };
-
-      const afterLogin = async () => {
-        // userId を取得
-        let userId = liff.getDecodedIDToken()?.sub;
-        if (!userId && liff.getProfile) { try { userId = (await liff.getProfile()).userId; } catch(_){} }
-        if (!userId) throw new Error("LINE userId が取得できませんでした。");
-
-        // 同意済みかチェック
-        const r = await fetch("/consent/check", {
-          method: "POST", headers: {"Content-Type":"application/json"}, credentials:"include",
-          body: JSON.stringify({ user_id: userId, policy_version: POLICY_VERSION, tos_version: TOS_VERSION })
-        });
-        const j = await r.json();
-
-        if (j.valid) {
-          statusEl.textContent = "OK - consented";
-          statusEl.className = "ok";
-          location.replace("/?consented=1&state="+encodeURIComponent(state)+"&ab="+encodeURIComponent(ab));
-        } else {
-          goConsent(userId);
+      // ログインボタン
+      btnLogin.onclick = () => {
+        if (!liff.isLoggedIn()) {
+          const url = new URL(location.href);
+          url.searchParams.set("from", "postlogin"); // 戻り目印
+          liff.login({ redirectUri: url.toString() });
         }
       };
 
@@ -81,21 +137,13 @@
         return;
       }
 
-      // 自動ログインはしない。法務リンクを見せ、ボタンで開始。
+      // 未ログイン：法務リンクを見せてからログイン促し
       preLogin.style.display = "block";
       statusEl.textContent = "未ログインです。内容をご確認のうえ、ログインして開始してください。";
       statusEl.className = "";
 
-      document.getElementById("btnLogin").onclick = () => {
-        // ログイン後にこのページへ戻し、afterLogin で同意確認へ進む
-        const url = new URL(location.href);
-        url.searchParams.set("from", "postlogin");
-        liff.login({ redirectUri: url.toString() });
-      };
-
-      // ログイン直後に戻ってきたら、同意確認へ進める
-      if (all.get("from") === "postlogin") {
-        // LINEの戻りでは isLoggedIn() が true のはずなので、リトライ的に試す
+      // ログイン直後の戻り（ネットワーク差で isLoggedIn が遅れる対策）
+      if (allQS.get("from") === "postlogin") {
         const wait = () => new Promise(r => setTimeout(r, 150));
         for (let i=0;i<10;i++){ if (liff.isLoggedIn()) break; await wait(); }
         if (liff.isLoggedIn()) await afterLogin();
@@ -103,7 +151,8 @@
 
     } catch (e) {
       statusEl.textContent = "Error: " + (e && e.message || e);
-      statusEl.className="err";
+      statusEl.className = "err";
+      console.error(e);
     }
   })();
   </script>
