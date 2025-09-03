@@ -1,12 +1,13 @@
-# api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版（AI相談だけゲート / 個別リンク）
-# - リッチメニューは同意がなくても反応
-# - 「AI相談」だけ /consent/check を叩き、未同意なら **ユーザー別** LIFF 同意URLを案内
+# api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版（/liff/consent に統一）
+# - リッチメニューは同意がなくても反応（文面は変更しない）
+# - 「AI相談」だけ /consent/check を叩き、未同意なら **ユーザー別** 同意URL（/liff/consent?user_token=U...）を案内
 # - Webhook は常に 200 を返す（LINE の再送ループ防止）
 # - RAG / 資金計画は別スレッドで push（応答遅延を防ぐ）
 
 import logging, os, re, time, hashlib, threading, sys, pathlib, importlib
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
+from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 
 from fastapi import APIRouter, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -15,7 +16,6 @@ from fastapi.responses import JSONResponse
 # UTM 付与（line_utils が無い環境でも動くフォールバック）
 # -------------------------------
 def _with_utm_fallback(url: str, source: str, ab: str | None = None) -> str:
-    from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
     u = urlparse(url)
     q = dict(parse_qsl(u.query))
     q.setdefault("utm_source", "line")
@@ -29,29 +29,6 @@ try:
     from api.routers.line_utils import with_utm  # type: ignore
 except Exception:
     with_utm = _with_utm_fallback  # type: ignore
-
-# ▼ LIFF / 各種リンク（必要に応じて差し替え）
-AI_CONSULT_URL = "https://liff.line.me/LIFF_ID_AI?state=rag_home"
-AI_SITE_URL    = "https://liff.line.me/LIFF_ID_SITE?state=rag_home"
-BUDGET_URL     = "https://liff.line.me/LIFF_ID_BUDGET?state=rm_ai_loan"
-
-ai_consult_link = with_utm(AI_CONSULT_URL, "ai_consult", ab="A")
-ai_site_link    = with_utm(AI_SITE_URL,    "ai_site",    ab="A")
-budget_link     = with_utm(BUDGET_URL,     "budget",     ab="A")
-
-# ▼ 同意用 LIFF（*友だち追加後* の同意だけに絞る運用）
-CONSENT_URL  = os.getenv("LIFF_CONSENT_URL", "https://liff.line.me/LIFF_ID_CONSENT?state=consent")
-consent_link = with_utm(CONSENT_URL, "consent", ab="A")
-
-# --- 追加：クエリ付与ユーティリティ & 「ユーザー別」同意リンク ---
-from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
-def _add_qs(url: str, **params) -> str:
-    u = urlparse(url); q = dict(parse_qsl(u.query)); q.update({k: v for k, v in params.items() if v is not None})
-    return urlunparse((u.scheme, u.netloc, u.path, u.params, urlencode(q), u.fragment))
-
-def _build_consent_link_for(user_id: str) -> str:
-    # /consent 側は header "user_token" を期待。LIFFページで query→header に載せ替えるため query に埋め込む
-    return _add_qs(consent_link, user_token=user_id)
 
 logger = logging.getLogger(__name__)
 
@@ -141,9 +118,12 @@ router = APIRouter(prefix="", tags=["line-ultra-fast"])
 # ======================================================================
 LINE_RESPONSE_TIMEOUT = int(os.getenv("LINE_RESPONSE_TIMEOUT", "12"))  # 既定12秒
 SESSION_TTL = int(os.getenv("SESSION_TTL_MINUTES", "30")) * 60
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+if not PUBLIC_BASE_URL:
+    logger.warning("PUBLIC_BASE_URL is not set. Consent link generation will be incorrect.")
 
 # ======================================================================
-# 固定テンプレ（ご指定文面を維持）
+# 固定テンプレ（※リッチメニューの文面は変更しない）
 # ======================================================================
 RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
     "follow_greeting": """こんにちは！キノエデザイン住まいAIコンシェルジュ（秋山住研）です。
@@ -342,16 +322,15 @@ def _get_line_tokens() -> Tuple[str, str]:
             logger.warning(f"SecretManager failed: {e}")
     return (access_token.strip(), channel_secret.strip())
 
-LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = _get_line_tokens()
-
 try:
-    Configuration  # type: ignore
+    from linebot.v3.messaging import Configuration, ApiClient, MessagingApi  # type: ignore
     configuration_cached: Optional["Configuration"] = None
     api_client_cached: Optional["ApiClient"] = None
     messaging_api_cached: Optional["MessagingApi"] = None
 except Exception:
     configuration_cached = api_client_cached = messaging_api_cached = None  # type: ignore
 
+LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = _get_line_tokens()
 handler: Optional["WebhookHandler"] = None
 
 def _ensure_api() -> Optional["MessagingApi"]:
@@ -410,17 +389,28 @@ SELF_BASE = os.getenv("INTERNAL_BASE_URL", f"http://127.0.0.1:{PORT}")
 def _has_consent_sync(user_id: str) -> bool:
     """ /consent/check を叩いて同意済みか確認（失敗時は False を返す＝安全側） """
     try:
+        headers = {"user_token": user_id}  # consent API はヘッダでの受け取りに対応（front実装と合わせる）
         with httpx.Client(timeout=5.0) as client:
-            r = client.post(f"{SELF_BASE}/consent/check", json={"user_id": user_id})
+            r = client.post(f"{SELF_BASE}/consent/check", json={"scope": "ai_line"}, headers=headers)
             if r.status_code == 200:
-                return bool(r.json().get("valid"))
+                data = r.json()
+                return bool(data.get("valid") or data.get("is_valid"))
     except Exception as e:
         logger.warning(f"consent check failed: {e}")
     return False
 
-# --- 追加：未同意メッセージ（ユーザー別リンクを埋め込み） ---
-def _not_consent_msg_for(user_id: str) -> str:
-    link = _build_consent_link_for(user_id)
+# --- ユーザー別「同意リンク」生成（/liff/consent に統一） ---
+def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
+    q = {"user_token": user_id}
+    if extra_qs:
+        for k in ["state", "ab", "utm_source", "utm_medium", "utm_campaign", "utm_content"]:
+            v = extra_qs.get(k)
+            if v:
+                q[k] = v
+    return f"{PUBLIC_BASE_URL}/liff/consent?{urlencode(q)}"
+
+def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
+    link = _make_consent_link(user_id, extra_qs)
     return (
         "ご利用前に同意が必要です。\n"
         "以下のボタンから同意ページを開いてください。\n\n"
@@ -492,14 +482,20 @@ if LINE_SDK_AVAILABLE and handler:
             reply_token = event.reply_token
             if dup_guard.seen(user_id, f"in:{text[:64]}"): return
 
+            # リッチメニューのキーワード解決（文面は変更しない）
             key = None
-            if text in RICHMENU_FIXED_RESPONSES: key = text
+            if text in RICHMENU_FIXED_RESPONSES:
+                key = text
             else:
                 for k, mapped in RICHMENU_KEYWORD_MAPPING.items():
-                    if k in text: key = mapped; break
+                    if k in text:
+                        key = mapped
+                        break
 
+            # リッチメニュー項目にヒット
             if key:
                 if key == "AI相談":
+                    # 未同意ならリンクを返して終了
                     if not _has_consent_sync(user_id):
                         _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id)); return
                     sessions.set_mode(user_id, "ai")
@@ -507,6 +503,7 @@ if LINE_SDK_AVAILABLE and handler:
                     sessions.set_mode(user_id, "finance")
                 _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key]); return
 
+            # モードに応じて振り分け
             mode = sessions.get_mode(user_id)
             if mode == "finance":
                 _reply_or_push(reply_token, user_id, "📊 試算中です。少しお待ちください…")
@@ -515,6 +512,7 @@ if LINE_SDK_AVAILABLE and handler:
                 _reply_or_push(reply_token, user_id, "🔎 少しお待ちください…")
                 threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start(); return
 
+            # どれにも該当しない通常テキストへのフォールバック
             fallback = (
                 "ご質問ありがとうございます😊\n\n"
                 "目的のボタンをタップしてください👇\n"
@@ -524,8 +522,10 @@ if LINE_SDK_AVAILABLE and handler:
             _reply_or_push(reply_token, user_id, fallback)
         except Exception as e:
             logger.error(f"message handler error: {e}")
-            try: _reply_or_push(event.reply_token, event.source.user_id, "一時的にエラーが発生しました。時間をおいてお試しください。")
-            except Exception: pass
+            try:
+                _reply_or_push(event.reply_token, event.source.user_id, "一時的にエラーが発生しました。時間をおいてお試しください。")
+            except Exception:
+                pass
 
     @handler.add(PostbackEvent)
     def on_postback(event):
@@ -536,7 +536,8 @@ if LINE_SDK_AVAILABLE and handler:
             if dup_guard.seen(user_id, f"post:{data[:64]}"): return
 
             key = None
-            if data in RICHMENU_FIXED_RESPONSES: key = data
+            if data in RICHMENU_FIXED_RESPONSES:
+                key = data
             elif "action=" in data:
                 for part in data.split("&"):
                     if part.startswith("action="):
@@ -548,6 +549,7 @@ if LINE_SDK_AVAILABLE and handler:
             if key:
                 if key == "AI相談":
                     if not _has_consent_sync(user_id):
+                        # Postback にもユーザー別同意リンクを返す
                         _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id)); return
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
