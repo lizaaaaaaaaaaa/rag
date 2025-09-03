@@ -1,15 +1,10 @@
-# api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版（AI相談だけゲート）
+# api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版（AI相談だけゲート / 個別リンク）
 # - リッチメニューは同意がなくても反応
-# - 「AI相談」だけ /consent/check を叩いて未同意なら LIFF 同意URLを案内
+# - 「AI相談」だけ /consent/check を叩き、未同意なら **ユーザー別** LIFF 同意URLを案内
 # - Webhook は常に 200 を返す（LINE の再送ループ防止）
 # - RAG / 資金計画は別スレッドで push（応答遅延を防ぐ）
 
-import logging
-import os
-import re
-import time
-import hashlib
-import threading
+import logging, os, re, time, hashlib, threading, sys, pathlib, importlib
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 
@@ -48,12 +43,21 @@ budget_link     = with_utm(BUDGET_URL,     "budget",     ab="A")
 CONSENT_URL  = os.getenv("LIFF_CONSENT_URL", "https://liff.line.me/LIFF_ID_CONSENT?state=consent")
 consent_link = with_utm(CONSENT_URL, "consent", ab="A")
 
+# --- 追加：クエリ付与ユーティリティ & 「ユーザー別」同意リンク ---
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+def _add_qs(url: str, **params) -> str:
+    u = urlparse(url); q = dict(parse_qsl(u.query)); q.update({k: v for k, v in params.items() if v is not None})
+    return urlunparse((u.scheme, u.netloc, u.path, u.params, urlencode(q), u.fragment))
+
+def _build_consent_link_for(user_id: str) -> str:
+    # /consent 側は header "user_token" を期待。LIFFページで query→header に載せ替えるため query に埋め込む
+    return _add_qs(consent_link, user_token=user_id)
+
 logger = logging.getLogger(__name__)
 
 # ======================================================================
 # RAG / 資金計画：遅延ロード
 # ======================================================================
-import sys, pathlib, importlib
 ROOT = pathlib.Path(__file__).resolve().parents[2]  # .../RAG-LLM-Project
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -111,13 +115,8 @@ def _strip_citations(text: str) -> str:
 try:
     from linebot.v3 import WebhookHandler
     from linebot.v3.messaging import (
-        Configuration,
-        ApiClient,
-        MessagingApi,
-        ReplyMessageRequest,
-        PushMessageRequest,
-        TextMessage,
-        ApiException,
+        Configuration, ApiClient, MessagingApi,
+        ReplyMessageRequest, PushMessageRequest, TextMessage, ApiException,
     )
     from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent, FollowEvent
     LINE_SDK_AVAILABLE = True
@@ -125,13 +124,12 @@ try:
 except Exception as e:
     LINE_SDK_AVAILABLE = False
     logger.error(f"❌ LINE Bot SDK import failed: {e}")
-
-    class WebhookHandler:  # ダミー（ローカルlint用）
-        def __init__(self, *args, **kwargs): ...
-        def add(self, *args, **kwargs):
+    class WebhookHandler:  # ダミー
+        def __init__(self, *a, **k): ...
+        def add(self, *a, **k):
             def deco(f): return f
             return deco
-        def handle(self, *args, **kwargs): ...
+        def handle(self, *a, **k): ...
 
 # ======================================================================
 # ルーター
@@ -165,7 +163,6 @@ RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 
-
     "AI相談": """🤖 AI住まい相談を開始します！
 キノエデザインの住まいAIコンシェルジュです。
 住まいに関するご質問をお気軽にどうぞ！
@@ -185,7 +182,6 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 
-
     "AI住まいサイト": """🌐 AI住まいサイトのご案内
 キノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）
 🏠
@@ -197,7 +193,6 @@ ZINE、ダウンロードもできます。
 ※ AIの回答は必ずしも正しいとは限りません。 → 最終案内はスタッフが行います。
 📱 サイトURL：
 https://preview.studio.site/live/EjOQljz1WJ/""",
-
 
     "資料請求": """📋ありがとうございます！こちらからご覧いただけます。
 Web版と、カタログ版を選択できます
@@ -215,7 +210,6 @@ Web版 ご希望はこちら
 プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
-
 
     "展示場来場予約": """📍 展示場のご来場予約:
 24 時間いつでも、予約OKです。
@@ -241,7 +235,6 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
 Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 
-
     "資金計画": """💬 AI資金診断のご案内
 本診断は匿名でご利用いただけます。
 ご回答内容は保存いたしません。
@@ -258,7 +251,6 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 未入力の項目があっても進められます。
 ご入力後、概算結果をご提示いたします。
 ※ 結果は概算です → 詳細はスタッフがご案内します。""",
-
 
     "チャット相談": """💬 スタッフとのご相談
 AI より、人の方がいい方はこちら
@@ -302,21 +294,14 @@ RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
 # 軽量重複防止（連打/再送対策）
 # ======================================================================
 class DuplicateGuard:
-    def __init__(self):
-        self.recent_events: Dict[str, float] = {}
-        self.window = 6.0  # 秒
-
+    def __init__(self): self.recent_events: Dict[str, float] = {}; self.window = 6.0
     def seen(self, user_id: str, token: str) -> bool:
-        now = time.time()
-        key = f"{user_id}:{hashlib.md5(token.encode()).hexdigest()[:8]}"
-        t = self.recent_events.get(key)
+        now = time.time(); key = f"{user_id}:{hashlib.md5(token.encode()).hexdigest()[:8]}"; t = self.recent_events.get(key)
         self.recent_events[key] = now
-        # GC
         if len(self.recent_events) > 512:
             cutoff = now - self.window * 2
             for k, ts in list(self.recent_events.items()):
-                if ts < cutoff:
-                    self.recent_events.pop(k, None)
+                if ts < cutoff: self.recent_events.pop(k, None)
         return t is not None and (now - t) < self.window
 
 dup_guard = DuplicateGuard()
@@ -326,19 +311,12 @@ dup_guard = DuplicateGuard()
 # ======================================================================
 class SessionStore:
     def __init__(self, ttl_seconds: int = 1800):
-        self.ttl = ttl_seconds
-        self.store: Dict[str, Dict[str, Any]] = {}
-
-    def set_mode(self, user_id: str, mode: str):
-        self.store[user_id] = {"mode": mode, "exp": time.time() + self.ttl}
-
+        self.ttl = ttl_seconds; self.store: Dict[str, Dict[str, Any]] = {}
+    def set_mode(self, user_id: str, mode: str): self.store[user_id] = {"mode": mode, "exp": time.time() + self.ttl}
     def get_mode(self, user_id: str) -> str:
         d = self.store.get(user_id)
-        if not d:
-            return ""
-        if d["exp"] < time.time():
-            self.store.pop(user_id, None)
-            return ""
+        if not d: return ""
+        if d["exp"] < time.time(): self.store.pop(user_id, None); return ""
         return d.get("mode", "")
 
 sessions = SessionStore(SESSION_TTL)
@@ -349,7 +327,6 @@ sessions = SessionStore(SESSION_TTL)
 def _get_line_tokens() -> Tuple[str, str]:
     access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
     channel_secret = os.getenv("LINE_CHANNEL_SECRET", "")
-    # Secret Manager 併用（任意）
     if (not access_token or not channel_secret) and os.getenv("GOOGLE_CLOUD_PROJECT"):
         try:
             from google.cloud import secretmanager
@@ -380,85 +357,58 @@ handler: Optional["WebhookHandler"] = None
 def _ensure_api() -> Optional["MessagingApi"]:
     global configuration_cached, api_client_cached, messaging_api_cached
     try:
-        if messaging_api_cached:
-            return messaging_api_cached
-        if not LINE_CHANNEL_ACCESS_TOKEN:
-            return None
+        if messaging_api_cached: return messaging_api_cached
+        if not LINE_CHANNEL_ACCESS_TOKEN: return None
         configuration_cached = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
         api_client_cached = ApiClient(configuration_cached)
         messaging_api_cached = MessagingApi(api_client_cached)
         return messaging_api_cached
     except Exception as e:
-        logger.error(f"MessagingApi init failed: {e}")
-        return None
+        logger.error(f"MessagingApi init failed: {e}"); return None
 
 if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
     try:
-        handler = WebhookHandler(LINE_CHANNEL_SECRET)
-        _ensure_api()
+        handler = WebhookHandler(LINE_CHANNEL_SECRET); _ensure_api()
         logger.info("✅ LINE handler initialized")
     except Exception as e:
-        logger.error(f"LINE handler init error: {e}")
-        handler = None
+        logger.error(f"LINE handler init error: {e}"); handler = None
 
 # ======================================================================
 # 送信ヘルパー
 # ======================================================================
 def _reply_or_push(reply_token: str, user_id: str, text: str) -> bool:
-    """まず reply、だめなら push。"""
     api = _ensure_api()
-    if not api:
-        logger.error("MessagingApi not ready")
-        return False
-
-    # 重複防止（同一ユーザーに同一テキストを瞬時多重送信しない）
-    if dup_guard.seen(user_id, f"out:{text[:64]}"):
-        return True
-
+    if not api: logger.error("MessagingApi not ready"); return False
+    if dup_guard.seen(user_id, f"out:{text[:64]}"): return True
     try:
         try:
-            api.reply_message_with_http_info(
-                ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=text)])
-            )
+            api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=text)]))
             return True
         except ApiException as e:
             if "Invalid reply token" in str(e) or getattr(e, "status", None) == 400:
-                api.push_message_with_http_info(
-                    PushMessageRequest(to=user_id, messages=[TextMessage(text=text)])
-                )
-                return True
-            logger.error(f"LINE reply failed: {e}")
-            return False
+                api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[TextMessage(text=text)])); return True
+            logger.error(f"LINE reply failed: {e}"); return False
     except Exception as e:
-        logger.error(f"LINE send failed: {e}")
-        return False
+        logger.error(f"LINE send failed: {e}"); return False
 
 def _push(user_id: str, text: str) -> bool:
     api = _ensure_api()
-    if not api:
-        logger.error("MessagingApi not ready")
-        return False
-    if dup_guard.seen(user_id, f"out:{text[:64]}"):
-        return True
+    if not api: logger.error("MessagingApi not ready"); return False
+    if dup_guard.seen(user_id, f"out:{text[:64]}"): return True
     try:
-        api.push_message_with_http_info(
-            PushMessageRequest(to=user_id, messages=[TextMessage(text=text)])
-        )
-        return True
+        api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[TextMessage(text=text)])); return True
     except Exception as e:
-        logger.error(f"LINE push failed: {e}")
-        return False
+        logger.error(f"LINE push failed: {e}"); return False
 
 # ======================================================================
 # 同意チェック（AI相談の時だけ使う）
 # ======================================================================
 import httpx
-
 PORT = os.getenv("PORT", "8080")
 SELF_BASE = os.getenv("INTERNAL_BASE_URL", f"http://127.0.0.1:{PORT}")
 
 def _has_consent_sync(user_id: str) -> bool:
-    """/consent/check を叩いて同意済みか確認（失敗時は False を返す＝安全側）"""
+    """ /consent/check を叩いて同意済みか確認（失敗時は False を返す＝安全側） """
     try:
         with httpx.Client(timeout=5.0) as client:
             r = client.post(f"{SELF_BASE}/consent/check", json={"user_id": user_id})
@@ -468,47 +418,38 @@ def _has_consent_sync(user_id: str) -> bool:
         logger.warning(f"consent check failed: {e}")
     return False
 
-NOT_CONSENT_MSG = (
-    "ご利用前に同意が必要です。\n"
-    "以下のボタンから同意ページを開いてください。\n\n"
-    f"{consent_link}"
-)
+# --- 追加：未同意メッセージ（ユーザー別リンクを埋め込み） ---
+def _not_consent_msg_for(user_id: str) -> str:
+    link = _build_consent_link_for(user_id)
+    return (
+        "ご利用前に同意が必要です。\n"
+        "以下のボタンから同意ページを開いてください。\n\n"
+        f"{link}"
+    )
 
 # ======================================================================
 # バックグラウンド・ワーカー
 # ======================================================================
 def _worker_finance(user_id: str, user_text: str):
-    """資金計画：重い計算は別スレッドで実行し、最終結果は push"""
     try:
         run_financial_plan = _resolve_financial_if_needed()
         if run_financial_plan is None:
-            _push(user_id, "資金診断を準備中です。時間をおいてお試しください。")
-            return
-        try:
-            import inspect, asyncio
-            if inspect.iscoroutinefunction(run_financial_plan):
-                result = asyncio.run(run_financial_plan(user_text))
-            else:
-                result = run_financial_plan(user_text)
-        except Exception as e:
-            logger.error(f"financial_plan error: {e}")
-            result = "うまく処理できませんでした。必要項目（年収・毎月返済額・借入期間・家族構成・その他負担）をもう一度教えてください。"
+            _push(user_id, "資金診断を準備中です。時間をおいてお試しください。"); return
+        import inspect, asyncio
+        result = asyncio.run(run_financial_plan(user_text)) if inspect.iscoroutinefunction(run_financial_plan) else run_financial_plan(user_text)
         _push(user_id, _strip_citations(result or "").strip() or "結果を作成できませんでした。")
     except Exception as e:
         logger.error(f"_worker_finance fatal: {e}")
 
 def _worker_ai(user_id: str, user_text: str):
-    """AI相談：RAG で回答し、最終結果は push"""
     try:
         rag_fn = _resolve_rag_if_needed()
         if rag_fn is None:
-            _push(user_id, "AI相談の準備中です。時間をおいてお試しください。")
-            return
+            _push(user_id, "AI相談の準備中です。時間をおいてお試しください。"); return
         try:
             answer, _ = rag_fn(user_text)
         except Exception as e:
-            logger.error(f"RAG error: {e}")
-            answer = "該当情報が見つかりませんでした。別の聞き方でお試しください。"
+            logger.error(f"RAG error: {e}"); answer = "該当情報が見つかりませんでした。別の聞き方でお試しください。"
         _push(user_id, _strip_citations(answer or "").strip() or "回答を作成できませんでした。")
     except Exception as e:
         logger.error(f"_worker_ai fatal: {e}")
@@ -518,32 +459,27 @@ def _worker_ai(user_id: str, user_text: str):
 # ======================================================================
 @router.post("/line/webhook")
 async def line_webhook(request: Request, background_tasks: BackgroundTasks):
-    # SDK/秘密鍵が未設定でも 200 を返す
     try:
         body = await request.body()
         signature = request.headers.get("X-Line-Signature") or request.headers.get("x-line-signature") or ""
         if handler:
-            # 即ACK（処理はバックグラウンドに回す）
             background_tasks.add_task(handler.handle, body.decode("utf-8"), signature)
         return JSONResponse({"status": "ok", "ts": datetime.now().isoformat()})
     except Exception as e:
         logger.error(f"webhook error: {e}")
-        # 失敗しても 200 を返す（再送ループ防止）
         return JSONResponse({"status": "ok", "note": "handled with error"}, status_code=200)
 
 # ======================================================================
-# イベントハンドラ（reply→push 方針）
-#   ※ フォロー時は同意ゲートなし（リッチメニューは常に反応）
-#   ※ 「AI相談」だけ同意ゲートを掛ける
+# イベントハンドラ（reply→push 方針）—— AI相談だけ同意ゲート
 # ======================================================================
 if LINE_SDK_AVAILABLE and handler:
+    from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent, FollowEvent
+
     @handler.add(FollowEvent)
     def on_follow(event):
         try:
             user_id = event.source.user_id
-            if dup_guard.seen(user_id, f"follow:{user_id}"):
-                return
-            # フォロー挨拶は常に出す（AI相談は後でゲート）
+            if dup_guard.seen(user_id, f"follow:{user_id}"): return
             _reply_or_push(event.reply_token, user_id, RICHMENU_FIXED_RESPONSES["follow_greeting"])
         except Exception as e:
             logger.error(f"follow handler error: {e}")
@@ -554,46 +490,31 @@ if LINE_SDK_AVAILABLE and handler:
             user_id = event.source.user_id
             text = (event.message.text or "").strip()
             reply_token = event.reply_token
+            if dup_guard.seen(user_id, f"in:{text[:64]}"): return
 
-            if dup_guard.seen(user_id, f"in:{text[:64]}"):
-                return
-
-            # まずはリッチメニュー文言／別メニューを即時反応
             key = None
-            if text in RICHMENU_FIXED_RESPONSES:
-                key = text
+            if text in RICHMENU_FIXED_RESPONSES: key = text
             else:
                 for k, mapped in RICHMENU_KEYWORD_MAPPING.items():
-                    if k in text:
-                        key = mapped
-                        break
+                    if k in text: key = mapped; break
 
             if key:
-                # 「AI相談」だけ同意ゲート
                 if key == "AI相談":
                     if not _has_consent_sync(user_id):
-                        _reply_or_push(reply_token, user_id, NOT_CONSENT_MSG)
-                        return
+                        _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id)); return
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
-                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
-                return
+                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key]); return
 
-            # セッションモードで処理
             mode = sessions.get_mode(user_id)
-
             if mode == "finance":
                 _reply_or_push(reply_token, user_id, "📊 試算中です。少しお待ちください…")
-                threading.Thread(target=_worker_finance, args=(user_id, text), daemon=True).start()
-                return
-
+                threading.Thread(target=_worker_finance, args=(user_id, text), daemon=True).start(); return
             if mode == "ai":
                 _reply_or_push(reply_token, user_id, "🔎 少しお待ちください…")
-                threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start()
-                return
+                threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start(); return
 
-            # 既定（ガイド）
             fallback = (
                 "ご質問ありがとうございます😊\n\n"
                 "目的のボタンをタップしてください👇\n"
@@ -603,10 +524,8 @@ if LINE_SDK_AVAILABLE and handler:
             _reply_or_push(reply_token, user_id, fallback)
         except Exception as e:
             logger.error(f"message handler error: {e}")
-            try:
-                _reply_or_push(event.reply_token, event.source.user_id, "一時的にエラーが発生しました。時間をおいてお試しください。")
-            except Exception:
-                pass
+            try: _reply_or_push(event.reply_token, event.source.user_id, "一時的にエラーが発生しました。時間をおいてお試しください。")
+            except Exception: pass
 
     @handler.add(PostbackEvent)
     def on_postback(event):
@@ -614,38 +533,29 @@ if LINE_SDK_AVAILABLE and handler:
             user_id = event.source.user_id
             data = (event.postback.data or "").strip()
             reply_token = event.reply_token
+            if dup_guard.seen(user_id, f"post:{data[:64]}"): return
 
-            if dup_guard.seen(user_id, f"post:{data[:64]}"):
-                return
-
-            # Postback data から action を拾う（例：action=ai_chat）
             key = None
-            if data in RICHMENU_FIXED_RESPONSES:
-                key = data
+            if data in RICHMENU_FIXED_RESPONSES: key = data
             elif "action=" in data:
                 for part in data.split("&"):
                     if part.startswith("action="):
                         act = part.split("=", 1)[1]
-                        if act in RICHMENU_KEYWORD_MAPPING:
-                            key = RICHMENU_KEYWORD_MAPPING[act]
-                        elif act in RICHMENU_FIXED_RESPONSES:
-                            key = act
+                        if act in RICHMENU_KEYWORD_MAPPING: key = RICHMENU_KEYWORD_MAPPING[act]
+                        elif act in RICHMENU_FIXED_RESPONSES: key = act
                         break
 
             if key:
                 if key == "AI相談":
                     if not _has_consent_sync(user_id):
-                        _reply_or_push(reply_token, user_id, NOT_CONSENT_MSG)
-                        return
+                        _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id)); return
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
-                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
-                return
+                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key]); return
 
             _reply_or_push(
-                reply_token,
-                user_id,
+                reply_token, user_id,
                 "目的のボタンをタップしてください😊\n\n:robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :yen:資金計画 / :globe_with_meridians:サイト / :speech_balloon:チャット",
             )
         except Exception as e:
