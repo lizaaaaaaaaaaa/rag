@@ -1,16 +1,19 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI相談のご利用前の同意</title>
+  <!-- LIFFを使わない運用でも読み込みは無害。自動送信を使う場合に初期化します。 -->
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
+    :root { color-scheme: light dark; }
     body{font-family:system-ui,Roboto,'Hiragino Sans',Meiryo,sans-serif;margin:0;background:#f6f7f9}
     .wrap{max-width:560px;margin:40px auto;padding:24px;background:#fff;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.06)}
     h1{font-size:1.2rem;margin:0 0 12px}
     .small{color:#666}
     .btn{padding:.7rem 1rem;border:1px solid #ddd;border-radius:.7rem;background:#10b981;color:#fff;cursor:pointer}
+    .btn[disabled]{opacity:.6;cursor:wait}
     .chk{margin:.25rem 0}
   </style>
 </head>
@@ -28,83 +31,140 @@
   </div>
 
   <script>
-    // ===== 設定 =====
-    // なくても動きますが、同意後に自動で「AI相談」を送信して LIFF を閉じるために設定推奨
-    const LIFF_ID = "YOUR_CONSENT_LIFF_ID";
-    // consent_gate 側のスコープ名
+    // =========================
+    // 設定
+    // =========================
+    // ★ LIFF を使わない（=確実に400を避ける）なら空文字のままにしてください。
+    // ★ 同意後に自動で「AI相談」を送信してLIFFを閉じたい場合、公開済み＆Messaging API紐付けの LIFF ID を入れてください。
+    const LIFF_ID = "2007887876-vMNe74eX";
+
+    // consent_gate のスコープ名
     const SCOPE   = "ai_line";
 
-    // Bot から渡される個別リンクのクエリ。例）/liff/consent?user_token=Uxxxxxxxxxxxxx
-    const token = new URL(location.href).searchParams.get("user_token") || "";
+    // =========================
+    // クエリ解析（liff.state もサポート）
+    // =========================
+    const url = new URL(location.href);
+    const sp  = url.searchParams;
 
-    // DOM ユーティリティ
-    const $ = (s) => document.querySelector(s);
-    const note = (t) => { $("#msg").textContent = t };
+    // 直クエリ
+    let state        = sp.get("state");
+    let ab           = sp.get("ab");
+    let utm_campaign = sp.get("utm_campaign");
+    let token        = sp.get("user_token") || "";  // Botからの個別リンク想定
 
-    // 共通 POST
-    async function postJSON(url, body){
-      return fetch(url, {
+    // state 等が空なら、liff.state="?state=...&ab=...&utm_campaign=..." を展開して補完
+    (function hydrateFromLiffState(){
+      const ls = sp.get("liff.state");
+      if (!ls) return;
+      const inner = new URLSearchParams(ls.startsWith("?") ? ls.slice(1) : ls);
+      state        = state        || inner.get("state");
+      ab           = ab           || inner.get("ab");
+      utm_campaign = utm_campaign || inner.get("utm_campaign");
+      token        = token        || inner.get("user_token"); // 念のため
+    })();
+
+    // 便利ユーティリティ
+    const $  = (s) => document.querySelector(s);
+    const msg= (t) => { $("#msg").textContent = t; };
+
+    // 共通POST（user_token は Header 優先）
+    async function postJSON(path, body){
+      return fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token && {"user_token": token}) },
         body: JSON.stringify(body)
       });
     }
 
-    // すでに同意済みなら即終了
+    // =========================
+    // 同意済みスキップ
+    // =========================
     async function initialCheck(){
-      if(!token){ note("リンクが無効です。公式LINEのメッセージから開き直してください。"); return false; }
+      if(!token){
+        msg("リンクが無効です。公式LINEのメッセージから開き直してください。");
+        return false;
+      }
       try{
         const r = await postJSON("/consent/check", { scope: SCOPE });
         const j = await r.json().catch(()=> ({}));
-        if(j && (j.valid || j.is_valid)){ await afterAgree(); return true; }
-      }catch(e){}
+        if(j && (j.valid || j.is_valid)){
+          await afterAgree();  // 既に同意済み → 以降の処理へ
+          return true;
+        }
+      }catch(e){
+        // ネットワーク等は黙殺（ユーザー操作で継続できるため）
+      }
       return false;
     }
 
-    // 同意後の処理（可能なら AI相談 を自動送信→ウィンドウを閉じる）
+    // =========================
+    // 同意後の処理
+    // =========================
     async function afterAgree(){
       try{
-        try{
-          if(LIFF_ID){ await liff.init({ liffId: LIFF_ID }); }
-          if(typeof liff.sendMessages === "function"){
-            await liff.sendMessages([{ type:"text", text:"AI相談" }]);
+        // LIFFを利用する運用の場合のみ初期化→「AI相談」自動送信→ウィンドウ閉じ
+        if (LIFF_ID) {
+          try { await liff.init({ liffId: LIFF_ID }); } catch(_) {}
+          if (typeof liff.sendMessages === "function") {
+            try { await liff.sendMessages([{ type:"text", text:"AI相談" }]); } catch(_) {}
           }
-        }catch(e){}
-        try{ liff.closeWindow && liff.closeWindow(); }
-        catch(e){ note("同意しました。トーク画面に戻って「AI相談」を押してください。"); }
-      }catch(e){}
+          try { liff.closeWindow && liff.closeWindow(); } catch(_) {}
+        } else {
+          // LIFF不使用の運用：メッセージで案内
+          msg("同意が完了しました。トーク画面に戻って「AI相談」を押してください。");
+        }
+      } catch (_) {}
     }
 
-    // 「同意して開始」
+    // =========================
+    // 送信ハンドラ
+    // =========================
     $("#agree").addEventListener("click", async ()=>{
       if(!($("#c1").checked && $("#c2").checked && $("#c3").checked)){
-        note("すべてにチェックを入れてください。");
+        msg("すべてにチェックを入れてください。");
         return;
       }
-      if(!token){ note("リンクが無効です。"); return; }
+      if(!token){
+        msg("リンクが無効です。公式LINEのメッセージから開き直してください。");
+        return;
+      }
 
-      note("送信中…");
+      $("#agree").disabled = true;
+      msg("送信中…");
+
       try{
         const res = await postJSON("/consent/save", {
-          // consent_gate のモデルに合わせたペイロード
-          consent_id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
-          user_id: token,                   // ← Headerの user_token でも認識されますが、冗長に body にも入れておきます
-          liff_id: LIFF_ID || null,
+          // consent_gate の想定フィールドを包括的に送付（Headerの user_token と二重指定）
+          user_id: token,
+          scope: SCOPE,
+          consented: true,
           consented_at: new Date().toISOString(),
+          liff_id: LIFF_ID || null,
           policy_version: "latest",
           tos_version: "latest",
-          flags: { pp:true, tos:true, cookie:true, ai_limits:true, xfer:true },
-          locale: navigator.language || "ja",
-          source: "line_liff_consent"
+          meta: {
+            state, ab, utm_campaign,
+            ua: navigator.userAgent,
+            locale: navigator.language || "ja",
+            source: "line_liff_consent"
+          },
+          flags: { pp:true, tos:true, ai_limits:true }
         });
-        if(res.ok){ await afterAgree(); }
-        else { note("保存に失敗しました。時間をおいてお試しください。"); }
+
+        if(res.ok){
+          await afterAgree();
+        }else{
+          msg("保存に失敗しました。時間をおいてお試しください。");
+          $("#agree").disabled = false;
+        }
       }catch(e){
-        note("通信エラーです。電波状況をご確認ください。");
+        msg("通信エラーです。電波状況をご確認ください。");
+        $("#agree").disabled = false;
       }
     });
 
-    // 起動時に同意済みチェック
+    // 初期同意チェック起動
     initialCheck();
   </script>
 </body>
