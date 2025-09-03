@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>公式LINE 友だち追加</title>
+  <title>公式LINE 同意と友だち追加</title>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial;line-height:1.7;margin:0;background:#f6f7f9}
-    .wrap{max-width:560px;margin:40px auto;padding:24px;background:#fff;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.06);text-align:center}
-    .small{font-size:.9rem;color:#666}
+    .wrap{max-width:640px;margin:40px auto;padding:24px;background:#fff;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.06)}
+    h1{font-size:1.25rem;margin:0 0 8px} .small{font-size:.9rem;color:#666}
+    .hidden{display:none} .btn{display:inline-block;padding:.75rem 1rem;border-radius:.75rem;border:1px solid #ddd;cursor:pointer}
   </style>
 </head>
 <body>
@@ -18,20 +19,32 @@
       開かない場合は数秒待ってから自動でリトライします。<br>
       それでも開かないときは <a id="manualLink" href="#">こちら</a> を押してください。
     </p>
+
+    <!-- 未同意時にこのフォームを表示（インライン同意） -->
+    <div id="consentForm" class="hidden">
+      <h1>ご利用前の同意のお願い</h1>
+      <p class="small">以下をご確認のうえ、チェックを入れて「同意して開始」を押してください。</p>
+      <label><input type="checkbox" id="chk1"> プライバシーポリシーに同意します</label><br/>
+      <label><input type="checkbox" id="chk2"> 利用規約に同意します</label><br/>
+      <label><input type="checkbox" id="chk3"> AIの回答は必ずしも正確でないことを理解しました</label><br/><br/>
+      <button id="agreeBtn" class="btn">同意して開始</button>
+      <p class="small">※ 同意はLINE内のAI相談にのみ適用されます。</p>
+    </div>
   </div>
 
   <script>
-    /*** ← ここを環境に合わせて設定 ***/
-    const LINE_BASIC_ID = "487urklv";  // 例: "487urklv"（@は付けない）
-    const LIFF_ID       = "2007887876-vMNe74eX";              // 例: "2007-xxxx"
-    const CHAT_URL      = "/liff/chat";                // 同意済みはここへ直行
-    const CONSENT_FORM  = "/liff/consent_form";        // 未同意はここで3チェック→/consent/save
-    const CONSENT_SCOPE = "ai_line";                   // サーバ側の同意スコープ名
+    /*** 設定（環境に合わせて変更） ***/
+    const LINE_BASIC_ID = "487urklv";                 // @なし
+    const LIFF_ID       = "2007887876-vMNe74eX";      // あなたの LIFF ID
+    const CHAT_URL      = "/liff/chat";               // 同意済みはここへ直行
+    const CONSENT_SCOPE = "ai_line";                  // サーバ側の同意スコープ名
 
+    /*** 友だち追加リンク ***/
     const addInApp = `line://ti/p/@${LINE_BASIC_ID}`;
     const addOnWeb = `https://line.me/R/ti/p/%40${LINE_BASIC_ID}`;
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+    /*** util: SHA256(userId) を user_hash として使う ***/
     async function sha256Hex(str){
       const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
       return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
@@ -45,6 +58,7 @@
       }catch{return null}
     }
 
+    /*** 同意チェック ***/
     async function checkConsentAndRedirect(){
       try{
         if(!liff.isLoggedIn()){ liff.login({ redirectUri: location.href }); return true; }
@@ -54,11 +68,10 @@
         const userHash = await getUserHash();
         if(!userHash) return false;
 
-        // GET (header) → NGなら POST(body) でフォールバック
         let ok = false;
         try{
           const r1 = await fetch(`/consent/check?scope=${encodeURIComponent(CONSENT_SCOPE)}`, {
-            method:"GET", headers:{ "X-User-Hash": await userHash }
+            method:"GET", headers:{ "X-User-Hash": userHash }
           });
           if(r1.ok){ const j=await r1.json().catch(()=>({})); ok = j?.valid||j?.is_valid||j?.status==="ok"; }
         }catch{}
@@ -66,16 +79,22 @@
           try{
             const r2 = await fetch(`/consent/check`, {
               method:"POST", headers:{ "Content-Type":"application/json" },
-              body: JSON.stringify({ scope: CONSENT_SCOPE, user_hash: await userHash })
+              body: JSON.stringify({ scope: CONSENT_SCOPE, user_hash: userHash })
             });
             if(r2.ok){ const j=await r2.json().catch(()=>({})); ok = j?.valid||j?.is_valid||j?.status==="ok"; }
           }catch{}
         }
-        location.replace(ok ? CHAT_URL : CONSENT_FORM);
+        if(ok){
+          location.replace(CHAT_URL);   // ★ 同意済み → チャットへ
+        }else{
+          // ★ 未同意 → 同ページ内のフォームを表示
+          document.getElementById("consentForm").classList.remove("hidden");
+        }
         return true;
       }catch{ return false }
     }
 
+    /*** 友だち追加を起動 ***/
     function openAddFriend(){
       if(liff.isInClient()){
         liff.openWindow({ url: addInApp, external: false });
@@ -84,19 +103,57 @@
       }
     }
 
+    /*** 同意送信（/consent/save） ***/
+    async function submitConsent(){
+      const c1 = document.getElementById("chk1").checked;
+      const c2 = document.getElementById("chk2").checked;
+      const c3 = document.getElementById("chk3").checked;
+      if(!(c1 && c2 && c3)){ alert("すべてにチェックを入れてください。"); return; }
+
+      const userHash = await getUserHash();
+      if(!userHash){ alert("ユーザー確認に失敗しました。LINEで開き直してください。"); return; }
+
+      try{
+        const res = await fetch("/consent/save", {
+          method:"POST",
+          headers:{ "Content-Type":"application/json", "X-User-Hash": userHash },
+          body: JSON.stringify({
+            scope: CONSENT_SCOPE,
+            user_hash: userHash,
+            consented: true,
+            timestamp: new Date().toISOString()
+          })
+        });
+        if(res.ok){
+          location.replace(CHAT_URL);
+        }else{
+          alert("同意の保存に失敗しました（あとで再試行してください）。");
+        }
+      }catch(e){
+        alert("ネットワークエラーが発生しました。電波状況をご確認ください。");
+      }
+    }
+
     (async()=>{
       try{ await liff.init({ liffId: LIFF_ID }); }catch{}
+      // 先に同意＆友だち状態をチェック
       const jumped = await checkConsentAndRedirect();
-      if(jumped) return;          // 友だち＋同意済みはここで終了
-
-      openAddFriend();            // 未友だち → 友だち追加を自動起動
-      for(let i=0;i<6;i++){       // 5秒間隔×最大30秒で自動再チェック
-        await sleep(5000);
-        const done = await checkConsentAndRedirect();
-        if(done) return;
+      if(jumped) {
+        // 未友だちは自動起動して戻り待ち
+        if(document.getElementById("consentForm").classList.contains("hidden")){
+          openAddFriend();
+          for(let i=0;i<6;i++){
+            await sleep(5000);
+            const done = await checkConsentAndRedirect();
+            if(done) return;
+          }
+        }
       }
-      const a = document.getElementById("manualLink"); // 保険：手動リンク
+      // 手動リンク（保険）
+      const a = document.getElementById("manualLink");
       if(a) a.href = addOnWeb;
+
+      document.getElementById("agreeBtn").addEventListener("click", submitConsent);
     })();
   </script>
 </body>
