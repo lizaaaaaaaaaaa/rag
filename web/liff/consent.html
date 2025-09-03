@@ -7,54 +7,97 @@
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial;line-height:1.7;margin:0;background:#f6f7f9}
-    .wrap{max-width:560px;margin:40px auto;padding:24px;background:#fff;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.06)}
-    h1{font-size:1.35rem;margin:0 0 6px}
-    p.note{color:#666;margin:.2rem 0 1rem}
-    .btn{display:block;width:100%;padding:14px 16px;border:0;border-radius:10px;font-weight:700}
-    .primary{background:#06c755;color:#fff}
-    .ghost{background:#eef7f0;color:#0a6d33;margin-top:10px}
-    .tips{font-size:.9rem;color:#666;margin-top:14px}
-    .id{font-family:ui-monospace,Menlo,Consolas,monospace}
+    .wrap{max-width:560px;margin:40px auto;padding:24px;background:#fff;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.06);text-align:center}
+    .small{font-size:.9rem;color:#666}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>公式LINE を友だち追加</h1>
-    <p class="note">ボタンを押すと公式アカウントの追加画面を開きます。</p>
-
-    <!-- ★ ここだけ差し替え（@を付けない） -->
-    <script>const LINE_BASIC_ID = "yourbasicid";</script>
-
-    <button id="addBtn" class="btn primary">LINEアプリで友だち追加</button>
-    <button id="addWebBtn" class="btn ghost">ブラウザで友だち追加</button>
-
-    <p class="tips">※ 追加済みの方は、そのままトーク画面からご相談いただけます。<br>
-      公式アカウント：<span class="id">@<span id="basicId"></span></span></p>
+    <h1>公式LINE を友だち追加しています…</h1>
+    <p class="small">
+      開かない場合は数秒待ってから自動でリトライします。<br>
+      それでも開かないときは <a id="manualLink" href="#">こちら</a> を押してください。
+    </p>
   </div>
 
   <script>
-    const $ = s => document.querySelector(s);
+    /*** ← ここを環境に合わせて設定 ***/
+    const LINE_BASIC_ID = "487urklv";  // 例: "487urklv"（@は付けない）
+    const LIFF_ID       = "2007887876-vMNe74eX";              // 例: "2007-xxxx"
+    const CHAT_URL      = "/liff/chat";                // 同意済みはここへ直行
+    const CONSENT_FORM  = "/liff/consent_form";        // 未同意はここで3チェック→/consent/save
+    const CONSENT_SCOPE = "ai_line";                   // サーバ側の同意スコープ名
+
     const addInApp = `line://ti/p/@${LINE_BASIC_ID}`;
     const addOnWeb = `https://line.me/R/ti/p/%40${LINE_BASIC_ID}`;
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-    $('#basicId').textContent = LINE_BASIC_ID;
-
-    async function openInApp(){
+    async function sha256Hex(str){
+      const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+      return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
+    }
+    async function getUserHash(){
       try{
-        if (typeof liff !== 'undefined') {
-          await liff.init({ liffId: "dummy-for-open" }).catch(()=>{});
-          if (liff.isInClient()){
-            await liff.openWindow({ url: addInApp, external: false });
-            return;
-          }
-        }
-      }catch(_){}
-      // フォールバック（外部ブラウザなど）
-      location.href = addOnWeb;
+        const prof = await liff.getProfile().catch(()=>null);
+        const idt  = liff.getDecodedIDToken?.();
+        const uid = (prof && prof.userId) || (idt && idt.sub);
+        return uid ? sha256Hex(`line:${uid}`) : null;
+      }catch{return null}
     }
 
-    $('#addBtn').addEventListener('click', openInApp);
-    $('#addWebBtn').addEventListener('click', ()=>location.href = addOnWeb);
+    async function checkConsentAndRedirect(){
+      try{
+        if(!liff.isLoggedIn()){ liff.login({ redirectUri: location.href }); return true; }
+        const f = await liff.getFriendship().catch(()=>null);
+        if(!f || !f.friendFlag) return false; // まだ友だちじゃない
+
+        const userHash = await getUserHash();
+        if(!userHash) return false;
+
+        // GET (header) → NGなら POST(body) でフォールバック
+        let ok = false;
+        try{
+          const r1 = await fetch(`/consent/check?scope=${encodeURIComponent(CONSENT_SCOPE)}`, {
+            method:"GET", headers:{ "X-User-Hash": await userHash }
+          });
+          if(r1.ok){ const j=await r1.json().catch(()=>({})); ok = j?.valid||j?.is_valid||j?.status==="ok"; }
+        }catch{}
+        if(!ok){
+          try{
+            const r2 = await fetch(`/consent/check`, {
+              method:"POST", headers:{ "Content-Type":"application/json" },
+              body: JSON.stringify({ scope: CONSENT_SCOPE, user_hash: await userHash })
+            });
+            if(r2.ok){ const j=await r2.json().catch(()=>({})); ok = j?.valid||j?.is_valid||j?.status==="ok"; }
+          }catch{}
+        }
+        location.replace(ok ? CHAT_URL : CONSENT_FORM);
+        return true;
+      }catch{ return false }
+    }
+
+    function openAddFriend(){
+      if(liff.isInClient()){
+        liff.openWindow({ url: addInApp, external: false });
+      }else{
+        location.href = addOnWeb;
+      }
+    }
+
+    (async()=>{
+      try{ await liff.init({ liffId: LIFF_ID }); }catch{}
+      const jumped = await checkConsentAndRedirect();
+      if(jumped) return;          // 友だち＋同意済みはここで終了
+
+      openAddFriend();            // 未友だち → 友だち追加を自動起動
+      for(let i=0;i<6;i++){       // 5秒間隔×最大30秒で自動再チェック
+        await sleep(5000);
+        const done = await checkConsentAndRedirect();
+        if(done) return;
+      }
+      const a = document.getElementById("manualLink"); // 保険：手動リンク
+      if(a) a.href = addOnWeb;
+    })();
   </script>
 </body>
 </html>
