@@ -1,67 +1,86 @@
-# api/routers/liff_pages.py
-# LIFF ランディング：/liff → /liff/consent に誘導（クエリは引き継ぎ）
-# - web/liff/add.html / consent.html / index.html を返却
-# - __LINE_BASIC_ID__ / __LIFF_ID__ を環境変数からプレーン置換（超軽量）
-# - 既存の設計を維持し、処理を増やさず速度を落とさない
+# api/routers/liff_pages.py — HTML 介さない超軽量版
+# /liff/add      : Web CTA → LINE Login に 302（bot_prompt=aggressive で友だち追加促進）
+# /liff/callback : Login 後 → 友だち追加 URL に 302
+# /liff/consent  : LIFF 同意アプリに 302（state/ab/UTM 等を引き継ぐ）
+# /liff[/]       : 互換用。/liff/consent へ 302
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
-from pathlib import Path
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import RedirectResponse, PlainTextResponse
 from urllib.parse import urlencode
 import os
 
 router = APIRouter(prefix="/liff", tags=["liff"])
 
-BASE_DIR = Path(__file__).resolve().parents[2]  # プロジェクト直下
-WEB_DIR = BASE_DIR / "web" / "liff"
+# 環境値（PUBLIC_BASE_URL は設定推奨。無い場合は PUBLIC_API_BASE をフォールバック）
+PUBLIC_BASE_URL     = (os.getenv("PUBLIC_BASE_URL") or os.getenv("PUBLIC_API_BASE") or "").rstrip("/")
+LINE_BASIC_ID       = os.getenv("LINE_BASIC_ID", "").lstrip("@")  # '@abcd' → 'abcd'
+LINE_LOGIN_ID       = os.getenv("LINE_LOGIN_CHANNEL_ID", os.getenv("LINE_LOGIN_CLIENT_ID", ""))
+LINE_LOGIN_REDIRECT = os.getenv("LINE_LOGIN_REDIRECT_URI", f"{PUBLIC_BASE_URL}/liff/callback")
+LIFF_CONSENT_URL    = os.getenv("LIFF_CONSENT_URL", "").rstrip("/")  # 例: https://liff.line.me/165xxxxxxxxx
 
-# テンプレ差し込みに使用
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-LINE_BASIC_ID = os.getenv("LINE_BASIC_ID", "").lstrip("@")  # @はここで付与するので除去
-LIFF_ID = os.getenv("LIFF_ID", "")
+# ---- helpers -----------------------------------------------------------
+def _pick(q: dict, keys: list[str]) -> dict:
+    return {k: q.get(k) for k in keys if q.get(k)}
 
-def _merge_query(request: Request, extra: dict | None = None) -> str:
-    """受け取ったクエリをそのまま引き継ぎ、必要に応じて上書き結合"""
-    q = dict(request.query_params)
+def _forward_query(req: Request, extra: dict | None = None) -> str:
+    # UTM/state/ab は計測で使用。互換のため user_token/policy_version/scope も温存。
+    q = dict(req.query_params)
     if extra:
         q.update({k: v for k, v in extra.items() if v is not None})
-    return urlencode(q)
+    return urlencode(_pick(q, [
+        "state", "ab",
+        "utm_source", "utm_medium", "utm_campaign", "utm_content",
+        "user_token", "policy_version", "scope"
+    ]))
 
-def _inject_vars(html: str) -> str:
-    """静的HTMLに最低限の環境値を差し込む（文字列置換のみで超軽量）"""
-    return (
-        html.replace("__LINE_BASIC_ID__", f"@{LINE_BASIC_ID}" if LINE_BASIC_ID else "@unknown")
-            .replace("__LIFF_ID__", LIFF_ID or "")
-            .replace("__PUBLIC_BASE_URL__", PUBLIC_BASE_URL)
-    )
-
+# ---- routes ------------------------------------------------------------
 @router.get("")
 @router.get("/")
-async def liff_index(request: Request):
-    """
-    /liff に来たら /liff/consent へリダイレクト。
-    state / utm / user_token / policy_version 等はそのまま引き継ぐ。
-    """
-    qs = _merge_query(request)
-    return RedirectResponse(f"/liff/consent?{qs}" if qs else "/liff/consent")
+async def liff_root(request: Request):
+    # 互換: /liff に来たら consent へ 302
+    qs = _forward_query(request)
+    dest = "/liff/consent" + (f"?{qs}" if qs else "")
+    # 相対 → 完全URL へ（LINEアプリでのタップ不可を避ける）
+    if PUBLIC_BASE_URL:
+        dest = f"{PUBLIC_BASE_URL}{dest}"
+    return RedirectResponse(dest, status_code=302)
 
-@router.get("/add", response_class=HTMLResponse)
-async def show_add():
-    """友だち追加ページ（静的 + 置換）"""
-    html = (WEB_DIR / "add.html").read_text(encoding="utf-8")
-    return HTMLResponse(_inject_vars(html))
+@router.get("/add")
+async def liff_add(request: Request):
+    """Web CTA：LINE Login へ 302。ログイン後は /liff/callback へ戻す。"""
+    if not LINE_LOGIN_ID or not LINE_LOGIN_REDIRECT:
+        # 最小フォールバック：設定不足時は友だち追加画面に直送
+        if not LINE_BASIC_ID:
+            raise HTTPException(500, "LINE settings are missing (LOGIN_ID/BASIC_ID).")
+        return RedirectResponse(f"https://line.me/R/ti/p/@{LINE_BASIC_ID}", status_code=302)
 
-@router.get("/consent", response_class=HTMLResponse)
-async def show_consent():
-    """同意ページ（静的 + 置換）"""
-    html = (WEB_DIR / "consent.html").read_text(encoding="utf-8")
-    return HTMLResponse(_inject_vars(html))
+    qs_keep = _forward_query(request) or "liff_add"
+    authorize = "https://access.line.me/oauth2/v2.1/authorize?" + urlencode({
+        "response_type": "code",
+        "client_id": LINE_LOGIN_ID,
+        "redirect_uri": LINE_LOGIN_REDIRECT,
+        "state": qs_keep,               # 元の UTM/state/ab をまるごと保持
+        "scope": "profile openid",
+        "bot_prompt": "aggressive",     # 友だち追加を促す
+        "prompt": "consent",
+    })
+    return RedirectResponse(authorize, status_code=302)
 
-# 既存の /liff/index.html を残している場合の互換
-@router.get("/index.html", response_class=HTMLResponse)
-async def legacy_index():
-    p = WEB_DIR / "index.html"
-    if p.exists():
-        return HTMLResponse(_inject_vars(p.read_text(encoding="utf-8")))
-    # 無ければ consent へ
-    return RedirectResponse("/liff/consent")
+@router.get("/callback")
+async def liff_add_callback(_: Request):
+    """LINE Login のコールバック：友だち追加ページ/アプリに 302。"""
+    if not LINE_BASIC_ID:
+        return PlainTextResponse("Missing LINE_BASIC_ID", status_code=500)
+    # モバイルはアプリ遷移、PCはWeb画面
+    return RedirectResponse(f"https://line.me/R/ti/p/@{LINE_BASIC_ID}", status_code=302)
+
+@router.get("/consent")
+async def liff_consent_redirect(request: Request):
+    """未同意ユーザーを LIFF 同意アプリへ 302（UTM 等はそのまま付与）。"""
+    if not LIFF_CONSENT_URL:
+        # 未設定時は最低限のフォールバック（自社のポリシーへ）
+        fallback = f"{PUBLIC_BASE_URL}/privacy" if PUBLIC_BASE_URL else "/privacy"
+        return RedirectResponse(fallback, status_code=302)
+    qs = _forward_query(request)
+    url = LIFF_CONSENT_URL + (("?" + qs) if qs else "")
+    return RedirectResponse(url, status_code=302)

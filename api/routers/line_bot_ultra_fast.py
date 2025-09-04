@@ -1,6 +1,6 @@
 # api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版 + after-consent エンドポイント
 # - リッチメニューは同意がなくても反応（文面は変更しない）
-# - 「AI相談」だけ /consent/check を叩き、未同意なら **ユーザー別** 同意URL（/liff/consent?user_token=U...）を案内
+# - 「AI相談」だけ /consent/check を叩き、未同意なら **ユーザー別** 同意URLを案内（完全URLで送付）
 # - Webhook は常に 200 を返す（LINE の再送ループ防止）
 # - RAG / 資金計画は別スレッドで push（応答遅延を防ぐ）
 # - 同意保存後に /line/after-consent で AI相談を自動開始（Push）
@@ -119,9 +119,14 @@ router = APIRouter(prefix="", tags=["line-ultra-fast"])
 # ======================================================================
 LINE_RESPONSE_TIMEOUT = int(os.getenv("LINE_RESPONSE_TIMEOUT", "12"))  # 既定12秒
 SESSION_TTL = int(os.getenv("SESSION_TTL_MINUTES", "30")) * 60
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+
+# ▼ PUBLIC_BASE_URL はあれば使う。無ければ PUBLIC_API_BASE をフォールバックに（安全側）
+PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("PUBLIC_API_BASE") or "").rstrip("/")
 if not PUBLIC_BASE_URL:
-    logger.warning("PUBLIC_BASE_URL is not set. Consent link generation will be incorrect.")
+    logger.warning("PUBLIC_BASE_URL is not set. Consent link generation may be relative.")
+
+# LIFF の同意用 URL（最優先で使用）
+LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").rstrip("/")
 
 # ======================================================================
 # 固定テンプレ（※リッチメニューの文面は変更しない）
@@ -401,8 +406,12 @@ def _has_consent_sync(user_id: str) -> bool:
         logger.warning(f"consent check failed: {e}")
     return False
 
-# --- ユーザー別「同意リンク」生成（/liff/consent に統一） ---
+# --- ユーザー別「同意リンク」生成（/liff/consent） ---
 def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
+    """
+    LIFF の完全URL（LIFF_CONSENT_URL）を最優先で使用。
+    無い場合は PUBLIC_BASE_URL(/liff/consent) を使い、相対URLは返さない。
+    """
     q = {"user_token": user_id}
     # ✅ デフォルトUTM（AI相談/LINEリッチメニュー流入をGA4で判別可能に）
     if not extra_qs:
@@ -417,7 +426,21 @@ def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> 
         v = extra_qs.get(k) if extra_qs else None
         if v:
             q[k] = v
-    return f"{PUBLIC_BASE_URL}/liff/consent?{urlencode(q)}"
+
+    public_base = PUBLIC_BASE_URL
+    base = ""
+    if LIFF_CONSENT_URL:
+        base = LIFF_CONSENT_URL
+    elif public_base:
+        base = f"{public_base}/liff/consent"
+    else:
+        base = "/liff/consent"  # 最低限のフォールバック
+
+    # 相対であれば、可能なら public_base を付けて完全URL化
+    if base.startswith("/") and public_base:
+        base = f"{public_base}{base}"
+
+    return f"{base}?{urlencode(q)}"
 
 def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
     link = _make_consent_link(user_id, extra_qs)
