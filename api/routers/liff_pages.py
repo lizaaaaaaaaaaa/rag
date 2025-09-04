@@ -1,102 +1,165 @@
-# api/routers/liff_pages.py
-from fastapi import APIRouter, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
-from urllib.parse import urlencode
+# api/routers/liff_pages.py — LIFF同意モーダル（単一ページ）版
+# - consent.html は使いません。/liff が LIFF 内でモーダルを描画します
+# - /liff/consent は liff.line.me の LIFF URL に 302 リダイレクト（クエリは全て維持）
+# - 法務リンクは PUBLIC_FRONT_BASE を使った絶対URLにして 404 によるハングを防止
+from __future__ import annotations
+
 import os
-from pathlib import Path
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-router = APIRouter()
+router = APIRouter(prefix="", tags=["liff"])
 
-# ---- 環境変数 ----
-LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").strip()  # 例: https://liff.line.me/2007887876-vMNe74eX
-LINE_BASIC_ID = os.getenv("LINE_BASIC_ID", "").strip()        # 例: @487urklv（@はあってもなくてもOK）
-POLICY_VERSION = os.getenv("POLICY_VERSION", "1.0.0").strip()
+# ====== 環境変数 ======
+LIFF_ID = os.getenv("LIFF_ID", "").strip()
+LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").strip()  # 例: https://liff.line.me/xxxx-yyyy
+PUBLIC_FRONT_BASE = os.getenv("PUBLIC_FRONT_BASE", "").rstrip("/")
+GA4_MEASUREMENT_ID = os.getenv("GA_MEASUREMENT_ID", "").strip()  # 任意（あれば自動挿入）
 
-# consent.html を読み込み（なければ最小ページを返す）
-CONSENT_HTML_PATH = Path(__file__).resolve().parents[2] / "web" / "liff" / "consent.html"
-_fallback_html = """<!doctype html><meta charset="utf-8"><title>Consent</title><p>このウィンドウを閉じてください。</p>"""
+def _abs(url_path: str) -> str:
+    """フロントの絶対URLを作る（/legal/privacy.html などを 404 にしない）"""
+    if not PUBLIC_FRONT_BASE:
+        return url_path
+    if url_path.startswith("http"):
+        return url_path
+    if not url_path.startswith("/"):
+        url_path = "/" + url_path
+    return f"{PUBLIC_FRONT_BASE}{url_path}"
 
-def load_consent_html() -> str:
-    try:
-        html = CONSENT_HTML_PATH.read_text(encoding="utf-8")
-    except Exception:
-        html = _fallback_html
-    # 置換：Basic ID と ポリシーバージョン
-    basic = LINE_BASIC_ID.lstrip("@")
-    html = html.replace("__LINE_BASIC_ID__", f"@{basic}")
-    # window.__POLICY_VERSION__ を埋め込む（なければ追加）
-    inject = f'<script>window.__POLICY_VERSION__="{POLICY_VERSION}";</script>'
-    if "</body>" in html:
-        html = html.replace("</body>", inject + "</body>")
-    else:
-        html += inject
-    return html
-
-def is_from_liff(request: Request) -> bool:
-    # 1) Referer が liff.line.me
-    ref = request.headers.get("referer", "")
-    if "liff.line.me" in ref:
-        return True
-    # 2) UA ヒューリスティック
-    ua = request.headers.get("user-agent", "").lower()
-    if "line" in ua or "liff" in ua:
-        return True
-    # 3) LIFF 由来の典型的なクエリ
-    qs = request.query_params
-    if "liffClientId" in qs or "liff.state" in qs or "liffRedirectUri" in qs:
-        return True
-    return False
-
-def build_external_liff_url(request: Request) -> str:
+# ------------------------------------------------------------
+# 1) /liff/consent: LIFF ランチャー（302）
+#    受け取ったクエリ（user_token, state, utm_* など）は丸ごと維持して LIFF へ転送
+# ------------------------------------------------------------
+@router.get("/liff/consent", response_class=RedirectResponse)
+def liff_consent_redirect(request: Request):
     if not LIFF_CONSENT_URL:
-        # 設定漏れ時は 500 を避け、最低限ウィンドウを閉じさせる
-        return "/liff"  # ダミー（実際は下の HTML を返すので使われない想定）
-    # 元のクエリ（user_token, utm, state, ab 等）を付け替え
-    return f"{LIFF_CONSENT_URL}?{request.query_params._dict and urlencode(list(request.query_params.multi_items()))}"
+        return JSONResponse({"detail": "LIFF_CONSENT_URL is not configured"}, status_code=500)
+    qs = str(request.query_params)          # そのまま引き継ぐ
+    url = f"{LIFF_CONSENT_URL}" + (f"?{qs}" if qs else "")
+    return RedirectResponse(url, status_code=302)
 
-def no_store_headers(resp: Response):
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-
-# --- ルート（LIFF の「エンドポイント URL」に設定している想定） ---
+# ------------------------------------------------------------
+# 2) /liff: LIFF ページ本体（同意モーダル内蔵）
+#    consent.html は使わず、JS でモーダルを出す → 同意POST → liff.closeWindow()
+# ------------------------------------------------------------
 @router.get("/liff", response_class=HTMLResponse)
 async def liff_root(request: Request):
-    if is_from_liff(request):
-        # ✅ LIFF 内：HTML をそのまま返す（リダイレクトしない）
-        html = load_consent_html()
-        resp = HTMLResponse(content=html, status_code=200)
-        no_store_headers(resp)
-        return resp
-    # 🌐 外部：LIFF へ 302
-    url = build_external_liff_url(request)
-    return RedirectResponse(url=url, status_code=302)
+    html = f"""<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI相談のご利用前の同意</title>
+  <!-- GA4（存在する場合のみ） -->
+  {'<script async src="https://www.googletagmanager.com/gtag/js?id='+GA4_MEASUREMENT_ID+'"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","'+GA4_MEASUREMENT_ID+'");</script>' if GA4_MEASUREMENT_ID else ''}
+  <!-- LIFF SDK -->
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    body{{font-family: system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial,'Noto Sans JP','Hiragino Kaku Gothic ProN',Meiryo,sans-serif;}}
+    .wrap{{padding:24px;}}
+    .title{{font-size:22px;font-weight:700;margin:8px 0 16px;}}
+    .note{{color:#666;font-size:14px;}}
+    .section{{margin-top:18px;line-height:1.9;}}
+    .btn{{margin-top:20px;display:inline-block;padding:12px 18px;border-radius:8px;border:none;background:#06C755;color:#fff;font-weight:700;font-size:16px;opacity:.5;}}
+    .btn.enabled{{opacity:1;}}
+    .links a{{color:#1a73e8;}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">AI相談のご利用前の同意</div>
+    <div class="section">
+      ・プライバシーポリシー：<a href="{_abs('/legal/privacy.html')}" target="_blank" rel="noopener">こちら</a><br/>
+      ・利用規約：<a href="{_abs('/legal/terms.html')}" target="_blank" rel="noopener">こちら</a><br/>
+      ・Cookie（外部送信の詳細）：<a href="{_abs('/legal/cookie.html')}" target="_blank" rel="noopener">こちら</a>
+    </div>
 
-# 互換：/liff/consent でも同じ動作にしておく
-@router.get("/liff/consent", response_class=HTMLResponse)
-async def liff_consent(request: Request):
-    if is_from_liff(request):
-        html = load_consent_html()
-        resp = HTMLResponse(content=html, status_code=200)
-        no_store_headers(resp)
-        return resp
-    url = build_external_liff_url(request)
-    return RedirectResponse(url=url, status_code=302)
+    <div class="section">
+      <label><input type="checkbox" id="c1" checked> プライバシーポリシーに同意します</label><br/>
+      <label><input type="checkbox" id="c2" checked> 入力内容が外部サービスへ送信される場合があることを理解しました</label><br/>
+      <label><input type="checkbox" id="c3" checked> AIの誤答・限界があることを理解しました</label><br/>
+      <label><input type="checkbox" id="c4" checked> Cookie等の利用（計測を含む）に同意します（任意）</label>
+    </div>
 
-# HEAD リクエスト（疎通テストや監視向け）
-@router.head("/liff")
-async def liff_head(request: Request):
-    if is_from_liff(request):
-        return Response(status_code=200)
-    url = build_external_liff_url(request)
-    resp = Response(status_code=302)
-    resp.headers["Location"] = url
-    return resp
+    <button id="agree" class="btn" disabled>同意して開始</button>
+    <div class="note">※同意は公式LINE内の「AI相談」にのみ適用されます。</div>
+  </div>
 
-@router.head("/liff/consent")
-async def liff_consent_head(request: Request):
-    if is_from_liff(request):
-        return Response(status_code=200)
-    url = build_external_liff_url(request)
-    resp = Response(status_code=302)
-    resp.headers["Location"] = url
-    return resp
+<script>
+(function() {{
+  const qs = new URLSearchParams(window.location.search);
+  const userToken   = qs.get("user_token") || "";
+  const state       = qs.get("state") || "";
+  const ab          = qs.get("ab") || "";
+  const utm_source  = qs.get("utm_source") || "";
+  const utm_medium  = qs.get("utm_medium") || "";
+  const utm_campaign= qs.get("utm_campaign") || "";
+  const utm_content = qs.get("utm_content") || "";
+
+  // 4チェックONでボタン活性（user_token必須）
+  const boxes = [...document.querySelectorAll('input[type="checkbox"]')];
+  const btn = document.getElementById("agree");
+  function tick() {{
+    const ok = boxes.every(b => b.checked) && userToken;
+    btn.disabled = !ok;
+    btn.classList.toggle("enabled", ok);
+  }}
+  boxes.forEach(b => b.addEventListener("change", tick));
+  tick();
+
+  async function postConsent() {{
+    // 既存の同意記録APIに合わせてエンドポイント名を調整してください
+    const payload = {{
+      user_token: userToken,
+      source: "liff",
+      state, ab, utm_source, utm_medium, utm_campaign, utm_content
+    }};
+    try {{
+      const res = await fetch("/consent/check", {{
+        method: "POST",
+        headers: {{ "Content-Type": "application/json" }},
+        body: JSON.stringify(payload)
+      }});
+      if (!res.ok) throw new Error("consent api " + res.status);
+      return true;
+    }} catch (e) {{
+      alert("同意の記録に失敗しました。通信環境をご確認のうえ、もう一度お試しください。");
+      return false;
+    }}
+  }}
+
+  async function initLiff() {{
+    try {{
+      await liff.init({{ liffId: "{LIFF_ID}" }});
+      // トーク内なら login は不要
+    }} catch(e) {{
+      console.error("liff.init failed", e);
+    }}
+  }}
+
+  document.getElementById("agree").addEventListener("click", async () => {{
+    if (!await postConsent()) return;
+    try {{
+      if (liff.isInClient()) {{
+        liff.closeWindow();     // LINEトークに復帰
+      }} else {{
+        // ブラウザ起動時のフォールバック（任意）
+        window.close();
+      }}
+    }} catch (e) {{
+      console.error(e);
+      window.close();
+    }}
+  }});
+
+  initLiff();
+}})();
+</script>
+</body>
+</html>
+"""
+    return HTMLResponse(html)
+
+@router.get("/liff/ping")
+def liff_ping():
+    return {"ok": True}
