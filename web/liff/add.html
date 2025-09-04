@@ -5,120 +5,94 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>公式LINEを友だち追加</title>
   <style>
+    :root { color-scheme: light; }
     body{font-family:system-ui,-apple-system,"Helvetica Neue",Arial,"Noto Sans JP",sans-serif;margin:0;background:#f6f7f9}
     .wrap{max-width:560px;margin:40px auto;padding:24px;background:#fff;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.06)}
     h1{font-size:22px;margin:0 0 12px}
     p{color:#333;line-height:1.7}
-    .btn{font-size:16px;padding:10px 16px;border-radius:8px;border:1px solid #ddd;background:#06C755;color:#fff;cursor:pointer}
+    a.btn{display:inline-block;font-size:16px;padding:10px 16px;border-radius:8px;text-decoration:none;background:#06C755;color:#fff}
     a{color:#06C755}
+    .small{color:#555;margin-top:12px;font-size:13px}
   </style>
 
-  <!-- GA4タグ（未導入なら有効化。既にGTM等で読み込んでいる場合は重複OK） -->
+  <!-- ✅ GA4（現行の計測IDを維持） -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-B8988S3RCZ"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
     function gtag(){ dataLayer.push(arguments); }
     gtag('js', new Date());
-    // page_view を送ることで、このURLに付いた utm_* が GA4 の自動キャンペーン判定に反映されます
-    gtag('config', 'G-B8988S3RCZ');
+    gtag('config', 'G-B8988S3RCZ'); // 既存IDをそのまま使用
   </script>
 </head>
 <body>
   <div class="wrap">
     <h1>公式LINEを友だち追加</h1>
-    <p>「ログインして開始」を押すと、LINEログインが開きます（ログイン後は同意ページへ遷移します）。</p>
-    <p><button id="login" class="btn">ログインして開始</button></p>
-    <p>ログインができない場合は <a id="fallbackAdd" href="#">こちら</a> から友だち追加してください。</p>
-    <noscript>
-      <p><a id="nos" href="#">JavaScriptを有効にできない場合はこちら</a></p>
-    </noscript>
+    <p>「LINEで相談する」を押すと、LINEが開きます（友だち追加後そのままトークに移動）。</p>
+    <p><a id="openLine" class="btn" href="#">LINEで相談する</a></p>
+    <p class="small">うまく開かない場合は <a id="rawLink" href="#" target="_blank" rel="noopener">こちら</a> をタップしてください。</p>
+    <noscript><p><a id="nos" href="#" target="_blank" rel="noopener">JavaScriptを有効にできない場合はこちら</a></p></noscript>
   </div>
 
   <script>
-    // -------- 設定 --------
-    const START_PATH   = "/line-login/start"; // サーバの「認可開始」エンドポイント
-    const CONSENT_PATH = "/liff/consent";     // ログイン完了後に戻す先（サーバ側で既定なら指定不要）
+    // __LINE_BASIC_ID__ はサーバ側（liff_pages.py）で @付きに置換されます。
+    const BASIC = "__LINE_BASIC_ID__".replace(/^@@/, "@"); // 二重@対策
+    const msg   = encodeURIComponent("AI相談");            // メッセージ欄に自動入力
+    // 友だちでなければ追加画面→トーク起動、友だちなら即トーク起動
+    const url   = `https://line.me/R/oaMessage/${BASIC}/?${msg}`;
 
-    // liff.state に埋まったクエリも吸収して、state/ab/utm_* を統合
-    function mergedParams() {
-      const sp = new URL(location.href).searchParams;
-      const ls = new URLSearchParams(sp.get("liff.state") || "");
-      const pick = (k) => sp.get(k) || ls.get(k);
+    // リンク設定
+    const a = document.getElementById("openLine");
+    const b = document.getElementById("rawLink");
+    a.href = url; b.href = url;
+    const nos = document.getElementById("nos"); if (nos) nos.href = url;
 
-      const qs = new URLSearchParams();
-      ["state","ab","utm_source","utm_medium","utm_campaign","utm_content"].forEach(k=>{
-        const v = pick(k); if(v) qs.set(k, v);
-      });
-      return qs;
-    }
+    // --- GA4 イベント計測（現行ロジックを踏襲） ---
+    (function trackLanding(){
+      try {
+        const sp = new URL(location.href).searchParams;
+        let state        = sp.get('state');
+        let ab           = sp.get('ab');
+        let utm_source   = sp.get('utm_source');
+        let utm_medium   = sp.get('utm_medium');
+        let utm_campaign = sp.get('utm_campaign');
+        let utm_content  = sp.get('utm_content');
 
-    // /line-login/start へ遷移（クエリはそのまま渡す）
-    function buildLoginStartUrl(){
-      const qs = mergedParams();
-      // サーバ側（/line-login/start）は、受け取ったクエリを保持したまま /liff/consent に戻す実装
-      const url = new URL(START_PATH, location.origin);
-      // そのまま付けるだけでOK（サーバが state にエンコードして callback で復元）
-      qs.forEach((v,k)=> url.searchParams.set(k,v));
-      // もしサーバが明示的な戻り先パラメータを受ける場合は以下を付与（不要なら削除可）
-      // const redirectTo = CONSENT_PATH + (qs.toString() ? ("?" + qs.toString()) : "");
-      // url.searchParams.set("redirect", redirectTo);
-      return url.toString();
-    }
-
-    // クリックでログイン開始
-    document.getElementById("login").addEventListener("click", ()=>{
-      location.href = buildLoginStartUrl();
-    });
-
-    // 友だち追加のフォールバック（https ドメインで確実に開く）
-    const BASIC_ID = "487urklv";
-    const addOnWeb = `https://line.me/R/ti/p/%40${BASIC_ID}`;
-    document.getElementById("fallbackAdd").href = addOnWeb;
-    const nos = document.getElementById("nos"); if(nos) nos.href = buildLoginStartUrl();
-
-    // ---- GA4: UTM/state/ab を取得してカスタムイベント送信（＝既存の内容を維持）----
-    (function(){
-      const sp = new URL(location.href).searchParams;
-
-      // 通常クエリ
-      let state        = sp.get('state');
-      let ab           = sp.get('ab');
-      let utm_source   = sp.get('utm_source');
-      let utm_medium   = sp.get('utm_medium');
-      let utm_campaign = sp.get('utm_campaign');
-      let utm_content  = sp.get('utm_content');
-
-      // 念のため liff.state="?state=...&ab=...&utm_*=..." にも対応
-      if (!state || !utm_source || !utm_medium || !utm_campaign) {
-        const ls = sp.get('liff.state');
-        if (ls) {
-          const inner = new URLSearchParams(ls.startsWith('?') ? ls.slice(1) : ls);
-          state        = state        || inner.get('state');
-          ab           = ab           || inner.get('ab');
-          utm_source   = utm_source   || inner.get('utm_source');
-          utm_medium   = utm_medium   || inner.get('utm_medium');
-          utm_campaign = utm_campaign || inner.get('utm_campaign');
-          utm_content  = utm_content  || inner.get('utm_content');
+        // liff.state="?state=...&utm_*=..." に入っている場合も吸収
+        if (!state || !utm_source || !utm_medium || !utm_campaign) {
+          const ls = sp.get('liff.state');
+          if (ls) {
+            const inner = new URLSearchParams(ls.startsWith('?') ? ls.slice(1) : ls);
+            state        = state        || inner.get('state');
+            ab           = ab           || inner.get('ab');
+            utm_source   = utm_source   || inner.get('utm_source');
+            utm_medium   = utm_medium   || inner.get('utm_medium');
+            utm_campaign = utm_campaign || inner.get('utm_campaign');
+            utm_content  = utm_content  || inner.get('utm_content');
+          }
         }
-      }
 
-      const payload = {
-        state:        state        || '(none)',
-        ab:           ab           || '(none)',
-        utm_source:   utm_source   || '(none)',
-        utm_medium:   utm_medium   || '(none)',
-        utm_campaign: utm_campaign || '(none)',
-        utm_content:  utm_content  || '(none)',
-        referrer:     document.referrer || '(direct)',
-        ts:           new Date().toISOString()
-      };
-
-      // 既存のイベント名・項目を維持
-      if (typeof gtag === 'function') {
-        gtag('event', 'line_add_landing', payload);
-      }
-      try { localStorage.setItem('line_add_attrs', JSON.stringify(payload)); } catch(e) {}
+        const payload = {
+          state:        state        || '(none)',
+          ab:           ab           || '(none)',
+          utm_source:   utm_source   || '(none)',
+          utm_medium:   utm_medium   || '(none)',
+          utm_campaign: utm_campaign || '(none)',
+          utm_content:  utm_content  || '(none)',
+          referrer:     document.referrer || '(direct)',
+          ts:           new Date().toISOString()
+        };
+        if (typeof gtag === 'function') gtag('event', 'line_add_landing', payload);
+        try { localStorage.setItem('line_add_attrs', JSON.stringify(payload)); } catch(e) {}
+      } catch(e){}
     })();
+
+    // DeepLink クリック時のイベント
+    a.addEventListener('click', function(){
+      try {
+        if (typeof gtag === 'function') gtag('event', 'line_open_deeplink', {method:'oaMessage', ts:new Date().toISOString()});
+      } catch(e){}
+    }, {passive:true});
   </script>
 </body>
 </html>
+

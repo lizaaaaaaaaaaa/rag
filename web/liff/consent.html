@@ -5,23 +5,23 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>AI相談のご利用前の同意</title>
   <style>
-    body { font-family: -apple-system, system-ui, "Noto Sans JP", sans-serif; padding: 18px; }
-    h1 { font-size: 22px; margin: 8px 0 16px; }
-    p, li, label { line-height: 1.7; }
-    .links { margin: 10px 0 16px; }
-    .links a { color: #0366d6; text-decoration: underline; }
-    label { display: flex; gap: 10px; align-items: baseline; margin: 10px 0; }
-    input[type="checkbox"] { transform: scale(1.1); margin-top: 2px; }
-    button { margin-top: 18px; font-size: 16px; padding: 10px 14px; border-radius: 8px; border: 1px solid #ddd; background:#06c755; color:#fff; }
-    button[disabled] { opacity: .5; }
-    small { color:#666; }
+    body{font-family:-apple-system,system-ui,"Noto Sans JP",sans-serif;padding:18px}
+    h1{font-size:22px;margin:8px 0 16px}
+    p,li,label{line-height:1.7}
+    .links{margin:10px 0 16px}
+    .links a{color:#0366d6;text-decoration:underline}
+    label{display:flex;gap:10px;align-items:baseline;margin:10px 0}
+    input[type="checkbox"]{transform:scale(1.1);margin-top:2px}
+    button{margin-top:18px;font-size:16px;padding:10px 14px;border-radius:8px;border:1px solid #ddd;background:#06c755;color:#fff}
+    button[disabled]{opacity:.5}
+    small{color:#666}
   </style>
 </head>
 <body>
   <h1>AI相談のご利用前の同意</h1>
   <p>以下をご確認のうえ、チェックを入れて「同意して開始」を押してください。</p>
 
-  <!-- 法務リンクは /legal 配信で統一 -->
+  <!-- 法務リンク（/legal 配信に統一） -->
   <div class="links" aria-label="関連ポリシー・規約へのリンク">
     <div>・プライバシーポリシー：<a href="/legal/privacy" target="_blank" rel="noopener">こちら</a></div>
     <div>・利用規約：<a href="/legal/terms" target="_blank" rel="noopener">こちら</a></div>
@@ -29,31 +29,29 @@
   </div>
 
   <!-- ✅ 必須3チェック（PP / 外部送信 / AI限界） -->
-  <label><input type="checkbox" id="chk_pp" aria-describedby="desc_pp">
-    プライバシーポリシー（上記リンク）に同意します</label>
-  <label><input type="checkbox" id="chk_xfer" aria-describedby="desc_xfer">
-    入力内容が外部サービスへ送信される場合があることを理解しました</label>
-  <label><input type="checkbox" id="chk_ai_limits" aria-describedby="desc_ai">
-    AIの誤答・限界があることを理解しました</label>
+  <label><input type="checkbox" id="chk_pp" aria-describedby="desc_pp">プライバシーポリシー（上記リンク）に同意します</label>
+  <label><input type="checkbox" id="chk_xfer" aria-describedby="desc_xfer">入力内容が外部サービスへ送信される場合があることを理解しました</label>
+  <label><input type="checkbox" id="chk_ai_limits" aria-describedby="desc_ai">AIの誤答・限界があることを理解しました</label>
 
-  <!-- ◇ 任意（Cookie同意は任意扱いに） -->
-  <label><input type="checkbox" id="chk_cookie">
-    Cookie等の利用（計測を含む）に同意します（任意）</label>
+  <!-- ◇ 任意（Cookie同意は任意扱い） -->
+  <label><input type="checkbox" id="chk_cookie">Cookie等の利用（計測を含む）に同意します（任意）</label>
 
   <button id="btn-consent" disabled>同意して開始</button>
   <p><small>※ 同意は公式LINE内の「AI相談」にのみ適用されます。</small></p>
 
   <script>
-    // ===== 既存互換の設定（BASIC_ID はクエリ or テンプレ値で解決） =====
-    function getParam(name){ return new URLSearchParams(location.search).get(name) || ""; }
-    const BASIC_ID = (getParam("basic_id") || "").replace(/^@/, "") || "{{BASIC_ID}}";
+    // ===== ユーティリティ =====
+    const qs = new URLSearchParams(location.search);
+    const getParam = (k, d="") => qs.get(k) || d;
 
-    // POLICY_VERSION はクエリ（policy_version）→ window.__POLICY_VERSION__ → 既定 の順で解決
+    // LINE Basic ID：テンプレ置換（liff_pages.py が __LINE_BASIC_ID__ を @付きで埋め込み）
+    const BASIC = (getParam("basic_id") || "__LINE_BASIC_ID__").replace(/^@?/, "@").replace(/^@@/, "@");
     const POLICY_VERSION = getParam("policy_version") || (window.__POLICY_VERSION__ || "1.0.0");
+    const USER_TOKEN = getParam("user_token") || "";
 
-    // ===== 必須3チェックがONのときだけボタン活性 =====
+    // 必須3チェックONでボタン活性
     const btn = document.getElementById('btn-consent');
-    function updateButton() {
+    function updateButton(){
       const ok = document.getElementById('chk_pp').checked
               && document.getElementById('chk_xfer').checked
               && document.getElementById('chk_ai_limits').checked;
@@ -61,69 +59,83 @@
     }
     ['chk_pp','chk_xfer','chk_ai_limits','chk_cookie'].forEach(id=>{
       const el = document.getElementById(id);
-      if (el) el.addEventListener('change', updateButton);
+      if(el) el.addEventListener('change', updateButton, {passive:true});
     });
     updateButton();
 
-    // ===== 同意保存 → 公式アカウントの「AI相談」を自動送信（即戻る） =====
-    function openLineChatWithAI() {
-      const ai = encodeURIComponent("AI相談");  // リッチメニュー文言は変更しない
-      const oa = BASIC_ID ? BASIC_ID : "";
-      if (oa) {
-        location.href = `https://line.me/R/oaMessage/${oa}/${ai}`;
-        // 友だち未追加のフォールバック
-        setTimeout(() => { location.replace(`https://line.me/R/ti/p/%40${oa}`); }, 1800);
-      } else {
+    // Deep Link 生成（友だちなら即トーク、未追加なら追加導線）
+    function openLineChatWithAI(){
+      const msg = encodeURIComponent("AI相談"); // リッチメニュー文言は変更しない
+      const oa  = BASIC.replace(/^@/, "");      // oaMessage は @を付けない形式
+      if(oa){
+        location.href = `https://line.me/R/oaMessage/${oa}/?${msg}`;
+        // 友だち未追加・アプリ未起動のフォールバック
+        setTimeout(()=>{ location.replace(`https://line.me/R/ti/p/%40${oa}`); }, 1500);
+      }else{
         history.back();
       }
     }
 
-    async function saveConsent() {
-      const userToken = getParam("user_token");
-      if (!userToken) {
-        alert("無効なアクセスです（user_token が見つかりません）"); return;
+    async function saveConsentAndStart(){
+      if(!USER_TOKEN){
+        alert("無効なアクセスです（user_token が見つかりません）");
+        return;
       }
-      // 送信ペイロード（任意のメタは将来拡張用）
-      const body = {
+
+      // 送信ペイロード
+      const payload = {
         agree_privacy: document.getElementById('chk_pp').checked,
         agree_cookie: document.getElementById('chk_cookie').checked,
         understand_external_send: document.getElementById('chk_xfer').checked,
         understand_ai_may_be_wrong: document.getElementById('chk_ai_limits').checked,
         meta: {
-          state: getParam("state") || "",
-          ab: getParam("ab") || "",
-          utm_source: getParam("utm_source") || "",
-          utm_medium: getParam("utm_medium") || "",
-          utm_campaign: getParam("utm_campaign") || "",
-          utm_content: getParam("utm_content") || ""
+          state: getParam("state"),
+          ab: getParam("ab"),
+          utm_source: getParam("utm_source"),
+          utm_medium: getParam("utm_medium"),
+          utm_campaign: getParam("utm_campaign"),
+          utm_content: getParam("utm_content"),
+          ua: navigator.userAgent
         }
       };
-      btn.disabled = true; const prev = btn.textContent; btn.textContent = "保存中…";
+
+      // UIロック
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.textContent = "保存中…";
+
       try {
-        const qs = new URLSearchParams({
-          user_token: userToken,
-          scope: "ai",
-          version: POLICY_VERSION
-        }).toString();
-        const res = await fetch(`/consent/save?${qs}`, {
+        // 1) 同意保存（サーバ側：/consent/save は非同期でWORMも処理）
+        const saveQs = new URLSearchParams({ user_token: USER_TOKEN, scope: "ai", version: POLICY_VERSION }).toString();
+        const r1 = await fetch(`/consent/save?${saveQs}`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-User-Token": userToken
-          },
-          body: JSON.stringify(body),
+          headers: {"Content-Type":"application/json", "X-User-Token": USER_TOKEN},
+          body: JSON.stringify(payload),
           credentials: "omit"
         });
-        if (!res.ok) throw new Error("save failed");
-        // 保存成功 → すぐLINEへ戻す（応答体感を遅くしない）
+        if(!r1.ok) throw new Error("consent_save_failed");
+
+        // 2) AI相談を自動開始（サーバから定型文をPush：ユーザー操作不要）
+        //    ※ 応答は待たずに次へ（体感速度を落とさない）
+        fetch("/line/after-consent", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ user_token: USER_TOKEN })
+        }).catch(()=>{});
+
+        // 3) LINEアプリへ戻す（LIFF内なら閉じる、外部ならDeep Link）
+        try {
+          if(window.liff && liff.isInClient()){ liff.closeWindow(); return; }
+        } catch(e){}
         openLineChatWithAI();
-      } catch (e) {
+      } catch(e) {
         alert("保存に失敗しました。時間をおいて再度お試しください。");
-        btn.disabled = false; btn.textContent = prev;
+        btn.disabled = false;
+        btn.textContent = prev;
       }
     }
 
-    btn.addEventListener("click", saveConsent);
+    btn.addEventListener("click", saveConsentAndStart);
   </script>
 </body>
 </html>

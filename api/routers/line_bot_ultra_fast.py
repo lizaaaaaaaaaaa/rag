@@ -1,15 +1,16 @@
-# api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版（/liff/consent に統一）
+# api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版 + after-consent エンドポイント
 # - リッチメニューは同意がなくても反応（文面は変更しない）
 # - 「AI相談」だけ /consent/check を叩き、未同意なら **ユーザー別** 同意URL（/liff/consent?user_token=U...）を案内
 # - Webhook は常に 200 を返す（LINE の再送ループ防止）
 # - RAG / 資金計画は別スレッドで push（応答遅延を防ぐ）
+# - 同意保存後に /line/after-consent で AI相談を自動開始（Push）
 
 import logging, os, re, time, hashlib, threading, sys, pathlib, importlib
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 
-from fastapi import APIRouter, Request, BackgroundTasks
+from fastapi import APIRouter, Request, BackgroundTasks, Body
 from fastapi.responses import JSONResponse
 
 # -------------------------------
@@ -403,11 +404,19 @@ def _has_consent_sync(user_id: str) -> bool:
 # --- ユーザー別「同意リンク」生成（/liff/consent に統一） ---
 def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
     q = {"user_token": user_id}
-    if extra_qs:
-        for k in ["state", "ab", "utm_source", "utm_medium", "utm_campaign", "utm_content"]:
-            v = extra_qs.get(k)
-            if v:
-                q[k] = v
+    # ✅ デフォルトUTM（AI相談/LINEリッチメニュー流入をGA4で判別可能に）
+    if not extra_qs:
+        extra_qs = {
+            "state": "line_ai",
+            "utm_source": "line",
+            "utm_medium": "richmenu",
+            "utm_campaign": "ai_consult",
+            "utm_content": "ai_menu",
+        }
+    for k in ["state", "ab", "utm_source", "utm_medium", "utm_campaign", "utm_content"]:
+        v = extra_qs.get(k) if extra_qs else None
+        if v:
+            q[k] = v
     return f"{PUBLIC_BASE_URL}/liff/consent?{urlencode(q)}"
 
 def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
@@ -563,6 +572,34 @@ if LINE_SDK_AVAILABLE and handler:
             )
         except Exception as e:
             logger.error(f"postback handler error: {e}")
+
+# ======================================================================
+# 同意完了後のプッシュ（AI相談を自動開始）
+# ======================================================================
+def _token_to_user_id(token: str) -> str:
+    """LINE UID ならそのまま、JWTなら sub/user_id/email を拾う。未判定は token を返す。"""
+    if token and token.startswith("U"):
+        return token
+    try:
+        import jwt
+        payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256", "ES256"])
+        return payload.get("sub") or payload.get("user_id") or payload.get("email") or token
+    except Exception:
+        return token
+
+@router.post("/line/after-consent")
+async def after_consent(payload: dict = Body(...)):
+    user_token = (payload or {}).get("user_token", "")
+    if not user_token:
+        return {"ok": False, "error": "missing_user_token"}
+    user_id = _token_to_user_id(user_token)
+    try:
+        sessions.set_mode(user_id, "ai")
+        _push(user_id, RICHMENU_FIXED_RESPONSES["AI相談"])
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"after-consent push failed: {e}")
+        return {"ok": False, "error": "push_failed"}
 
 # ======================================================================
 # 簡易ステータス
