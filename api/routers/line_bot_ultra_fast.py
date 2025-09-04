@@ -1,11 +1,12 @@
-# api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版 + after-consent エンドポイント
-# - リッチメニューは同意がなくても反応（文面は変更しない）
+# api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版 + Postback堅牢化
+# - リッチメニューは6項目すべて反応（文面は変更しない）
 # - 「AI相談」だけ /consent/check を叩き、未同意なら **ユーザー別** 同意URLを案内（完全URLで送付）
 # - Webhook は常に 200 を返す（LINE の再送ループ防止）
 # - RAG / 資金計画は別スレッドで push（応答遅延を防ぐ）
 # - 同意保存後に /line/after-consent で AI相談を自動開始（Push）
+# - Postback の data は action=..., クエリ形式, JSON, プレーン文字列 すべてに対応
 
-import logging, os, re, time, hashlib, threading, sys, pathlib, importlib
+import logging, os, re, time, hashlib, threading, sys, pathlib, importlib, json
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
@@ -274,6 +275,9 @@ RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
     "展示場来場予約": "展示場来場予約", "📍 展示場来場　予約": "展示場来場予約", "来場予約": "展示場来場予約",
     "資金計画": "資金計画", "💴 資金計画": "資金計画", "💰 資金計画": "資金計画",
     "チャット相談": "チャット相談", "💬チャット相談": "チャット相談", "チャット": "チャット相談",
+    # 可能性のある英語/シンプルdata対策（リッチメニューのdataが英語の場合）
+    "ai_consult": "AI相談", "site": "AI住まいサイト", "docs": "資料請求",
+    "reservation": "展示場来場予約", "finance": "資金計画", "chat": "チャット相談",
 }
 
 # ======================================================================
@@ -493,6 +497,68 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         return JSONResponse({"status": "ok", "note": "handled with error"}, status_code=200)
 
 # ======================================================================
+# Postback data の堅牢パーサ
+# ======================================================================
+def _resolve_postback_key(data: str) -> str:
+    """
+    data の形：
+      - "action=AI相談&..." などのクエリ
+      - "ai_consult" のようなプレーン文字列
+      - '{"action":"AI相談"}' のようなJSON
+    をすべて許容して「固定テンプレのキー」を返す
+    """
+    if not data:
+        return ""
+
+    # 1) そのまま一致
+    if data in RICHMENU_FIXED_RESPONSES:
+        return data
+    if data in RICHMENU_KEYWORD_MAPPING:
+        return RICHMENU_KEYWORD_MAPPING[data]
+
+    # 2) JSON なら action / key / menu を探す
+    if data.startswith("{") and data.endswith("}"):
+        try:
+            obj = json.loads(data)
+            for k in ("action", "key", "menu"):
+                v = obj.get(k)
+                if isinstance(v, str) and v:
+                    if v in RICHMENU_KEYWORD_MAPPING:
+                        return RICHMENU_KEYWORD_MAPPING[v]
+                    if v in RICHMENU_FIXED_RESPONSES:
+                        return v
+        except Exception:
+            pass
+
+    # 3) クエリ/セミコロン区切りを解析
+    for sep in ("&", ";"):
+        if sep in data or "=" in data:
+            parts = [p for p in data.split(sep) if p]
+            for part in parts:
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    v = v.strip()
+                    if v in RICHMENU_KEYWORD_MAPPING:
+                        return RICHMENU_KEYWORD_MAPPING[v]
+                    if v in RICHMENU_FIXED_RESPONSES:
+                        return v
+                else:
+                    token = part.strip()
+                    if token in RICHMENU_KEYWORD_MAPPING:
+                        return RICHMENU_KEYWORD_MAPPING[token]
+                    if token in RICHMENU_FIXED_RESPONSES:
+                        return token
+            break
+
+    # 4) 最後にプレーン文字列として再チェック（大文字小文字&空白トリム）
+    token = data.strip()
+    if token in RICHMENU_KEYWORD_MAPPING:
+        return RICHMENU_KEYWORD_MAPPING[token]
+    if token in RICHMENU_FIXED_RESPONSES:
+        return token
+    return ""
+
+# ======================================================================
 # イベントハンドラ（reply→push 方針）—— AI相談だけ同意ゲート
 # ======================================================================
 if LINE_SDK_AVAILABLE and handler:
@@ -568,16 +634,7 @@ if LINE_SDK_AVAILABLE and handler:
             reply_token = event.reply_token
             if dup_guard.seen(user_id, f"post:{data[:64]}"): return
 
-            key = None
-            if data in RICHMENU_FIXED_RESPONSES:
-                key = data
-            elif "action=" in data:
-                for part in data.split("&"):
-                    if part.startswith("action="):
-                        act = part.split("=", 1)[1]
-                        if act in RICHMENU_KEYWORD_MAPPING: key = RICHMENU_KEYWORD_MAPPING[act]
-                        elif act in RICHMENU_FIXED_RESPONSES: key = act
-                        break
+            key = _resolve_postback_key(data)
 
             if key:
                 if key == "AI相談":
@@ -621,7 +678,7 @@ async def after_consent(payload: dict = Body(...)):
         _push(user_id, RICHMENU_FIXED_RESPONSES["AI相談"])
         return {"ok": True}
     except Exception as e:
-        logger.error(f"after-consent push failed: {e}")
+        logger.error(f"after_consent push failed: {e}")
         return {"ok": False, "error": "push_failed"}
 
 # ======================================================================

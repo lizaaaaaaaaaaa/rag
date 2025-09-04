@@ -1,5 +1,5 @@
 # ====================
-# middleware.py（Webチャットは同意不要に）
+# middleware.py（RateLimitをCloud Run向けに安全化）
 # ====================
 
 import os
@@ -41,22 +41,47 @@ class TimingMiddleware(BaseHTTPMiddleware):
         return response
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
+    """
+    Cloud Run での誤爆を避けるためのレート制限:
+      - /line/webhook と /liff/*、/health*、/system-status は除外
+      - X-Forwarded-For 優先でクライアントIPを取得
+      - パス別バケツで集計（/chat と /upload のカウントを分離）
+      - 上限は RATE_LIMIT_PER_MINUTE 環境変数で変更可（未設定時は設定値 or 600）
+    """
     def __init__(self, app, requests_per_minute: int = None):
         super().__init__(app)
-        self.limit = requests_per_minute or getattr(settings, "rate_limit_per_minute", 100)
-        self.client_requests = {}
+        # Cloud Run で落ちない安全値。環境変数があればそれを採用。
+        self.limit = int(os.getenv("RATE_LIMIT_PER_MINUTE",
+                                   str(getattr(settings, "rate_limit_per_minute", 600))))
+        self.client_requests: dict[str, list[float]] = {}
+        # レート制限を掛けない経路（LINE/ヘルス/同意導線は常に通す）
+        self.allow_prefixes = ("/liff/", "/health", "/healthz")
+        self.allow_paths = {"/line/webhook", "/system-status", "/favicon.ico"}
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.method == "OPTIONS":
             return await call_next(request)
-        ip = request.client.host if request.client else "unknown"
+
+        path = request.url.path
+        if path in self.allow_paths or _starts_with_any(path, self.allow_prefixes):
+            return await call_next(request)
+
+        # Cloud Run は request.client.host が 169.254.169.126 になることが多い → X-Forwarded-For を優先
+        xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+        ip_hdr = xff.split(",")[0].strip() if xff else None
+        ip = ip_hdr or request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "unknown")
+
         now = time.time()
-        bucket = self.client_requests.setdefault(ip, [])
-        self.client_requests[ip] = [t for t in bucket if now - t < 60.0]
-        if len(self.client_requests[ip]) >= self.limit:
+        # 経路ごとのバケツにして誤爆を減らす（同一IPでも /line/webhook と /chat を分離）
+        key = f"{ip}:{path}"
+        bucket = self.client_requests.setdefault(key, [])
+        # 直近60秒に限定
+        self.client_requests[key] = [t for t in bucket if now - t < 60.0]
+        if len(self.client_requests[key]) >= self.limit:
             return JSONResponse(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 content={"detail": "Rate limit exceeded"})
-        self.client_requests[ip].append(now)
+        self.client_requests[key].append(now)
+
         return await call_next(request)
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
