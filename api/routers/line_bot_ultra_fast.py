@@ -391,7 +391,8 @@ def _has_consent_sync(user_id: str) -> bool:
     try:
         headers = {"user_token": user_id}  # consent API はヘッダでの受け取りに対応（front実装と合わせる）
         with httpx.Client(timeout=5.0) as client:
-            r = client.post(f"{SELF_BASE}/consent/check", json={"scope": "ai_line"}, headers=headers)
+            # scope は "ai" を使用（キャッシュキー一貫性のため）
+            r = client.post(f"{SELF_BASE}/consent/check", json={"scope": "ai"}, headers=headers)
             if r.status_code == 200:
                 data = r.json()
                 return bool(data.get("valid") or data.get("is_valid"))
