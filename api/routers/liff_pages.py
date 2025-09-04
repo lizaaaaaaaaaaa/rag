@@ -1,4 +1,4 @@
-# api/routers/liff_pages.py — HTML 介さない超軽量版
+# api/routers/liff_pages.py — HTMLを挟まない超軽量版 + 誤設定ガード入り
 # /liff/add      : Web CTA → LINE Login に 302（bot_prompt=aggressive で友だち追加促進）
 # /liff/callback : Login 後 → 友だち追加 URL に 302
 # /liff/consent  : LIFF 同意アプリに 302（state/ab/UTM 等を引き継ぐ）
@@ -16,7 +16,7 @@ PUBLIC_BASE_URL     = (os.getenv("PUBLIC_BASE_URL") or os.getenv("PUBLIC_API_BAS
 LINE_BASIC_ID       = os.getenv("LINE_BASIC_ID", "").lstrip("@")  # '@abcd' → 'abcd'
 LINE_LOGIN_ID       = os.getenv("LINE_LOGIN_CHANNEL_ID", os.getenv("LINE_LOGIN_CLIENT_ID", ""))
 LINE_LOGIN_REDIRECT = os.getenv("LINE_LOGIN_REDIRECT_URI", f"{PUBLIC_BASE_URL}/liff/callback")
-LIFF_CONSENT_URL    = os.getenv("LIFF_CONSENT_URL", "").rstrip("/")  # 例: https://liff.line.me/165xxxxxxxxx
+LIFF_CONSENT_URL    = os.getenv("LIFF_CONSENT_URL", "").rstrip("/")  # 例: https://liff.line.me/165xxxxxxxxx-xxxxx
 
 # ---- helpers -----------------------------------------------------------
 def _pick(q: dict, keys: list[str]) -> dict:
@@ -81,6 +81,14 @@ async def liff_consent_redirect(request: Request):
         # 未設定時は最低限のフォールバック（自社のポリシーへ）
         fallback = f"{PUBLIC_BASE_URL}/privacy" if PUBLIC_BASE_URL else "/privacy"
         return RedirectResponse(fallback, status_code=302)
+
+    # ▼誤設定防止：必ず https の LIFF URL を要求（line://app や自サービスURLは不可）
+    if not LIFF_CONSENT_URL.startswith("https://liff.line.me/"):
+        return PlainTextResponse(
+            "LIFF_CONSENT_URL is misconfigured (must start with https://liff.line.me/).",
+            status_code=500
+        )
+
     qs = _forward_query(request)
     url = LIFF_CONSENT_URL + (("?" + qs) if qs else "")
     return RedirectResponse(url, status_code=302)
