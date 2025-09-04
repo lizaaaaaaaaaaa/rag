@@ -1,5 +1,64 @@
-.venv/
-.git/
+# --- VCS / IDE / OS
+.git
+.gitattributes
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# --- Python
 __pycache__/
-*.log
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+.venv/
+venv/
+.tox/
+.mypy_cache/
+.pytype/
+.pytest_cache/
+.ruff_cache/
+.cache/
+.coverage
+htmlcov/
+
+# --- Node / Frontend
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+build/
+.next/
+.out/
+.svelte-kit/
+
+# --- 環境ファイル（Secret Manager を使うので不要）
 .env
+.env.*
+**/.env
+**/.env.*
+
+# --- 生成物・データ・ログ（コンテナ内で生成する）
+logs/
+*.log
+tmp/
+temp/
+data/
+datasets/
+assets/raw/
+*.sqlite
+*.db
+
+# --- テスト・ドキュメント（Docker イメージには不要）
+tests/
+docs/_build/
+
+# --- CI/メタ（ビルドには不要）
+.github/
+.gitlab/
+.cloudbuild/

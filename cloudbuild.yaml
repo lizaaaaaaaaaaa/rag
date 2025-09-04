@@ -36,7 +36,7 @@ steps:
       '-f', 'Dockerfile.api',
       '.'
     ]
-    timeout: '900s'
+    timeout: '1500s'
     id: 'build-enhanced-api'
     waitFor: ['test-and-validate']
 
@@ -46,7 +46,7 @@ steps:
       'push',
       'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-api:latest'
     ]
-    timeout: '600s'
+    timeout: '1800s'
     id: 'push-enhanced-api'
     waitFor: ['build-enhanced-api']
 
@@ -104,7 +104,7 @@ steps:
       'push',
       'asia-northeast1-docker.pkg.dev/rag-cloud-project/rag-chat-pro/rag-frontend:latest'
     ]
-    timeout: '600s'
+    timeout: '1200s'
     id: 'push-enhanced-frontend'
     waitFor: ['build-enhanced-frontend']
 
