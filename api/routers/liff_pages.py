@@ -1,4 +1,4 @@
-# api/routers/liff_pages.py (修正版 - LIFF SDK初期化対応)
+# api/routers/liff_pages.py (修正版 - エラーハンドリング強化)
 from __future__ import annotations
 import os, json
 from fastapi import APIRouter, Request
@@ -26,9 +26,9 @@ async def liff_consent(_: Request):
     # 設定を環境変数から取得
     cfg = {
         "API_BASE": (os.getenv("PUBLIC_API_BASE", "").rstrip("/")),
-        "LIFF_ID": os.getenv("LIFF_ID", "2007887876-vMNe74eX"),  # 既定値を設定
+        "LIFF_ID": os.getenv("LIFF_ID", "2007887876-vMNe74eX"),  # 明示的に設定
         "CONSENT_URL": os.getenv("LIFF_CONSENT_URL", ""),
-        "LINE_BASIC_ID": os.getenv("LINE_BASIC_ID", "").lstrip("@"),
+        "LINE_BASIC_ID": os.getenv("LINE_BASIC_ID", "487urklv").lstrip("@"),
     }
     cfg_json = json.dumps(cfg, ensure_ascii=False)
 
@@ -96,52 +96,89 @@ window.__CFG__ = {cfg_json};
   
   let userToken = '';
   let isLiffReady = false;
+  let fallbackUserId = '';
   
-  // LIFF SDK初期化
+  // URLパラメータからuser_tokenを取得（フォールバック）
+  function getTokenFromURL() {{
+    const qs = new URLSearchParams(location.search);
+    return qs.get('user_token') || '';
+  }}
+  
+  // LIFF SDK初期化（エラーハンドリング強化）
   async function initLiff() {{
     try {{
       log('LIFF SDK初期化中...');
       
+      // LIFF初期化
       await liff.init({{ liffId: LIFF_ID }});
-      
       log('LIFF SDK初期化完了');
       isLiffReady = true;
       
-      // ユーザートークン取得
+      // ログイン状態確認
       if (liff.isLoggedIn()) {{
-        userToken = liff.getAccessToken();
-        log(`ユーザートークン取得完了: ${{userToken ? '✓' : '✗'}}`);
+        // アクセストークン取得
+        try {{
+          userToken = liff.getAccessToken();
+          log(`アクセストークン取得: ${{userToken ? 'OK' : 'NG'}}`);
+        }} catch (tokenError) {{
+          log(`アクセストークン取得エラー: ${{tokenError.message}}`);
+        }}
+        
+        // ユーザーID取得（代替手段）
+        try {{
+          const profile = await liff.getProfile();
+          fallbackUserId = profile.userId;
+          log(`ユーザーID取得: ${{fallbackUserId ? 'OK' : 'NG'}}`);
+          
+          // トークンが取得できない場合はユーザーIDを使用
+          if (!userToken && fallbackUserId) {{
+            userToken = fallbackUserId;
+            log('フォールバック: ユーザーIDをトークンとして使用');
+          }}
+        }} catch (profileError) {{
+          log(`プロフィール取得エラー: ${{profileError.message}}`);
+        }}
       }} else {{
         log('ユーザーがログインしていません');
-        // 外部ブラウザの場合はログインが必要
+        
+        // 外部ブラウザの場合はログインを促す
         if (!liff.isInClient()) {{
-          liff.login();
+          log('外部ブラウザでログインが必要');
+          // 即座にログインせず、ユーザーに選択肢を提示
+          showError('LINEアプリでこのページを開いてください。または、下記のボタンでログインしてください。');
+          // liff.login(); // 自動ログインは削除
           return;
         }}
       }}
       
-      // URLパラメータからも取得を試行（フォールバック）
-      const qs = new URLSearchParams(location.search);
-      const urlToken = qs.get('user_token');
+      // URLパラメータからも取得を試行（最終フォールバック）
+      const urlToken = getTokenFromURL();
       if (!userToken && urlToken) {{
         userToken = urlToken;
         log('URLパラメータからトークン取得');
       }}
       
+      // 最終確認
+      if (!userToken) {{
+        showError('ユーザートークンを取得できませんでした。LINEアプリでこのページを開き直してください。');
+        return;
+      }}
+      
+      log(`最終トークン確認: ${{userToken.substring(0, 10)}}...`);
       updateUI();
       
     }} catch (error) {{
       console.error('LIFF初期化エラー:', error);
-      showError(`LIFF初期化エラー: ${{error.message}}`);
+      log(`LIFF初期化エラー: ${{error.message}}`);
       
       // フォールバック: URLパラメータから取得
-      const qs = new URLSearchParams(location.search);
-      userToken = qs.get('user_token') || '';
-      if (userToken) {{
-        log('フォールバック: URLパラメータからトークン取得');
+      const urlToken = getTokenFromURL();
+      if (urlToken) {{
+        userToken = urlToken;
+        log('緊急フォールバック: URLパラメータからトークン取得');
         updateUI();
       }} else {{
-        showError('ユーザートークンを取得できませんでした');
+        showError(`LIFF初期化に失敗しました: ${{error.message}}`);
       }}
     }}
   }}
@@ -158,7 +195,7 @@ window.__CFG__ = {cfg_json};
       btn.disabled = !canSubmit;
       btn.classList.toggle('enabled', canSubmit);
       
-      log(`チェック状態: ${{allChecked ? '✓' : '✗'}} / トークン: ${{hasToken ? '✓' : '✗'}} / 送信可能: ${{canSubmit ? '✓' : '✗'}}`);
+      log(`状態: チェック ${{allChecked ? 'OK' : 'NG'}} / トークン ${{hasToken ? 'OK' : 'NG'}} / 送信可能 ${{canSubmit ? 'YES' : 'NO'}}`);
     }}
     
     boxes.forEach(b => b.addEventListener('change', tick));
@@ -183,72 +220,83 @@ window.__CFG__ = {cfg_json};
         understand_external_send: true,
         understand_ai_may_be_wrong: true,
         agree_cookie: true,
+        liff_os: isLiffReady ? (liff.isInClient() ? 'liff-app' : 'liff-browser') : 'unknown',
         meta: {{
           source: 'liff_consent',
           liff_id: LIFF_ID,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          user_agent: navigator.userAgent
         }}
       }};
       
       // 1. 同意保存API呼び出し
-      log('同意保存中...');
+      log('同意保存API呼び出し中...');
       const saveUrl = `${{API_BASE}}/consent/save?user_token=${{encodeURIComponent(userToken)}}&scope=ai`;
       
       const saveResponse = await fetch(saveUrl, {{
         method: 'POST',
         headers: {{
           'Content-Type': 'application/json',
-          'X-User-Token': userToken
+          'X-User-Token': userToken,
+          'X-LIFF-ID': LIFF_ID
         }},
         body: JSON.stringify(consentData),
         keepalive: true
       }});
       
+      log(`同意保存レスポンス: ${{saveResponse.status}}`);
+      
       if (!saveResponse.ok) {{
-        throw new Error(`同意保存失敗: ${{saveResponse.status}} ${{saveResponse.statusText}}`);
+        const errorText = await saveResponse.text();
+        throw new Error(`同意保存失敗: ${{saveResponse.status}} - ${{errorText}}`);
       }}
       
       const saveResult = await saveResponse.json();
-      log('同意保存完了: ' + JSON.stringify(saveResult));
+      log('同意保存完了');
       
       // 2. LINE通知API呼び出し
-      log('LINE通知中...');
+      log('LINE通知API呼び出し中...');
       const afterConsentUrl = `${{API_BASE}}/line/after-consent`;
       
       const afterResponse = await fetch(afterConsentUrl, {{
         method: 'POST',
         headers: {{
           'Content-Type': 'application/json',
-          'X-User-Id': userToken
+          'X-User-Id': userToken,
+          'X-LIFF-ID': LIFF_ID
         }},
         body: JSON.stringify({{
           user_token: userToken,
           source: 'liff_consent',
+          consent_id: saveResult.consent_id || 'unknown',
           meta: {{ liff_id: LIFF_ID }}
         }}),
         keepalive: true
       }});
       
+      log(`LINE通知レスポンス: ${{afterResponse.status}}`);
+      
       if (!afterResponse.ok) {{
-        console.warn('LINE通知失敗:', afterResponse.status, afterResponse.statusText);
+        console.warn('LINE通知失敗:', afterResponse.status, await afterResponse.text());
         log('LINE通知でエラーが発生しましたが、処理を続行します');
       }} else {{
         const afterResult = await afterResponse.json();
-        log('LINE通知完了: ' + JSON.stringify(afterResult));
+        log('LINE通知完了');
       }}
       
       // 3. 完了メッセージ表示
       btn.textContent = '完了！';
-      log('同意処理が完了しました。画面を閉じます...');
+      btn.style.background = '#28a745';
+      log('同意処理が完了しました。しばらくするとLINEに戻ります...');
       
-      // 4. 画面を閉じる（改善版）
+      // 4. 画面を閉じる
       setTimeout(() => {{
         closeLiffWindow();
-      }}, 1000);
+      }}, 2000);
       
     }} catch (error) {{
       console.error('同意処理エラー:', error);
-      showError('エラーが発生しました: ' + error.message);
+      showError(`エラーが発生しました: ${{error.message}}`);
       btn.disabled = false;
       btn.textContent = '同意して開始';
       log('エラーのため処理を中断しました');
@@ -259,42 +307,51 @@ window.__CFG__ = {cfg_json};
     try {{
       log('画面を閉じる処理を開始...');
       
-      // LIFF環境で実行されているかチェック
       if (isLiffReady && liff.isInClient()) {{
-        log('LIFF環境内で実行中 - liff.closeWindow()を呼び出し');
+        log('LIFF環境内 - closeWindow実行');
         liff.closeWindow();
       }} else if (isLiffReady && !liff.isInClient()) {{
-        log('外部ブラウザで実行中 - LINEアプリへリダイレクト');
-        // 外部ブラウザの場合
-        window.location.href = 'https://line.me/R/ti/p/@' + (cfg.LINE_BASIC_ID || '487urklv');
+        log('外部ブラウザ - LINEアプリへリダイレクト');
+        window.location.href = 'https://line.me/R/ti/p/@' + cfg.LINE_BASIC_ID;
       }} else {{
-        log('LIFF SDKが利用できない - フォールバック処理');
-        // フォールバック
+        log('LIFF未対応 - フォールバック実行');
         if (window.close) {{
           window.close();
         }} else {{
-          window.location.href = 'https://line.me/R/ti/p/@' + (cfg.LINE_BASIC_ID || '487urklv');
+          window.location.href = 'https://line.me/R/ti/p/@' + cfg.LINE_BASIC_ID;
         }}
       }}
       
     }} catch (error) {{
       console.error('画面を閉じる処理でエラー:', error);
-      log('画面を閉じる処理でエラーが発生 - フォールバック実行');
-      
-      // 最終フォールバック
+      log('最終フォールバック実行');
       try {{
-        window.location.href = 'https://line.me/R/ti/p/@' + (cfg.LINE_BASIC_ID || '487urklv');
+        window.location.href = 'https://line.me/R/ti/p/@' + cfg.LINE_BASIC_ID;
       }} catch (e) {{
-        log('フォールバック処理も失敗しました');
+        log('すべての閉じる処理が失敗しました');
       }}
     }}
   }}
   
+  // 手動ログインボタン（必要に応じて表示）
+  function showManualLoginButton() {{
+    const btn = document.createElement('button');
+    btn.textContent = 'LINEログイン';
+    btn.className = 'btn enabled';
+    btn.style.marginTop = '10px';
+    btn.onclick = () => {{
+      if (isLiffReady) {{
+        liff.login();
+      }}
+    }};
+    document.querySelector('.wrap').appendChild(btn);
+  }}
+  
   // 初期化実行
-  log('LIFF初期化を開始します...');
+  log('システム初期化開始...');
   initLiff().catch(error => {{
     console.error('初期化で予期しないエラー:', error);
-    showError('初期化で予期しないエラーが発生しました');
+    showError('初期化で予期しないエラーが発生しました: ' + error.message);
   }});
   
 }})();

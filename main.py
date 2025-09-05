@@ -1,4 +1,4 @@
-# main.py - Unified RAG API (Diagnostics Super-Enhanced) [web chat: consentless]
+# main.py - Unified RAG API (Diagnostics Super-Enhanced) [web chat: consentless] + Debug Endpoints
 import logging, os, asyncio, time, json, traceback, sys, pathlib, importlib, importlib.util, types
 from datetime import datetime
 from typing import Dict, Any, List
@@ -76,7 +76,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Unified RAG API - Diagnostics Super-Enhanced",
-    description="High-Performance Unified AI Chat API with Robust Import Guards",
+    description="High-Performance Unified AI Chat API with Robust Import Guards + Debug Endpoints",
     version="7.5.1",
 )
 
@@ -326,6 +326,196 @@ async def root():
 async def health_check():
     uptime = time.time()-_BOOT_T0
     return {"status":"healthy" if is_initialized else "degraded","uptime":uptime}
+
+# =========================
+# デバッグエンドポイント（追加）
+# =========================
+
+@app.get("/debug/env-check")
+async def debug_env_check():
+    """環境変数の設定状況を確認（デバッグ用）"""
+    env_vars = {
+        "LIFF_ID": os.getenv("LIFF_ID", ""),
+        "LIFF_CONSENT_URL": os.getenv("LIFF_CONSENT_URL", ""),
+        "LINE_BASIC_ID": os.getenv("LINE_BASIC_ID", ""),
+        "LINE_CHANNEL_ACCESS_TOKEN": "***" if os.getenv("LINE_CHANNEL_ACCESS_TOKEN") else "",
+        "LINE_CHANNEL_SECRET": "***" if os.getenv("LINE_CHANNEL_SECRET") else "",
+        "LINE_LOGIN_CHANNEL_ID": os.getenv("LINE_LOGIN_CHANNEL_ID", ""),
+        "LINE_LOGIN_CHANNEL_SECRET": "***" if os.getenv("LINE_LOGIN_CHANNEL_SECRET") else "",
+        "PUBLIC_API_BASE": os.getenv("PUBLIC_API_BASE", ""),
+        "PUBLIC_BASE_URL": os.getenv("PUBLIC_BASE_URL", ""),
+        "GCS_CONSENT_BUCKET": os.getenv("GCS_CONSENT_BUCKET", ""),
+        "PORT": os.getenv("PORT", ""),
+        "ENV": os.getenv("ENV", "development"),
+        "GOOGLE_CLOUD_PROJECT": os.getenv("GOOGLE_CLOUD_PROJECT", ""),
+    }
+    
+    # 必須環境変数のチェック
+    required_vars = [
+        "LIFF_ID", "LINE_BASIC_ID", "LINE_CHANNEL_ACCESS_TOKEN", 
+        "PUBLIC_API_BASE", "GCS_CONSENT_BUCKET"
+    ]
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "environment_variables": env_vars,
+        "required_check": {
+            "missing_variables": missing_vars,
+            "all_required_set": len(missing_vars) == 0
+        },
+        "liff_config": {
+            "liff_id_format_ok": bool(os.getenv("LIFF_ID", "").startswith("2007887876-")),
+            "consent_url_ok": bool(os.getenv("LIFF_CONSENT_URL", "").startswith("https://liff.line.me/")),
+            "line_basic_id_ok": bool(os.getenv("LINE_BASIC_ID")),
+        },
+        "api_endpoints": {
+            "consent_save": f"{os.getenv('PUBLIC_API_BASE', '')}/consent/save",
+            "after_consent": f"{os.getenv('PUBLIC_API_BASE', '')}/line/after-consent",
+            "liff_page": f"{os.getenv('PUBLIC_API_BASE', '')}/liff",
+        }
+    }
+
+@app.post("/debug/test-consent-flow")
+async def debug_test_consent_flow(test_user_id: str = "test_user_12345"):
+    """同意フローのテスト（デバッグ用）"""
+    try:
+        results = {}
+        
+        # 1. 同意チェックテスト
+        try:
+            from api.routers.line_bot_ultra_fast import _has_consent_sync
+            consent_status = _has_consent_sync(test_user_id)
+            results["consent_check"] = {"success": True, "has_consent": consent_status}
+        except Exception as e:
+            results["consent_check"] = {"success": False, "error": str(e)}
+        
+        # 2. 同意URL生成テスト
+        try:
+            from api.routers.line_bot_ultra_fast import _make_consent_link
+            consent_url = _make_consent_link(test_user_id)
+            results["consent_url_generation"] = {"success": True, "url": consent_url}
+        except Exception as e:
+            results["consent_url_generation"] = {"success": False, "error": str(e)}
+        
+        # 3. セッション管理テスト
+        try:
+            from api.routers.line_bot_ultra_fast import sessions
+            sessions.set_mode(test_user_id, "ai")
+            mode = sessions.get_mode(test_user_id)
+            results["session_management"] = {"success": True, "mode_set": mode}
+        except Exception as e:
+            results["session_management"] = {"success": False, "error": str(e)}
+        
+        # 4. LINEメッセージング準備チェック
+        try:
+            from api.routers.line_bot_ultra_fast import _ensure_api
+            api = _ensure_api()
+            results["line_messaging"] = {"success": bool(api), "api_ready": bool(api)}
+        except Exception as e:
+            results["line_messaging"] = {"success": False, "error": str(e)}
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "test_user_id": test_user_id,
+            "results": results,
+            "overall_status": "OK" if all(r.get("success", False) for r in results.values()) else "ERROR"
+        }
+        
+    except Exception as e:
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "test_user_id": test_user_id,
+            "error": str(e),
+            "overall_status": "FAILED"
+        }
+
+@app.get("/debug/line-token-check")
+async def debug_line_token_check():
+    """LINEアクセストークンの有効性チェック"""
+    try:
+        import httpx
+        
+        line_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+        if not line_token:
+            return {"error": "LINE_CHANNEL_ACCESS_TOKEN not set"}
+        
+        # LINE Messaging API の bot info を取得してトークンの有効性確認
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.line.me/v2/bot/info",
+                headers={"Authorization": f"Bearer {line_token}"},
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                bot_info = response.json()
+                return {
+                    "token_valid": True,
+                    "bot_info": {
+                        "user_id": bot_info.get("userId"),
+                        "display_name": bot_info.get("displayName"),
+                        "premium_id": bot_info.get("premiumId"),
+                    }
+                }
+            else:
+                return {
+                    "token_valid": False,
+                    "status_code": response.status_code,
+                    "error": response.text
+                }
+                
+    except Exception as e:
+        return {
+            "token_valid": False,
+            "error": str(e)
+        }
+
+@app.get("/debug/gcs-access-check")
+async def debug_gcs_access_check():
+    """Google Cloud Storageアクセステスト"""
+    try:
+        from google.cloud import storage
+        
+        bucket_name = os.getenv("GCS_CONSENT_BUCKET", "")
+        if not bucket_name:
+            return {"error": "GCS_CONSENT_BUCKET not set"}
+        
+        # GCS接続テスト
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        
+        # バケットの存在確認
+        exists = bucket.exists()
+        
+        result = {
+            "bucket_name": bucket_name,
+            "bucket_exists": exists,
+            "gcs_client_ready": True
+        }
+        
+        if exists:
+            # テストファイル作成（権限確認）
+            try:
+                test_blob = bucket.blob(f"debug-test/{datetime.now().isoformat()}.txt")
+                test_blob.upload_from_string("debug test", content_type="text/plain")
+                result["write_permission"] = True
+                
+                # テストファイル削除
+                test_blob.delete()
+                result["delete_permission"] = True
+                
+            except Exception as e:
+                result["write_permission"] = False
+                result["write_error"] = str(e)
+        
+        return result
+        
+    except Exception as e:
+        return {
+            "gcs_client_ready": False,
+            "error": str(e)
+        }
 
 # =========================
 # 非同期プリウォーム（ブロックしない）
