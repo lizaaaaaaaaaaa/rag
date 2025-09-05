@@ -55,7 +55,7 @@ def _build_allowed_origins() -> list[str]:
     # LIFF は常に許可
     origins.add("https://liff.line.me")
 
-    # 何もなければ “自己自身” をフォールバックで許可
+    # 何もなければ "自己自身" をフォールバックで許可
     if not origins:
         self_url = (os.getenv("PUBLIC_API_BASE") or os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
         if self_url:
@@ -211,6 +211,7 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
     同意ゲート:
       - /upload /ingest /api /line などは同意必須
       - Web /chat は除外（今回の要件）
+      - LINEログイン関連も除外（友達追加フローのため）
     """
     def __init__(self, app, excluded_paths: list | None = None, required_version_env: str = "POLICY_VERSION"):
         super().__init__(app)
@@ -220,6 +221,7 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
             "/static", "/favicon.ico",
             "/line/webhook",
             "/line/after-consent",  # ★ 同意直後の自動Pushは通す（403対策）
+            "/line-login",  # ★ LINEログイン関連を除外（友達追加フローのため）
             "/chat", "/chat/",  # ★ Webチャットは同意不要
         ])
         self.required_version = os.getenv(required_version_env, "").strip() or "2025-09-01"
@@ -235,7 +237,7 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
         if path == "/" and request.method == "GET":
             return await call_next(request)
 
-        # ここでは /upload /ingest /api /line を保護
+        # ここでは /upload /ingest /api /line を保護（ただし /line-login は除外済み）
         protected = path.startswith(("/upload", "/ingest", "/api", "/line"))
         if not protected:
             return await call_next(request)
