@@ -185,9 +185,11 @@ class CORSMiddleware(BaseHTTPMiddleware):
             resp.headers["Access-Control-Allow-Origin"] = origin
             resp.headers["Vary"] = "Origin"
             resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-            # LIFF → API で必要になる可能性のあるヘッダを包括許可
-            resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-User-Id"
-            # Cookie を使わない設計なので Credentials は付けない（付けると Origin 固定が厳格化）
+            # LIFF → API で利用するヘッダを包括許可
+            resp.headers["Access-Control-Allow-Headers"] = (
+                "Authorization, Content-Type, X-User-Id, X-User-Token, X-Requested-With"
+            )
+            # Cookie を使わない設計なので Credentials は付けない
             # resp.headers["Access-Control-Allow-Credentials"] = "true"
             resp.headers["Access-Control-Max-Age"] = "86400"
         return resp
@@ -217,6 +219,7 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
             "/liff", "/consent", "/consent/", "/auth", "/debug", "/system-status", "/ops",
             "/static", "/favicon.ico",
             "/line/webhook",
+            "/line/after-consent",  # ★ 同意直後の自動Pushは通す（403対策）
             "/chat", "/chat/",  # ★ Webチャットは同意不要
         ])
         self.required_version = os.getenv(required_version_env, "").strip() or "2025-09-01"
