@@ -1,5 +1,5 @@
 # ====================
-# middleware.py（RateLimitをCloud Run向けに安全化）
+# middleware.py（CORS/RateLimit/Headers/ConsentGate）
 # ====================
 
 import os
@@ -17,16 +17,54 @@ try:
 except ImportError:  # pragma: no cover
     def get_settings():
         class Settings:
-            rate_limit_per_minute = 100
-            allowed_origins = ["*"]
+            rate_limit_per_minute = 600
+            allowed_origins = []
         return Settings()
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+
+# ---------- helpers
 def _starts_with_any(path: str, prefixes: Iterable[str]) -> bool:
     return any(path.startswith(p) for p in prefixes)
 
+
+def _build_allowed_origins() -> list[str]:
+    """
+    許可 Origin を環境変数と既定値から生成
+    """
+    origins: set[str] = set()
+
+    # 明示指定（例: "https://a.com,https://b.com"）
+    env_allow = (os.getenv("ALLOWED_ORIGINS") or "").strip()
+    if env_allow:
+        origins.update([o.strip().rstrip("/") for o in env_allow.split(",") if o.strip()])
+
+    # プロジェクトの公開 URL 群
+    for key in ("PUBLIC_FRONT_BASE", "PUBLIC_API_BASE", "PUBLIC_BASE_URL"):
+        v = (os.getenv(key) or "").strip().rstrip("/")
+        if v:
+            origins.add(v)
+
+    # 設定ファイルに書いてあるもの
+    for o in getattr(settings, "allowed_origins", []) or []:
+        if o:
+            origins.add(o.rstrip("/"))
+
+    # LIFF は常に許可
+    origins.add("https://liff.line.me")
+
+    # 何もなければ “自己自身” をフォールバックで許可
+    if not origins:
+        self_url = (os.getenv("PUBLIC_API_BASE") or os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+        if self_url:
+            origins.add(self_url)
+
+    return sorted(origins)
+
+
+# ---------- middlewares
 class TimingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         start = time.time()
@@ -40,42 +78,40 @@ class TimingMiddleware(BaseHTTPMiddleware):
                            request.method, request.url.path, elapsed, request.state.request_id)
         return response
 
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     Cloud Run での誤爆を避けるためのレート制限:
-      - /line/webhook と /liff/*、/health*、/system-status は除外
+      - /line/webhook と /liff/*、/consent*、/health*、/system-status は除外
       - X-Forwarded-For 優先でクライアントIPを取得
-      - パス別バケツで集計（/chat と /upload のカウントを分離）
-      - 上限は RATE_LIMIT_PER_MINUTE 環境変数で変更可（未設定時は設定値 or 600）
+      - パス別バケツで集計（同一IPでも経路ごとに分離）
+      - 上限は RATE_LIMIT_PER_MINUTE 環境変数（未設定は 600）
     """
-    def __init__(self, app, requests_per_minute: int = None):
+    def __init__(self, app, requests_per_minute: int | None = None):
         super().__init__(app)
-        # Cloud Run で落ちない安全値。環境変数があればそれを採用。
         self.limit = int(os.getenv("RATE_LIMIT_PER_MINUTE",
                                    str(getattr(settings, "rate_limit_per_minute", 600))))
         self.client_requests: dict[str, list[float]] = {}
-        # レート制限を掛けない経路（LINE/ヘルス/同意導線は常に通す）
-        self.allow_prefixes = ("/liff/", "/health", "/healthz")
+        self.allow_prefixes = ("/liff/", "/consent", "/health", "/healthz")
         self.allow_paths = {"/line/webhook", "/system-status", "/favicon.ico"}
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        if request.method == "OPTIONS":
+        if request.method in ("OPTIONS", "HEAD"):
+            # Preflight や HEAD は素通し
             return await call_next(request)
 
         path = request.url.path
         if path in self.allow_paths or _starts_with_any(path, self.allow_prefixes):
             return await call_next(request)
 
-        # Cloud Run は request.client.host が 169.254.169.126 になることが多い → X-Forwarded-For を優先
+        # Cloud Run 環境の実IP判定
         xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
         ip_hdr = xff.split(",")[0].strip() if xff else None
         ip = ip_hdr or request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "unknown")
 
         now = time.time()
-        # 経路ごとのバケツにして誤爆を減らす（同一IPでも /line/webhook と /chat を分離）
         key = f"{ip}:{path}"
         bucket = self.client_requests.setdefault(key, [])
-        # 直近60秒に限定
         self.client_requests[key] = [t for t in bucket if now - t < 60.0]
         if len(self.client_requests[key]) >= self.limit:
             return JSONResponse(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -84,34 +120,78 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         return await call_next(request)
 
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    LIFF からの利用を妨げないセキュリティヘッダ
+    """
+    def __init__(self, app):
+        super().__init__(app)
+        # 許可する frame 祖先
+        self.frame_ancestors = " ".join(["'self'", "https://liff.line.me", "https://*.line.me"])
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        response = await call_next(request)
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("X-Frame-Options", "DENY")
-        response.headers.setdefault("X-XSS-Protection", "1; mode=block")
-        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-        response.headers.setdefault("Content-Security-Policy", "default-src 'self'")
-        return response
+        res = await call_next(request)
+        # クリックジャッキング対策（LIFF を許可）
+        res.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        # XSS/CTO/HSTS
+        res.headers.setdefault("X-Content-Type-Options", "nosniff")
+        res.headers.setdefault("X-XSS-Protection", "1; mode=block")
+        res.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        # Referrer/Permissions
+        res.headers.setdefault("Referrer-Policy", "no-referrer-when-downgrade")
+        res.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=()")
+        # CSP（frame-ancestors に LIFF を含める）
+        csp = (
+            "default-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "img-src * data: blob:; "
+            "media-src * data: blob:; "
+            "connect-src *; "
+            "frame-ancestors " + self.frame_ancestors
+        )
+        res.headers.setdefault("Content-Security-Policy", csp)
+        return res
+
 
 class CORSMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, allowed_origins=None):
+    """
+    シンプルな自前 CORS（Origin ホワイトリスト方式）
+    """
+    def __init__(self, app, allowed_origins: list[str] | None = None):
         super().__init__(app)
-        self.allowed = allowed_origins or getattr(settings, "allowed_origins", ["*"])
+        self.allowed = [o.rstrip("/") for o in (allowed_origins or _build_allowed_origins())]
+
+    def _origin_is_allowed(self, origin: str | None) -> bool:
+        if not origin:
+            return False
+        origin = origin.rstrip("/")
+        if origin in self.allowed:
+            return True
+        # line.me のサブドメイン許可（将来の LIFF 仕様変更に備え広めに可）
+        if origin.endswith(".line.me"):
+            return True
+        return False
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        origin = request.headers.get("origin") or request.headers.get("Origin")
+
         if request.method == "OPTIONS":
-            response = Response()
+            # Preflight は即時応答
+            resp = Response(status_code=204)
         else:
-            response = await call_next(request)
-        origin = request.headers.get("origin")
-        if "*" in self.allowed or (origin and origin in self.allowed):
-            response.headers["Access-Control-Allow-Origin"] = origin or "*"
-        response.headers["Vary"] = "Origin"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-User-Id"
-        response.headers["Access-Control-Max-Age"] = "86400"
-        return response
+            resp = await call_next(request)
+
+        if self._origin_is_allowed(origin):
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Vary"] = "Origin"
+            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+            # LIFF → API で必要になる可能性のあるヘッダを包括許可
+            resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-User-Id"
+            # Cookie を使わない設計なので Credentials は付けない（付けると Origin 固定が厳格化）
+            # resp.headers["Access-Control-Allow-Credentials"] = "true"
+            resp.headers["Access-Control-Max-Age"] = "86400"
+        return resp
+
 
 class AuditLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
@@ -123,13 +203,14 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                     request.method, request.url.path, response.status_code, rid)
         return response
 
+
 class ConsentGateMiddleware(BaseHTTPMiddleware):
     """
     同意ゲート:
       - /upload /ingest /api /line などは同意必須
       - Web /chat は除外（今回の要件）
     """
-    def __init__(self, app, excluded_paths: list = None, required_version_env: str = "POLICY_VERSION"):
+    def __init__(self, app, excluded_paths: list | None = None, required_version_env: str = "POLICY_VERSION"):
         super().__init__(app)
         self.excluded_prefixes = tuple((excluded_paths or []) + [
             "/health", "/healthz", "/legal", "/privacy", "/terms", "/cookie",
@@ -145,18 +226,18 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         path = request.url.path
 
-        if request.method == "OPTIONS" or _starts_with_any(path, self.excluded_prefixes):
+        if request.method in ("OPTIONS", "HEAD") or _starts_with_any(path, self.excluded_prefixes):
             return await call_next(request)
 
         if path == "/" and request.method == "GET":
             return await call_next(request)
 
-        # /chat は上で除外済み。ここでは /upload /ingest /api /line のみ保護
+        # ここでは /upload /ingest /api /line を保護
         protected = path.startswith(("/upload", "/ingest", "/api", "/line"))
         if not protected:
             return await call_next(request)
 
-        # ここから先は（LINE等の）同意ゲート判定…（元の実装を維持）
+        # ユーザー識別（できなければ enforcement オフ時は通す）
         user_id = request.headers.get("X-User-Id")
         if not user_id:
             auth = request.headers.get("Authorization", "")
@@ -175,6 +256,7 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
                 return await call_next(request)
             return JSONResponse(status_code=403, content={"detail": "consent_required: unidentified_user"})
 
+        # DB 確認（実装がない場合は enforcement オフで通す）
         try:
             from database import get_db_context
             from sqlalchemy import select

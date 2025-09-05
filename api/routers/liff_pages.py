@@ -1,7 +1,4 @@
-# api/routers/liff_pages.py — LIFF同意モーダル（単一ページ）版
-# - consent.html は使いません。/liff が LIFF 内でモーダルを描画します
-# - /liff/consent は liff.line.me の LIFF URL に 302 リダイレクト（クエリは全て維持）
-# - 法務リンクは PUBLIC_FRONT_BASE を使った絶対URLにして 404 によるハングを防止
+# api/routers/liff_pages.py
 from __future__ import annotations
 
 import os
@@ -14,7 +11,7 @@ router = APIRouter(prefix="", tags=["liff"])
 LIFF_ID = os.getenv("LIFF_ID", "").strip()
 LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").strip()  # 例: https://liff.line.me/xxxx-yyyy
 PUBLIC_FRONT_BASE = os.getenv("PUBLIC_FRONT_BASE", "").rstrip("/")
-GA4_MEASUREMENT_ID = os.getenv("GA_MEASUREMENT_ID", "").strip()  # 任意（あれば自動挿入）
+GA4_MEASUREMENT_ID = os.getenv("GA4_MEASUREMENT_ID", "").strip()  # 任意（あれば自動挿入）
 
 def _abs(url_path: str) -> str:
     """フロントの絶対URLを作る（/legal/privacy.html などを 404 にしない）"""
@@ -48,7 +45,7 @@ async def liff_root(request: Request):
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>AI相談のご利用前の同意</title>
   <!-- GA4（存在する場合のみ） -->
   {'<script async src="https://www.googletagmanager.com/gtag/js?id='+GA4_MEASUREMENT_ID+'"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","'+GA4_MEASUREMENT_ID+'");</script>' if GA4_MEASUREMENT_ID else ''}
@@ -56,13 +53,13 @@ async def liff_root(request: Request):
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     body{{font-family: system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial,'Noto Sans JP','Hiragino Kaku Gothic ProN',Meiryo,sans-serif;}}
-    .wrap{{padding:24px;}}
+    .wrap{{padding:24px;line-height:1.9}}
     .title{{font-size:22px;font-weight:700;margin:8px 0 16px;}}
     .note{{color:#666;font-size:14px;}}
-    .section{{margin-top:18px;line-height:1.9;}}
+    .section{{margin-top:18px;}}
     .btn{{margin-top:20px;display:inline-block;padding:12px 18px;border-radius:8px;border:none;background:#06C755;color:#fff;font-weight:700;font-size:16px;opacity:.5;}}
     .btn.enabled{{opacity:1;}}
-    .links a{{color:#1a73e8;}}
+    a{{color:#1a73e8;}}
   </style>
 </head>
 <body>
@@ -96,7 +93,7 @@ async def liff_root(request: Request):
   const utm_campaign= qs.get("utm_campaign") || "";
   const utm_content = qs.get("utm_content") || "";
 
-  // 4チェックONでボタン活性（user_token必須）
+  // 4チェックON + user_token必須 でボタン活性
   const boxes = [...document.querySelectorAll('input[type="checkbox"]')];
   const btn = document.getElementById("agree");
   function tick() {{
@@ -108,7 +105,6 @@ async def liff_root(request: Request):
   tick();
 
   async function postConsent() {{
-    // 既存の同意記録APIに合わせてエンドポイント名を調整してください
     const payload = {{
       user_token: userToken,
       source: "liff",
@@ -131,7 +127,6 @@ async def liff_root(request: Request):
   async function initLiff() {{
     try {{
       await liff.init({{ liffId: "{LIFF_ID}" }});
-      // トーク内なら login は不要
     }} catch(e) {{
       console.error("liff.init failed", e);
     }}
@@ -141,10 +136,9 @@ async def liff_root(request: Request):
     if (!await postConsent()) return;
     try {{
       if (liff.isInClient()) {{
-        liff.closeWindow();     // LINEトークに復帰
+        liff.closeWindow();     // LINEトークへ復帰
       }} else {{
-        // ブラウザ起動時のフォールバック（任意）
-        window.close();
+        window.close();         // ブラウザ起動時のフォールバック
       }}
     }} catch (e) {{
       console.error(e);

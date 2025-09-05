@@ -5,14 +5,16 @@
 # - RAG / 資金計画は別スレッドで push（応答遅延を防ぐ）
 # - 同意保存後に /line/after-consent で AI相談を自動開始（Push）
 # - Postback の data は action=..., クエリ形式, JSON, プレーン文字列 すべてに対応
+# - ★追加: LIFFの「同意して開始」ボタンが叩く記録API (POST /line/consent, 204)
 
 import logging, os, re, time, hashlib, threading, sys, pathlib, importlib, json
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 
-from fastapi import APIRouter, Request, BackgroundTasks, Body
+from fastapi import APIRouter, Request, BackgroundTasks, Body, Response
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel  # ★追加
 
 # -------------------------------
 # UTM 付与（line_utils が無い環境でも動くフォールバック）
@@ -680,6 +682,29 @@ async def after_consent(payload: dict = Body(...)):
     except Exception as e:
         logger.error(f"after_consent push failed: {e}")
         return {"ok": False, "error": "push_failed"}
+
+# ======================================================================
+# ★追加: LIFFの「同意して開始」ボタンが叩く記録API（まずは204だけ返す）
+# ======================================================================
+class ConsentPayload(BaseModel):
+    user_token: str
+    consent: bool = True
+    utm: dict | None = None  # 任意でそのまま受ける
+
+@router.post("/line/consent", tags=["liff"], status_code=204)
+async def record_consent(req: Request, payload: ConsentPayload) -> Response:
+    """
+    LIFFの同意ボタンが叩くAPI。
+    まずは204を返すだけ（ここにDB保存やLINEへのお礼メッセを後で実装可能）。
+    """
+    try:
+        logger.info(f"[consent] token={payload.user_token} consent={payload.consent} utm={payload.utm}")
+        # TODO: Firestore/Redis 等に consent フラグを保存したい場合はここに実装
+        return Response(status_code=204)
+    except Exception as e:
+        logger.error(f"record_consent error: {e}")
+        # 失敗時もLIFF側を止めないため204で返す
+        return Response(status_code=204)
 
 # ======================================================================
 # 簡易ステータス

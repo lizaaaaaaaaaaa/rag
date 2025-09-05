@@ -20,29 +20,33 @@ def _enforce_env_minimums():
 _BOOT_T0 = time.time()
 try:
     logger.info(json.dumps({"evt":"boot","phase":"start"}))
-except Exception: pass
+except Exception:
+    pass
 _enforce_env_minimums()
 
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 import jwt  # PyJWT
 
+# ⬇️ FastAPI標準のCORSは使わず、middleware.py で定義した自前CORSを使用
 from middleware import (
     TimingMiddleware,
-    RateLimitMiddleware,
+    CORSMiddleware,               # ★ 自前CORS（liff.line.me 常時許可 + 環境変数から動的許可）
     SecurityHeadersMiddleware,
+    RateLimitMiddleware,
     ConsentGateMiddleware,
     AuditLoggingMiddleware,
 )
+
 from database import init_database
 
 ROOT = pathlib.Path(__file__).resolve().parent
 for p in [ROOT, ROOT/"services", ROOT/"llm", ROOT/"rag", ROOT/"api", ROOT/"api"/"routers"]:
     s=str(p)
-    if s not in sys.path: sys.path.insert(0, s)
+    if s not in sys.path:
+        sys.path.insert(0, s)
 
 def ensure_utils_web_search_alias() -> bool:
     try:
@@ -56,8 +60,9 @@ def ensure_utils_web_search_alias() -> bool:
             try:
                 spec = importlib.util.spec_from_file_location("utils.web_search", str(path))
                 if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)  # type: ignore
-                    if "utils" not in sys.modules: sys.modules["utils"]=types.ModuleType("utils")
+                    mod = importlib.module_from_spec(spec); spec.loader.exec_module(mod)  # type: ignore
+                    if "utils" not in sys.modules:
+                        sys.modules["utils"]=types.ModuleType("utils")
                     sys.modules["utils.web_search"] = mod
                     logging.getLogger(__name__).info(f"✅ utils.web_search alias set from {path}")
                     return True
@@ -75,11 +80,7 @@ app = FastAPI(
     version="7.5.1",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
-)
-
+# ── Robots: 非本番は noindex
 class RobotsNoIndexMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         resp = await call_next(request)
@@ -87,10 +88,12 @@ class RobotsNoIndexMiddleware(BaseHTTPMiddleware):
             resp.headers["X-Robots-Tag"]="noindex"
         return resp
 
+# ── ミドルウェアの順序が重要！
 app.add_middleware(RobotsNoIndexMiddleware)
 app.add_middleware(TimingMiddleware)
-app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(RateLimitMiddleware)
+app.add_middleware(CORSMiddleware)            # ★ 最初にCORS（liff.line.me 等を許可）
+app.add_middleware(SecurityHeadersMiddleware) # ★ 次にセキュリティヘッダ（frame-ancestors で LIFF 許可）
+app.add_middleware(RateLimitMiddleware)       # ★ /liff/* /consent* はレート制限除外済み
 app.add_middleware(AuditLoggingMiddleware)
 app.add_middleware(ConsentGateMiddleware)
 
@@ -103,13 +106,15 @@ def _include_optional_router(py_path: str, attr: str = "router", prefix: str = "
     except Exception as e:
         logger.info(f"ℹ️ Router skipped ({py_path}): {e}")
 
+# 既存構成を尊重しつつ、必要ルーターを先に取り込み
 _include_optional_router("api.routers.legal_pages")
-_include_optional_router("api.routers.liff_pages")
+_include_optional_router("api.routers.liff_pages")     # ← LIFF 同意ページ（consent.html 不要の内蔵UI）
 _include_optional_router("api.routers.line_login")
 _include_optional_router("api.routers.reconsent_tasks")
 _include_optional_router("api.routers.financial_api")
 _include_optional_router("api.routers.financial_api", attr="router_compat")
 _include_optional_router("api.routers.consent_gate")
+# （必要に応じて）_include_optional_router("api.routers.dashboard")
 
 vectorstore=None
 rag_chain_template=None
@@ -167,7 +172,8 @@ async def initialize_rag_components():
                     mod=importlib.import_module("llm_runner")
                     get_cached=getattr(mod,"get_cached_llm_instance",None)
                     if callable(get_cached): llm_instance=get_cached()
-                except Exception: pass
+                except Exception:
+                    pass
             rag_diagnostics["component_status"]["llm_instance"]["loaded"]=bool(llm_instance)
         except Exception as e:
             rag_diagnostics["component_status"]["llm_instance"]["error"]=str(e)
@@ -195,8 +201,10 @@ async def initialize_rag_components():
                     def invoke(self, inputs: Dict[str,Any]) -> Dict[str,Any]:
                         q=(inputs.get("query") or inputs.get("question") or "").strip()
                         ans,srcs=get_rag_response(q)
-                        if not self.include_sources: return {"result":ans,"source_documents":[]}
-                        docs=[{"metadata":{"source":s}} for s in srcs]; return {"result":ans,"source_documents":docs}
+                        if not self.include_sources:
+                            return {"result":ans,"source_documents":[]}
+                        docs=[{"metadata":{"source":s}} for s in srcs]
+                        return {"result":ans,"source_documents":docs}
                 vectorstore=None
                 rag_chain_template=_FrontDoorChain(include_sources=INCLUDE_SOURCES)
                 rag_diagnostics["fallback_info"].update({"used_fallback":True,"fallback_type":"services_front_door","fallback_reason":str(e_fast)})
@@ -209,7 +217,8 @@ async def initialize_rag_components():
         logger.info("🎉 RAG init OK")
     except Exception as e:
         is_initialized=False; RAG_SHARED_GLOBALLY=False
-        logger.error(f"💥 RAG init failed: {e}"); logger.error(traceback.format_exc())
+        logger.error(f"💥 RAG init failed: {e}")
+        logger.error(traceback.format_exc())
 
 def get_shared_rag_components():
     return {"vectorstore":vectorstore,"rag_chain_template":rag_chain_template,"llm_instance":llm_instance,
@@ -278,7 +287,8 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
             try:
                 mod=importlib.import_module(m)
                 unified_generator=getattr(mod,"unified_generator",mod)
-                logger.info(f"Using chat module: {m}"); break
+                logger.info(f"Using chat module: {m}")
+                break
             except Exception as e:
                 last_err=e
         if unified_generator is None:
@@ -290,14 +300,20 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
         result={"answer":response.get("answer",""),"sources":response.get("sources",[]),"status":response.get("status","ok"),
                 "performance":{"total_time":rt,"platform":platform,"mode":mode,"source":response.get("source")},
                 "system_info":{"version":"7.5.1","rag_status":"initialized" if is_initialized else "skipped"}}
-        if req.debug_mode: result["debug_info"]={"perf":perf.stats()}
+        if req.debug_mode:
+            result["debug_info"]={"perf":perf.stats()}
         return result
 
     except Exception as e:
         rt=time.time()-t0; perf.error(); err_id=str(uuid4())[:8]
-        logger.error(f"❌ Main chat error [{err_id}]: {e}"); logger.error(traceback.format_exc())
-        return JSONResponse(status_code=200, content={"answer":f"システムエラーが発生しました。（エラーID: {err_id}）","sources":[],"status":"error",
-                                                      "performance":{"total_time":rt,"platform":platform,"mode":mode}})
+        logger.error(f"❌ Main chat error [{err_id}]: {e}")
+        logger.error(traceback.format_exc())
+        return JSONResponse(status_code=200, content={
+            "answer":f"システムエラーが発生しました。（エラーID: {err_id}）",
+            "sources":[],
+            "status":"error",
+            "performance":{"total_time":rt,"platform":platform,"mode":mode}
+        })
 
 @app.get("/")
 async def root():
@@ -312,7 +328,7 @@ async def health_check():
     return {"status":"healthy" if is_initialized else "degraded","uptime":uptime}
 
 # =========================
-# ★ ここを修正：非同期プリウォームに変更
+# 非同期プリウォーム（ブロックしない）
 # =========================
 @app.on_event("startup")
 async def startup_event():
@@ -322,7 +338,7 @@ async def startup_event():
     # DB は待って初期化（依存するルーターのため）
     await init_database()
 
-    # RAG 初期化は「ブロックせず」起動直後に裏で走らせる
+    # RAG 初期化は「ブロックせず」裏で起動
     if ENABLE_RAG_INITIALIZATION:
         asyncio.create_task(initialize_rag_components())
         logger.info("🧊 RAG prewarm task scheduled (non-blocking)")
@@ -330,16 +346,20 @@ async def startup_event():
     # LINE 連携ルーターは即時インクルード（従来どおり）
     if ENABLE_LINE_INTEGRATION:
         try:
-            try: mod = importlib.import_module("api.routers.line_bot_ultra_fast")
-            except Exception: mod = importlib.import_module("routers.line_bot_ultra_fast")
-            line_router=getattr(mod,"router"); app.include_router(line_router, prefix="", tags=["line"])
+            try:
+                mod = importlib.import_module("api.routers.line_bot_ultra_fast")
+            except Exception:
+                mod = importlib.import_module("routers.line_bot_ultra_fast")
+            line_router=getattr(mod,"router")
+            app.include_router(line_router, prefix="", tags=["line"])
             logger.info("✅ LINE router included")
         except Exception as e:
             logger.error(f"ℹ️ LINE router not included: {e}")
 
     try:
         logger.info(json.dumps({"evt":"boot","phase":"ready","ms":int((time.time()-_BOOT_T0)*1000)}))
-    except Exception: pass
+    except Exception:
+        pass
 
 if __name__=="__main__":
     import uvicorn
