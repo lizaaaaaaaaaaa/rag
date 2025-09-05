@@ -1,5 +1,5 @@
 # api/routers/consent_gate.py
-# AI同意ゲート（高速版：必須3チェック / scope=ai / version / Redisキャッシュ / WORMは非同期）
+# AI同意ゲート（高速版：必須4チェック / scope=ai / version / Redisキャッシュ / WORMは非同期）
 
 import os
 import json
@@ -45,8 +45,8 @@ GCS_CONSENT_BUCKET = os.getenv("GCS_CONSENT_BUCKET", "consent-logs-rag-cloud-pro
 REDIS_URL = os.getenv("REDIS_URL", "")
 CONSENT_CACHE_TTL_SEC = int(os.getenv("CONSENT_CACHE_TTL_SEC", "2592000"))  # 30日
 
-# ★ 必須3チェック（Cookieは任意）
-REQUIRED_FLAGS = ["pp", "xfer", "ai_limits"]
+# ★ 必須4チェック（Cookieも必須）
+REQUIRED_FLAGS = ["pp", "xfer", "ai_limits", "cookie"]
 
 # Cloud Run の書き込み可領域は /tmp
 DEFAULT_DB_PATH = os.getenv("CONSENT_SQLITE_PATH", "/tmp/consent_management.db")
@@ -54,18 +54,23 @@ DEFAULT_DB_PATH = os.getenv("CONSENT_SQLITE_PATH", "/tmp/consent_management.db")
 # =============================================================================
 # ユーティリティ
 # =============================================================================
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
 def _today_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
 
 def _threshold_iso() -> str:
     days = 30 * CONSENT_VALIDITY_MONTHS
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
+
 def _sha256_hex(s: str) -> str:
     return hashlib.sha256((s or "").encode("utf-8")).hexdigest()
+
 
 def _parse_flags(raw: Dict[str, Any] | str) -> Dict[str, bool]:
     if isinstance(raw, dict):
@@ -76,8 +81,10 @@ def _parse_flags(raw: Dict[str, Any] | str) -> Dict[str, bool]:
     except Exception:
         return {}
 
+
 def _all_required_true(flags: Dict[str, bool]) -> bool:
     return all(flags.get(k) is True for k in REQUIRED_FLAGS)
+
 
 def _extract_user_token_from_request(request: Request) -> Optional[str]:
     # 優先順位: X-User-Token -> user_token -> Authorization(Bearer)
@@ -89,12 +96,13 @@ def _extract_user_token_from_request(request: Request) -> Optional[str]:
         return auth.split(" ", 1)[1]
     return None
 
+
 def _user_id_from_token(token: str) -> Optional[str]:
     # LINE UID ならそのまま、JWTなら sub/user_id/email を拾う。最終的にはハッシュ化して保存/照合。
     if isinstance(token, str) and token.startswith("U"):
         return token
     try:
-        payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256","RS256","ES256"])
+        payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256", "ES256"])
         return payload.get("sub") or payload.get("user_id") or payload.get("email")
     except Exception:
         return None
@@ -102,6 +110,7 @@ def _user_id_from_token(token: str) -> Optional[str]:
 # =============================================================================
 # Redis キャッシュ（任意）
 # =============================================================================
+
 class _ConsentCache:
     def __init__(self):
         self._redis: Optional["RedisClient"] = None  # ← Pylance OK（型別名）
@@ -156,6 +165,7 @@ _consent_cache = _ConsentCache()
 # =============================================================================
 # DB（SQLite / aiosqlite）
 # =============================================================================
+
 def _open_db():
     """
     aiosqlite.connect(...) は await せず、そのまま async with に渡す。
@@ -163,6 +173,7 @@ def _open_db():
     """
     os.makedirs(os.path.dirname(DEFAULT_DB_PATH), exist_ok=True)
     return aiosqlite.connect(DEFAULT_DB_PATH)
+
 
 async def _init_tables():
     async with _open_db() as db:
@@ -195,17 +206,20 @@ async def _init_tables():
 # =============================================================================
 # モデル
 # =============================================================================
+
 class ConsentSaveBody(BaseModel):
     agree_privacy: bool = Field(..., description="PPに同意")
     understand_external_send: bool = Field(..., description="外部送信の理解")
     understand_ai_may_be_wrong: bool = Field(..., description="AIの限界理解")
-    agree_cookie: Optional[bool] = Field(False, description="Cookie同意（任意）")
+    agree_cookie: bool = Field(..., description="Cookie同意（必須）")
     meta: Optional[Dict[str, Any]] = None
+
 
 class ConsentCheckRequest(BaseModel):
     user_id: Optional[str] = None
     version: Optional[str] = None
     scope: Optional[str] = None
+
 
 class ConsentWithdrawRequest(BaseModel):
     user_id: str
@@ -214,6 +228,7 @@ class ConsentWithdrawRequest(BaseModel):
 # =============================================================================
 # WORM 保存（非同期）
 # =============================================================================
+
 async def _save_to_worm(consent_json: Dict[str, Any]) -> str:
     if not storage:
         return ""
@@ -235,6 +250,7 @@ async def _save_to_worm(consent_json: Dict[str, Any]) -> str:
         logger.warning("WORM save skipped: %s", e)
         return ""
 
+
 async def _bg_worm_save_and_mark(consent_json: Dict[str, Any], consent_id: str):
     obj = await _save_to_worm(consent_json)
     if obj:
@@ -245,6 +261,7 @@ async def _bg_worm_save_and_mark(consent_json: Dict[str, Any], consent_id: str):
 # =============================================================================
 # 高速チェック（Redis→DB）
 # =============================================================================
+
 async def fast_check_consent(user_hash: str, scope: str, version: str) -> bool:
     cached = await _consent_cache.get(user_hash, scope, version)
     if cached is not None:
@@ -276,9 +293,11 @@ async def fast_check_consent(user_hash: str, scope: str, version: str) -> bool:
 # =============================================================================
 # エンドポイント
 # =============================================================================
+
 @router.on_event("startup")
 async def _startup():
     await _init_tables()
+
 
 @router.post("/save")
 async def save_consent(
@@ -347,7 +366,7 @@ async def save_consent(
             "user_hash": user_hash,
             "scope": [scope],
             "version": version,
-            "policy_url": os.getenv("PRIVACY_URL", "/legal/privacy"),
+            "policy_url": os.getenv("PRIVACY_URL", "/privacy"),
             "consented_at": record["consented_at"],
             "ip": record["ip"],
             "ua": record["ua"],
@@ -360,10 +379,11 @@ async def save_consent(
 
     return {"ok": True, "consent_id": consent_id}
 
+
 @router.post("/check")
 async def check_consent(
     request: Request,
-    payload: ConsentCheckRequest = Body(None),
+    payload: 'ConsentCheckRequest' = Body(None),
     scope: str = Query("ai"),
     version: str = Query(None),
 ):
@@ -415,8 +435,9 @@ async def check_consent(
         "flags": _parse_flags(row["flags"])
     }
 
+
 @router.post("/withdraw")
-async def withdraw_consent(withdraw_request: ConsentWithdrawRequest):
+async def withdraw_consent(withdraw_request: 'ConsentWithdrawRequest'):
     user_hash = withdraw_request.user_id
     async with _open_db() as db:
         if withdraw_request.consent_id:
@@ -431,6 +452,7 @@ async def withdraw_consent(withdraw_request: ConsentWithdrawRequest):
             )
         await db.commit()
     return {"success": True}
+
 
 @router.get("/user/{user_id}/history")
 async def get_consent_history(user_id: str):
@@ -460,6 +482,7 @@ async def get_consent_history(user_id: str):
             "source": r["source"],
         })
     return {"user_id": user_id, "history": history, "total_records": len(history)}
+
 
 @router.get("/admin/stats")
 async def get_consent_stats():
@@ -503,6 +526,7 @@ async def get_consent_stats():
 # =============================================================================
 # チャットAPI保護用（任意ミドルウェアに組み込み可能）
 # =============================================================================
+
 def require_valid_consent(func):
     async def wrapper(*args, **kwargs):
         request: Optional[Request] = kwargs.get("request") or (args[0] if args else None)

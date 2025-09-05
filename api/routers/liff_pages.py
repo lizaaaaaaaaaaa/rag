@@ -1,4 +1,3 @@
-# api/routers/liff_pages.py
 from __future__ import annotations
 
 import os
@@ -14,7 +13,7 @@ PUBLIC_FRONT_BASE = os.getenv("PUBLIC_FRONT_BASE", "").rstrip("/")
 GA4_MEASUREMENT_ID = os.getenv("GA4_MEASUREMENT_ID", "").strip()  # 任意（あれば自動挿入）
 
 def _abs(url_path: str) -> str:
-    """フロントの絶対URLを作る（/legal/privacy.html などを 404 にしない）"""
+    """フロントの絶対URLを作る（/liff/* など）"""
     if not PUBLIC_FRONT_BASE:
         return url_path
     if url_path.startswith("http"):
@@ -37,7 +36,7 @@ def liff_consent_redirect(request: Request):
 
 # ------------------------------------------------------------
 # 2) /liff: LIFF ページ本体（同意モーダル内蔵）
-#    consent.html は使わず、JS でモーダルを出す → 同意POST → liff.closeWindow()
+#    静的な web/liff/*.html は使用しない
 # ------------------------------------------------------------
 @router.get("/liff", response_class=HTMLResponse)
 async def liff_root(request: Request):
@@ -66,16 +65,16 @@ async def liff_root(request: Request):
   <div class="wrap">
     <div class="title">AI相談のご利用前の同意</div>
     <div class="section">
-      ・プライバシーポリシー：<a href="{_abs('/legal/privacy.html')}" target="_blank" rel="noopener">こちら</a><br/>
-      ・利用規約：<a href="{_abs('/legal/terms.html')}" target="_blank" rel="noopener">こちら</a><br/>
-      ・Cookie（外部送信の詳細）：<a href="{_abs('/legal/cookie.html')}" target="_blank" rel="noopener">こちら</a>
+      ・プライバシーポリシー：<a href="/privacy" target="_blank" rel="noopener">こちら</a><br/>
+      ・利用規約：<a href="/terms" target="_blank" rel="noopener">こちら</a><br/>
+      ・Cookie（外部送信の詳細）：<a href="/cookie" target="_blank" rel="noopener">こちら</a>
     </div>
 
     <div class="section">
       <label><input type="checkbox" id="c1" checked> プライバシーポリシーに同意します</label><br/>
       <label><input type="checkbox" id="c2" checked> 入力内容が外部サービスへ送信される場合があることを理解しました</label><br/>
       <label><input type="checkbox" id="c3" checked> AIの誤答・限界があることを理解しました</label><br/>
-      <label><input type="checkbox" id="c4" checked> Cookie等の利用（計測を含む）に同意します（任意）</label>
+      <label><input type="checkbox" id="c4" checked> Cookie等の利用（計測を含む）に同意します</label>
     </div>
 
     <button id="agree" class="btn" disabled>同意して開始</button>
@@ -84,36 +83,44 @@ async def liff_root(request: Request):
 
 <script>
 (function() {{
-  const qs = new URLSearchParams(window.location.search);
-  const userToken   = qs.get("user_token") || "";
-  const state       = qs.get("state") || "";
-  const ab          = qs.get("ab") || "";
-  const utm_source  = qs.get("utm_source") || "";
-  const utm_medium  = qs.get("utm_medium") || "";
-  const utm_campaign= qs.get("utm_campaign") || "";
-  const utm_content = qs.get("utm_content") || "";
+  // --- クエリは liff.state も含めて吸い上げる（user_token 等の取りこぼし防止）
+  const all = new URLSearchParams(location.search);
+  const stateQS = new URLSearchParams(all.get("liff.state") || "");
+  const get = (k) => all.get(k) || stateQS.get(k) || "";
 
-  // 4チェックON + user_token必須 でボタン活性
-  const boxes = [...document.querySelectorAll('input[type="checkbox"]')];
+  const userToken    = get("user_token");
+  const state        = get("state");
+  const ab           = get("ab");
+  const utm_source   = get("utm_source");
+  const utm_medium   = get("utm_medium");
+  const utm_campaign = get("utm_campaign");
+  const utm_content  = get("utm_content");
+
+  // --- 4チェックすべて必須（Cookie含む）+ user_token 必須 でボタン活性
+  const boxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
   const btn = document.getElementById("agree");
   function tick() {{
-    const ok = boxes.every(b => b.checked) && userToken;
+    const ok = boxes.every(b => b.checked) && !!userToken;
     btn.disabled = !ok;
     btn.classList.toggle("enabled", ok);
   }}
   boxes.forEach(b => b.addEventListener("change", tick));
   tick();
 
+  // --- 同意保存API: /consent/save?user_token=...&scope=ai
   async function postConsent() {{
     const payload = {{
-      user_token: userToken,
-      source: "liff",
-      state, ab, utm_source, utm_medium, utm_campaign, utm_content
+      agree_privacy: boxes[0].checked,
+      understand_external_send: boxes[1].checked,
+      understand_ai_may_be_wrong: boxes[2].checked,
+      agree_cookie: boxes[3].checked,
+      meta: {{ state, ab, utm_source, utm_medium, utm_campaign, utm_content, ua: navigator.userAgent }}
     }};
     try {{
-      const res = await fetch("/consent/check", {{
+      const q = new URLSearchParams({{ user_token: userToken, scope: "ai" }}).toString();
+      const res = await fetch(`/consent/save?${{q}}`, {{
         method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
+        headers: {{ "Content-Type": "application/json", "X-User-Token": userToken }},
         body: JSON.stringify(payload)
       }});
       if (!res.ok) throw new Error("consent api " + res.status);
@@ -135,6 +142,12 @@ async def liff_root(request: Request):
   document.getElementById("agree").addEventListener("click", async () => {{
     if (!await postConsent()) return;
     try {{
+      // 体感速度を落とさずAI相談を自動開始（失敗してもUIは止めない）
+      fetch("/line/after-consent", {{
+        method: "POST",
+        headers: {{ "Content-Type": "application/json" }},
+        body: JSON.stringify({{ user_token: userToken }})
+      }}).catch(()=>{{}});
       if (liff.isInClient()) {{
         liff.closeWindow();     // LINEトークへ復帰
       }} else {{
