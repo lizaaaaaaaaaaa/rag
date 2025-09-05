@@ -11,6 +11,7 @@ import logging, os, re, time, hashlib, threading, sys, pathlib, importlib, json,
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
+from uuid import uuid4  
 
 from fastapi import APIRouter, Request, BackgroundTasks, Body, Response
 from fastapi.responses import JSONResponse
@@ -697,16 +698,27 @@ if LINE_SDK_AVAILABLE and handler:
             logger.error(f"postback handler error: {e}")
 
 # ======================================================================
-# 同意完了後のプッシュ（AI相談を自動開始）★修正版
+# 同意完了後のプッシュ（AI相談を自動開始）★修正版 - 強化版
 # ======================================================================
 @router.post("/line/after-consent")
-async def after_consent(request: Request, payload: dict = Body(...)):
-    """同意完了後のLINE通知（強化版）"""
+async def after_consent(request: Request):
+    """同意完了後のLINE通知（強化版）- リッチメニュー文面は変更なし"""
     try:
-        logger.info("after_consent: リクエスト受信")
+        request_id = getattr(request.state, "request_id", str(uuid4())[:8])
+        logger.info(f"[{request_id}] after-consent: Processing request")
+        
+        # リクエストボディ解析
+        try:
+            body = await request.json()
+        except Exception as e:
+            logger.error(f"[{request_id}] Failed to parse request body: {e}")
+            return JSONResponse(
+                content={"ok": False, "error": "invalid_json", "detail": str(e)},
+                status_code=400
+            )
         
         # user_tokenの取得（複数の方法で試行）
-        user_token = (payload or {}).get("user_token", "")
+        user_token = body.get("user_token", "")
         
         if not user_token:
             # ヘッダーからも試行
@@ -715,37 +727,40 @@ async def after_consent(request: Request, payload: dict = Body(...)):
                          request.headers.get("user_token") or "")
         
         if not user_token:
-            logger.error("after_consent: user_token not provided")
-            return JSONResponse(content={
-                "ok": False, 
-                "error": "missing_user_token", 
-                "detail": "user_token is required"
-            }, status_code=400)
+            logger.error(f"[{request_id}] user_token not provided")
+            return JSONResponse(
+                content={
+                    "ok": False, 
+                    "error": "missing_user_token", 
+                    "detail": "user_token is required in body or headers"
+                },
+                status_code=400
+            )
         
-        logger.info(f"after_consent: Processing user_token: {user_token[:8]}...")
+        logger.info(f"[{request_id}] Processing user_token: {user_token[:8]}...")
         
-        # ユーザーID変換
+        # ユーザーID変換（既存の _extract_user_id_from_token を使用）
         user_id = _extract_user_id_from_token(user_token)
         if not user_id:
             # フォールバック: トークンをハッシュ化してuser_idとして使用
             user_id = f"liff_{hashlib.md5(user_token.encode()).hexdigest()[:16]}"
-            logger.info(f"after_consent: Using fallback user_id: {user_id}")
+            logger.info(f"[{request_id}] Using fallback user_id: {user_id}")
         
-        logger.info(f"after_consent: Final user_id: {user_id}")
+        logger.info(f"[{request_id}] Final user_id: {user_id[:8]}...")
         
         try:
-            # セッション設定（AI相談モード）
+            # セッション設定（AI相談モード）- 既存のsessionsを使用
             sessions.set_mode(user_id, "ai")
-            logger.info(f"after_consent: Session mode set to 'ai' for user: {user_id}")
+            logger.info(f"[{request_id}] Session mode set to 'ai' for user: {user_id[:8]}...")
             
-            # AI相談開始メッセージをプッシュ
-            ai_message = RICHMENU_FIXED_RESPONSES["AI相談"]
+            # 🔒 重要：既存のリッチメニュー応答文面をそのまま使用（変更なし）
+            ai_message = RICHMENU_FIXED_RESPONSES["AI相談"]  # ← 既存の文面をそのまま使用
             success = _push(user_id, ai_message)
             
             if success:
-                logger.info(f"after_consent: Successfully sent AI consultation message to user: {user_id}")
+                logger.info(f"[{request_id}] Successfully sent AI consultation message to user: {user_id[:8]}...")
                 
-                # 追加で歓迎メッセージも送信
+                # 追加で歓迎メッセージも送信（新規メッセージなので問題なし）
                 welcome_msg = (
                     "✅ 同意が完了しました！\n\n"
                     "これでAI相談をご利用いただけます。\n"
@@ -757,33 +772,40 @@ async def after_consent(request: Request, payload: dict = Body(...)):
                     "ok": True, 
                     "success": True,
                     "message": "AI consultation started successfully",
-                    "user_id": user_id[:8] + "...",  # プライバシー保護
-                    "session_mode": "ai"
+                    "user_id_hash": hashlib.md5(user_id.encode()).hexdigest()[:8],  # プライバシー保護
+                    "session_mode": "ai",
+                    "request_id": request_id,
+                    "timestamp": datetime.now().isoformat()
                 }, status_code=200)
             else:
-                logger.error(f"after_consent: Failed to send message to user: {user_id}")
+                logger.error(f"[{request_id}] Failed to send message to user: {user_id[:8]}...")
                 return JSONResponse(content={
                     "ok": False, 
                     "error": "push_failed",
-                    "message": "Failed to send LINE message"
+                    "message": "Failed to send LINE message",
+                    "request_id": request_id
                 }, status_code=500)
                 
         except Exception as e:
-            logger.error(f"after_consent: LINE push failed for user {user_id}: {e}")
+            logger.error(f"[{request_id}] LINE push failed for user {user_id[:8]}...: {e}")
             logger.error(traceback.format_exc())
             return JSONResponse(content={
                 "ok": False, 
                 "error": "push_failed", 
-                "detail": str(e)
+                "detail": str(e),
+                "request_id": request_id
             }, status_code=500)
         
     except Exception as e:
-        logger.error(f"after_consent: Unexpected error: {e}")
+        request_id = getattr(request, "state", type('obj', (object,), {'request_id': 'unknown'})).request_id
+        logger.error(f"[{request_id}] after-consent: Unexpected error: {e}")
         logger.error(traceback.format_exc())
         return JSONResponse(content={
             "ok": False, 
             "error": "internal_error", 
-            "detail": str(e)
+            "detail": str(e),
+            "request_id": request_id,
+            "timestamp": datetime.now().isoformat()
         }, status_code=500)
 
 # ======================================================================

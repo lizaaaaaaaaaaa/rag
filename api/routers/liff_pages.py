@@ -26,7 +26,7 @@ async def liff_consent(_: Request):
     # 設定を環境変数から取得
     cfg = {
         "API_BASE": (os.getenv("PUBLIC_API_BASE", "").rstrip("/")),
-        "LIFF_ID": os.getenv("LIFF_ID", "2007887876-vMNe74eX"),  # 明示的に設定
+        "LIFF_ID": os.getenv("LIFF_ID", "2007887876-vMNe74eX"),
         "CONSENT_URL": os.getenv("LIFF_CONSENT_URL", ""),
         "LINE_BASIC_ID": os.getenv("LINE_BASIC_ID", "487urklv").lstrip("@"),
     }
@@ -44,6 +44,7 @@ async def liff_consent(_: Request):
   .note{color:#666;font-size:12px;margin-top:10px}
   .debug{background:#f5f5f5;padding:10px;margin-top:10px;font-size:12px;border-radius:4px}
   .error{background:#ffe6e6;padding:10px;margin-top:10px;color:#d63031;border-radius:4px;display:none}
+  .success{background:#e6ffe6;padding:10px;margin-top:10px;color:#00a152;border-radius:4px;display:none}
 </style>
 """
 
@@ -70,6 +71,7 @@ async def liff_consent(_: Request):
   <div class="note">※同意は公式LINE内の「AI相談」にのみ適用されます。</div>
   <div id="debug" class="debug">デバッグ情報: 初期化中...</div>
   <div id="error" class="error"></div>
+  <div id="success" class="success"></div>
 </div>
 
 <script>
@@ -78,25 +80,37 @@ window.__CFG__ = {cfg_json};
 (function(){{
   const debugEl = document.getElementById('debug');
   const errorEl = document.getElementById('error');
+  const successEl = document.getElementById('success');
   
-  function log(msg) {{ 
-    console.log(msg); 
+  function log(msg, level = 'info') {{ 
+    console.log(`[LIFF] ${{level.toUpperCase()}}: ${{msg}}`); 
     debugEl.textContent = msg; 
   }}
   
   function showError(msg) {{ 
-    console.error(msg);
+    console.error(`[LIFF] ERROR: ${{msg}}`);
     errorEl.textContent = msg; 
-    errorEl.style.display = 'block'; 
+    errorEl.style.display = 'block';
+    successEl.style.display = 'none';
+  }}
+  
+  function showSuccess(msg) {{
+    console.info(`[LIFF] SUCCESS: ${{msg}}`);
+    successEl.textContent = msg;
+    successEl.style.display = 'block';
+    errorEl.style.display = 'none';
   }}
   
   const cfg = window.__CFG__ || {{}};
   const API_BASE = cfg.API_BASE || location.origin;
   const LIFF_ID = cfg.LIFF_ID || '2007887876-vMNe74eX';
+  const LINE_BASIC_ID = cfg.LINE_BASIC_ID || '487urklv';
   
   let userToken = '';
   let isLiffReady = false;
   let fallbackUserId = '';
+  let initRetryCount = 0;
+  const MAX_RETRY = 3;
   
   // URLパラメータからuser_tokenを取得（フォールバック）
   function getTokenFromURL() {{
@@ -104,31 +118,43 @@ window.__CFG__ = {cfg_json};
     return qs.get('user_token') || '';
   }}
   
-  // LIFF SDK初期化（エラーハンドリング強化）
+  // LIFF SDK初期化（リトライ機能付き）
   async function initLiff() {{
     try {{
       log('LIFF SDK初期化中...');
       
-      // LIFF初期化
-      await liff.init({{ liffId: LIFF_ID }});
+      // LIFF存在確認
+      if (typeof liff === 'undefined') {{
+        throw new Error('LIFF SDK が読み込まれていません。CSPやネットワークを確認してください。');
+      }}
+      
+      // LIFF初期化（タイムアウト付き）
+      const initPromise = liff.init({{ liffId: LIFF_ID }});
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('LIFF初期化がタイムアウトしました')), 10000)
+      );
+      
+      await Promise.race([initPromise, timeoutPromise]);
       log('LIFF SDK初期化完了');
       isLiffReady = true;
       
       // ログイン状態確認
       if (liff.isLoggedIn()) {{
+        log('ユーザーはログイン済み');
+        
         // アクセストークン取得
         try {{
           userToken = liff.getAccessToken();
-          log(`アクセストークン取得: ${{userToken ? 'OK' : 'NG'}}`);
+          log(`アクセストークン取得: ${{userToken ? '成功' : '失敗'}}`);
         }} catch (tokenError) {{
-          log(`アクセストークン取得エラー: ${{tokenError.message}}`);
+          log(`アクセストークン取得エラー: ${{tokenError.message}}`, 'warn');
         }}
         
         // ユーザーID取得（代替手段）
         try {{
           const profile = await liff.getProfile();
           fallbackUserId = profile.userId;
-          log(`ユーザーID取得: ${{fallbackUserId ? 'OK' : 'NG'}}`);
+          log(`ユーザーID取得: ${{fallbackUserId ? '成功' : '失敗'}}`);
           
           // トークンが取得できない場合はユーザーIDを使用
           if (!userToken && fallbackUserId) {{
@@ -136,17 +162,16 @@ window.__CFG__ = {cfg_json};
             log('フォールバック: ユーザーIDをトークンとして使用');
           }}
         }} catch (profileError) {{
-          log(`プロフィール取得エラー: ${{profileError.message}}`);
+          log(`プロフィール取得エラー: ${{profileError.message}}`, 'warn');
         }}
       }} else {{
         log('ユーザーがログインしていません');
         
-        // 外部ブラウザの場合はログインを促す
+        // 外部ブラウザでログインが必要な場合
         if (!liff.isInClient()) {{
-          log('外部ブラウザでログインが必要');
-          // 即座にログインせず、ユーザーに選択肢を提示
-          showError('LINEアプリでこのページを開いてください。または、下記のボタンでログインしてください。');
-          // liff.login(); // 自動ログインは削除
+          log('外部ブラウザ環境を検出');
+          showError('LINEアプリでこのページを開いてください。');
+          showManualLoginButton();
           return;
         }}
       }}
@@ -160,16 +185,23 @@ window.__CFG__ = {cfg_json};
       
       // 最終確認
       if (!userToken) {{
-        showError('ユーザートークンを取得できませんでした。LINEアプリでこのページを開き直してください。');
-        return;
+        throw new Error('ユーザートークンを取得できませんでした');
       }}
       
-      log(`最終トークン確認: ${{userToken.substring(0, 10)}}...`);
+      log(`トークン取得完了: ${{userToken.substring(0, 10)}}...`);
       updateUI();
       
     }} catch (error) {{
       console.error('LIFF初期化エラー:', error);
-      log(`LIFF初期化エラー: ${{error.message}}`);
+      log(`LIFF初期化エラー: ${{error.message}}`, 'error');
+      
+      // リトライロジック
+      if (initRetryCount < MAX_RETRY) {{
+        initRetryCount++;
+        log(`リトライ ${{initRetryCount}}/${{MAX_RETRY}} を実行中...`);
+        setTimeout(() => initLiff(), 2000);
+        return;
+      }}
       
       // フォールバック: URLパラメータから取得
       const urlToken = getTokenFromURL();
@@ -179,6 +211,7 @@ window.__CFG__ = {cfg_json};
         updateUI();
       }} else {{
         showError(`LIFF初期化に失敗しました: ${{error.message}}`);
+        showManualLoginButton();
       }}
     }}
   }}
@@ -225,13 +258,17 @@ window.__CFG__ = {cfg_json};
           source: 'liff_consent',
           liff_id: LIFF_ID,
           timestamp: new Date().toISOString(),
-          user_agent: navigator.userAgent
+          user_agent: navigator.userAgent,
+          retry_count: initRetryCount
         }}
       }};
       
-      // 1. 同意保存API呼び出し
+      // 1. 同意保存API呼び出し（タイムアウト付き）
       log('同意保存API呼び出し中...');
       const saveUrl = `${{API_BASE}}/consent/save?user_token=${{encodeURIComponent(userToken)}}&scope=ai`;
+      
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 15000); // 15秒タイムアウト
       
       const saveResponse = await fetch(saveUrl, {{
         method: 'POST',
@@ -241,6 +278,7 @@ window.__CFG__ = {cfg_json};
           'X-LIFF-ID': LIFF_ID
         }},
         body: JSON.stringify(consentData),
+        signal: controller.signal,
         keepalive: true
       }});
       
@@ -258,6 +296,9 @@ window.__CFG__ = {cfg_json};
       log('LINE通知API呼び出し中...');
       const afterConsentUrl = `${{API_BASE}}/line/after-consent`;
       
+      const afterController = new AbortController();
+      setTimeout(() => afterController.abort(), 10000); // 10秒タイムアウト
+      
       const afterResponse = await fetch(afterConsentUrl, {{
         method: 'POST',
         headers: {{
@@ -271,6 +312,7 @@ window.__CFG__ = {cfg_json};
           consent_id: saveResult.consent_id || 'unknown',
           meta: {{ liff_id: LIFF_ID }}
         }}),
+        signal: afterController.signal,
         keepalive: true
       }});
       
@@ -278,7 +320,7 @@ window.__CFG__ = {cfg_json};
       
       if (!afterResponse.ok) {{
         console.warn('LINE通知失敗:', afterResponse.status, await afterResponse.text());
-        log('LINE通知でエラーが発生しましたが、処理を続行します');
+        log('LINE通知でエラーが発生しましたが、処理を続行します', 'warn');
       }} else {{
         const afterResult = await afterResponse.json();
         log('LINE通知完了');
@@ -287,7 +329,8 @@ window.__CFG__ = {cfg_json};
       // 3. 完了メッセージ表示
       btn.textContent = '完了！';
       btn.style.background = '#28a745';
-      log('同意処理が完了しました。しばらくするとLINEに戻ります...');
+      showSuccess('同意処理が完了しました。LINEに戻ります...');
+      log('同意処理が完了しました。LINEに戻ります...');
       
       // 4. 画面を閉じる
       setTimeout(() => {{
@@ -299,7 +342,7 @@ window.__CFG__ = {cfg_json};
       showError(`エラーが発生しました: ${{error.message}}`);
       btn.disabled = false;
       btn.textContent = '同意して開始';
-      log('エラーのため処理を中断しました');
+      log(`エラーのため処理を中断しました: ${{error.message}}`, 'error');
     }}
   }}
   
@@ -312,36 +355,42 @@ window.__CFG__ = {cfg_json};
         liff.closeWindow();
       }} else if (isLiffReady && !liff.isInClient()) {{
         log('外部ブラウザ - LINEアプリへリダイレクト');
-        window.location.href = 'https://line.me/R/ti/p/@' + cfg.LINE_BASIC_ID;
+        window.location.href = `https://line.me/R/ti/p/@${{LINE_BASIC_ID}}`;
       }} else {{
         log('LIFF未対応 - フォールバック実行');
         if (window.close) {{
           window.close();
         }} else {{
-          window.location.href = 'https://line.me/R/ti/p/@' + cfg.LINE_BASIC_ID;
+          window.location.href = `https://line.me/R/ti/p/@${{LINE_BASIC_ID}}`;
         }}
       }}
       
     }} catch (error) {{
       console.error('画面を閉じる処理でエラー:', error);
-      log('最終フォールバック実行');
+      log('最終フォールバック実行', 'warn');
       try {{
-        window.location.href = 'https://line.me/R/ti/p/@' + cfg.LINE_BASIC_ID;
+        window.location.href = `https://line.me/R/ti/p/@${{LINE_BASIC_ID}}`;
       }} catch (e) {{
-        log('すべての閉じる処理が失敗しました');
+        log('すべての閉じる処理が失敗しました', 'error');
       }}
     }}
   }}
   
   // 手動ログインボタン（必要に応じて表示）
   function showManualLoginButton() {{
+    const existingBtn = document.getElementById('manual-login-btn');
+    if (existingBtn) return;
+    
     const btn = document.createElement('button');
+    btn.id = 'manual-login-btn';
     btn.textContent = 'LINEログイン';
     btn.className = 'btn enabled';
     btn.style.marginTop = '10px';
     btn.onclick = () => {{
       if (isLiffReady) {{
         liff.login();
+      }} else {{
+        showError('LIFF SDKが利用できません。LINEアプリでページを開き直してください。');
       }}
     }};
     document.querySelector('.wrap').appendChild(btn);
@@ -349,10 +398,13 @@ window.__CFG__ = {cfg_json};
   
   // 初期化実行
   log('システム初期化開始...');
-  initLiff().catch(error => {{
-    console.error('初期化で予期しないエラー:', error);
-    showError('初期化で予期しないエラーが発生しました: ' + error.message);
-  }});
+  
+  // DOMContentLoaded後に実行（確実性向上）
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', initLiff);
+  }} else {{
+    initLiff();
+  }}
   
 }})();
 </script>

@@ -123,7 +123,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """
-    LIFF からの利用を妨げないセキュリティヘッダ
+    LIFF からの利用を妨げないセキュリティヘッダ（LIFF SDK許可対応）
     """
     def __init__(self, app):
         super().__init__(app)
@@ -141,13 +141,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Referrer/Permissions
         res.headers.setdefault("Referrer-Policy", "no-referrer-when-downgrade")
         res.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=()")
-        # CSP（frame-ancestors に LIFF を含める）
+        
+        # ★ 修正: LIFF SDK と外部スクリプトを許可するCSP
         csp = (
-            "default-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.line-scdn.net https://liff.line.me https://www.googletagmanager.com https://cdnjs.cloudflare.com; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
             "img-src * data: blob:; "
             "media-src * data: blob:; "
             "connect-src *; "
-            "frame-ancestors " + self.frame_ancestors
+            "frame-ancestors " + self.frame_ancestors + "; "
+            "frame-src https://liff.line.me https://*.line.me"
         )
         res.headers.setdefault("Content-Security-Policy", csp)
         return res
@@ -160,6 +165,7 @@ class CORSMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, allowed_origins: list[str] | None = None):
         super().__init__(app)
         self.allowed = [o.rstrip("/") for o in (allowed_origins or _build_allowed_origins())]
+        logger.info(f"CORS allowed origins: {self.allowed}")
 
     def _origin_is_allowed(self, origin: str | None) -> bool:
         if not origin:
@@ -187,11 +193,15 @@ class CORSMiddleware(BaseHTTPMiddleware):
             resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
             # LIFF → API で利用するヘッダを包括許可
             resp.headers["Access-Control-Allow-Headers"] = (
-                "Authorization, Content-Type, X-User-Id, X-User-Token, X-Requested-With"
+                "Authorization, Content-Type, X-User-Id, X-User-Token, X-Requested-With, user_token"
             )
             # Cookie を使わない設計なので Credentials は付けない
             # resp.headers["Access-Control-Allow-Credentials"] = "true"
             resp.headers["Access-Control-Max-Age"] = "86400"
+        else:
+            # デバッグ用ログ
+            logger.warning(f"CORS rejected origin: {origin}")
+            
         return resp
 
 
