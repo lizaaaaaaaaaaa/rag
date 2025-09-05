@@ -1,5 +1,5 @@
 # api/routers/consent_gate.py
-# PDF準拠・完全修正版：LIFF同意ゲート（必須4チェック + GCS疑似WORM + 全バグ修正済み）
+# PDF準拠・完全修正版：LIFF同意ゲート（必須4チェック + GCS疑似WORM + 高速チェック + LINE push 追加）
 
 import os
 import json
@@ -31,11 +31,19 @@ try:
 except Exception:
     storage = None
 
+# ---- LINE push（追加） ------------------------------------------------------
+try:
+    from linebot import LineBotApi
+    from linebot.models import TextSendMessage
+except Exception:
+    LineBotApi = None
+    TextSendMessage = None
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/consent", tags=["consent"])
 
 # =============================================================================
-# 設定（PDF準拠）
+# 設定
 # =============================================================================
 POLICY_VERSION_DEFAULT = os.getenv("POLICY_VERSION", "1.0.0")
 CONSENT_VALIDITY_MONTHS = int(os.getenv("CONSENT_VALIDITY_MONTHS", "12"))
@@ -44,10 +52,22 @@ GCS_CONSENT_BUCKET = os.getenv("GCS_CONSENT_BUCKET", "consent-logs-rag-cloud-pro
 REDIS_URL = os.getenv("REDIS_URL", "")
 CONSENT_CACHE_TTL_SEC = int(os.getenv("CONSENT_CACHE_TTL_SEC", "2592000"))  # 30日
 
-# PDF準拠：必須4チェック + アカウント情報
+# 必須4チェック
 REQUIRED_FLAGS = ["pp", "xfer", "ai_limits", "cookie"]
-LINE_ACCOUNT = os.getenv("LINE_BASIC_ID", "487urklv")  # @なしで保存
-PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "https://rag-api-190389115361.asia-northeast1.run.app/privacy")
+
+# LINE関連
+LINE_ACCOUNT = os.getenv("LINE_BASIC_ID", "").lstrip("@")  # 例: "kinoe-ai"
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+_line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN) if (LineBotApi and LINE_CHANNEL_ACCESS_TOKEN) else None
+
+# ポリシーURL
+PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "https://example.com/privacy")
+
+# AI相談の定型文（環境変数が無ければ既定文）
+AI_CONSULTATION_MESSAGE = os.getenv(
+    "AI_CONSULTATION_MESSAGE",
+    "こんにちは！家づくりのことなら何でも聞いてください！"
+)
 
 DEFAULT_DB_PATH = os.getenv("CONSENT_SQLITE_PATH", "/tmp/consent_management.db")
 
@@ -87,6 +107,10 @@ def _extract_user_token_from_request(request: Request) -> Optional[str]:
     return None
 
 def _user_id_from_token(token: str) -> Optional[str]:
+    """
+    LIFF から渡る user_token が LINEの userId(U...) ならそのまま、
+    JWT 等なら sub / user_id / email を拾う。検証は行わない（速度優先）。
+    """
     if isinstance(token, str) and token.startswith("U"):
         return token
     try:
@@ -149,7 +173,7 @@ class _ConsentCache:
 _consent_cache = _ConsentCache()
 
 # =============================================================================
-# DB（SQLite）- PDF準拠スキーマ
+# DB（SQLite）
 # =============================================================================
 
 def _open_db():
@@ -162,42 +186,41 @@ async def _init_tables():
         CREATE TABLE IF NOT EXISTS consent_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             consent_id TEXT UNIQUE NOT NULL,
-            user_id_hash TEXT NOT NULL,         -- PDF準拠：user_id_hash
-            account TEXT NOT NULL,              -- PDF準拠：@kinoe-ai
+            user_id_hash TEXT NOT NULL,
+            account TEXT NOT NULL,
             liff_id TEXT,
-            ts TEXT NOT NULL,                   -- PDF準拠：consented_at → ts
+            ts TEXT NOT NULL,
             ip TEXT,
             ua TEXT,
-            liff_os TEXT,                       -- PDF準拠：LIFF環境
-            version TEXT NOT NULL,              -- PDF準拠：policy_version → version
-            scope TEXT NOT NULL,                -- PDF準拠：scope (JSON array)
-            policy_url TEXT,                    -- PDF準拠
-            flags TEXT NOT NULL,                -- JSON（pp/cookie/xfer/ai_limits）
-            locale TEXT,                        -- PDF準拠
-            withdrawn INTEGER DEFAULT 0,        -- PDF準拠：boolean
+            liff_os TEXT,
+            version TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            policy_url TEXT,
+            flags TEXT NOT NULL,
+            locale TEXT,
+            withdrawn INTEGER DEFAULT 0,
             withdrawn_at TEXT,
             created_at TEXT DEFAULT (datetime('now')),
-            gcs_object_name TEXT,               -- WORM保存先
-            gcs_generation INTEGER              -- GCS世代番号（疑似immutable）
+            gcs_object_name TEXT,
+            gcs_generation INTEGER
         )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_consent_user_hash ON consent_logs(user_id_hash)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_consent_valid ON consent_logs(user_id_hash, version, withdrawn)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_consent_created ON consent_logs(created_at)")
         await db.commit()
-        logger.info("✅ PDF準拠 consent_logs table ready (SQLite) at %s", DEFAULT_DB_PATH)
+        logger.info("✅ consent_logs ready at %s", DEFAULT_DB_PATH)
 
 # =============================================================================
-# モデル（PDF準拠）
+# モデル
 # =============================================================================
 
 class ConsentSaveBody(BaseModel):
-    """PDF準拠：必須4チェック"""
     agree_privacy: bool = Field(..., description="プライバシーポリシーに同意")
-    understand_external_send: bool = Field(..., description="外部送信（OpenAI/GA4等）の理解")
+    understand_external_send: bool = Field(..., description="外部送信への理解")
     understand_ai_may_be_wrong: bool = Field(..., description="AIの限界理解")
     agree_cookie: bool = Field(..., description="Cookie同意（計測含む）")
-    liff_os: Optional[str] = Field(None, description="LIFF環境（iOS/Android）")
+    liff_os: Optional[str] = Field(None, description="iOS/Android/Web")
     locale: Optional[str] = Field("ja-JP", description="ロケール")
     meta: Optional[Dict[str, Any]] = None
 
@@ -211,34 +234,22 @@ class ConsentWithdrawRequest(BaseModel):
     consent_id: Optional[str] = None
 
 # =============================================================================
-# GCS疑似WORM保存（PDF要件・バグ修正済み）
+# GCS疑似WORM保存
 # =============================================================================
 
 async def _save_to_gcs_pseudo_worm(consent_json: Dict[str, Any]) -> tuple[str, int]:
-    """
-    GCSにWORM風保存（バージョニング+Lifecycle Policy前提）
-    ★ 注意：真のWORMにはAWS S3 Object Lockが必要
-    """
     if not storage:
         logger.warning("GCS storage client not available")
         return "", 0
-    
     try:
         client = storage.Client()
         bucket = client.bucket(GCS_CONSENT_BUCKET)
-        
-        # PDF準拠パス: consents/YYYY/MM/DD/account/user_hash/uuid.json
-        # ★ バグ修正：正しいキー名 "ts" を使用
         dt = datetime.fromisoformat(consent_json["ts"].replace("Z", "+00:00"))
         user_hash = consent_json["user_id_hash"]
-        account = consent_json.get("account", LINE_ACCOUNT)
-        
+        account = consent_json.get("account", f"@{LINE_ACCOUNT}" if LINE_ACCOUNT else "@account")
         object_name = f"consents/{dt.year}/{dt.month:02d}/{dt.day:02d}/{account}/{user_hash}/{consent_json['consent_id']}.json"
-        
-        # 疑似WORM設定
         blob = bucket.blob(object_name)
-        
-        # PDF準拠スキーマで保存
+
         worm_payload = {
             **consent_json,
             "worm_metadata": {
@@ -249,8 +260,6 @@ async def _save_to_gcs_pseudo_worm(consent_json: Dict[str, Any]) -> tuple[str, i
                 "note": "GCS versioning enabled - true WORM requires AWS S3 Object Lock"
             }
         }
-        
-        # Content-Type + メタデータ設定
         blob.content_type = "application/json"
         blob.metadata = {
             "consent_id": consent_json["consent_id"],
@@ -260,36 +269,43 @@ async def _save_to_gcs_pseudo_worm(consent_json: Dict[str, Any]) -> tuple[str, i
             "immutable": "pseudo",
             "account": account
         }
-        
-        blob.upload_from_string(
-            json.dumps(worm_payload, ensure_ascii=False, indent=2),
-            content_type="application/json"
-        )
-        
-        # 世代番号取得（GCSバージョニング）
+        blob.upload_from_string(json.dumps(worm_payload, ensure_ascii=False, indent=2), content_type="application/json")
         generation = blob.generation or 0
-        
         logger.info(f"✅ Consent saved to GCS pseudo-WORM: {object_name} (gen: {generation})")
         return object_name, generation
-        
     except Exception as e:
         logger.error(f"❌ GCS pseudo-WORM save failed: {e}")
         return "", 0
 
 async def _bg_gcs_save_and_mark(consent_json: Dict[str, Any], consent_id: str):
-    """バックグラウンドでGCS保存"""
     obj_name, generation = await _save_to_gcs_pseudo_worm(consent_json)
     if obj_name:
         async with _open_db() as db:
             await db.execute(
-                "UPDATE consent_logs SET gcs_object_name=?, gcs_generation=? WHERE consent_id=?", 
+                "UPDATE consent_logs SET gcs_object_name=?, gcs_generation=? WHERE consent_id=?",
                 (obj_name, generation, consent_id)
             )
             await db.commit()
-            logger.info(f"✅ GCS object reference saved to DB: {obj_name}")
 
 # =============================================================================
-# 高速チェック（PDF準拠・バグ修正済み）
+# LINE push（追加）
+# =============================================================================
+
+async def _bg_push_ai_welcome(user_token: str):
+    """user_token から U始まりの userId を推定できた時だけ push"""
+    if not _line_bot_api or not TextSendMessage:
+        return
+    user_id = _user_id_from_token(user_token)
+    if not (isinstance(user_id, str) and user_id.startswith("U")):
+        return
+    try:
+        _line_bot_api.push_message(user_id, TextSendMessage(text=AI_CONSULTATION_MESSAGE))
+        logger.info(f"✅ AI consultation message pushed to {user_id}")
+    except Exception as e:
+        logger.warning(f"LINE push failed: {e}")
+
+# =============================================================================
+# 高速チェック
 # =============================================================================
 
 async def fast_check_consent(user_hash: str, scope: str, version: str) -> bool:
@@ -321,7 +337,7 @@ async def fast_check_consent(user_hash: str, scope: str, version: str) -> bool:
     return ok
 
 # =============================================================================
-# エンドポイント（PDF準拠・完全修正版）
+# エンドポイント
 # =============================================================================
 
 @router.on_event("startup")
@@ -337,56 +353,59 @@ async def save_consent(
     scope: str = Query("ai", description="同意の適用範囲"),
     version: str = Query(None, description="ポリシー版"),
 ):
-    """PDF準拠：LIFF同意ゲート保存API（完全修正版）"""
+    """
+    LIFF 同意保存API：
+    - 必須4チェック（pp/xfer/ai_limits/cookie）すべて True でなければ 400
+    - SQLite に保存（直前の有効同意は withdrawn=1）
+    - バックグラウンドで GCS（疑似WORM）保存
+    - 可能なら LINE に AI相談開始の定型文を push（非同期）
+    """
     version = version or POLICY_VERSION_DEFAULT
-    user_id_raw = _user_id_from_token(user_token) or user_token
-    user_id_hash = _sha256_hex(user_id_raw)  # PDF準拠：SHA-256ハッシュ
 
-    # PDF準拠：必須4チェック
+    # 必須4チェック
     flags = {
         "pp": bool(body.agree_privacy),
         "cookie": bool(body.agree_cookie),
         "xfer": bool(body.understand_external_send),
         "ai_limits": bool(body.understand_ai_may_be_wrong),
     }
-    
     if not _all_required_true(flags):
         missing = [k for k in REQUIRED_FLAGS if not flags.get(k)]
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Required consent flags missing: {missing}"
-        )
+        raise HTTPException(status_code=400, detail=f"Required consent flags missing: {missing}")
+
+    # ユーザー特定
+    if not user_token:
+        raise HTTPException(status_code=400, detail="user_token is required")
+    user_id_raw = _user_id_from_token(user_token) or user_token
+    user_id_hash = _sha256_hex(user_id_raw)
 
     consent_id = str(uuid4())
-    ts = _now_iso()  # PDF準拠：consented_at → ts
-    
-    # PDF準拠スキーマ
+    ts = _now_iso()
+
+    # 保存レコード
     record = {
         "consent_id": consent_id,
-        "user_id_hash": user_id_hash,                    # PDF準拠
-        "account": f"@{LINE_ACCOUNT}",                   # PDF準拠
+        "user_id_hash": user_id_hash,
+        "account": f"@{LINE_ACCOUNT}" if LINE_ACCOUNT else "@account",
         "liff_id": request.headers.get("X-LIFF-ID"),
-        "ts": ts,                                        # PDF準拠
+        "ts": ts,
         "ip": request.client.host if request.client else "",
         "ua": request.headers.get("user-agent", ""),
-        "liff_os": body.liff_os or "",                   # PDF準拠
-        "version": version,                              # PDF準拠
-        "scope": json.dumps([scope]),                    # PDF準拠：配列
-        "policy_url": PRIVACY_POLICY_URL,                # PDF準拠
+        "liff_os": body.liff_os or "",
+        "version": version,
+        "scope": json.dumps([scope]),
+        "policy_url": PRIVACY_POLICY_URL,
         "flags": json.dumps(flags, ensure_ascii=False),
-        "locale": body.locale or "ja-JP",               # PDF準拠
+        "locale": body.locale or "ja-JP",
         "withdrawn": 0,
     }
 
-    # DB保存
+    # DB保存：直前の有効同意を撤回 → 新規同意を追加
     async with _open_db() as db:
-        # 既存同意を無効化
         await db.execute(
             "UPDATE consent_logs SET withdrawn=1, withdrawn_at=datetime('now') WHERE user_id_hash=? AND withdrawn=0",
             (user_id_hash,)
         )
-        
-        # 新規同意保存
         await db.execute(
             """
             INSERT INTO consent_logs (
@@ -397,34 +416,38 @@ async def save_consent(
             (
                 record["consent_id"], record["user_id_hash"], record["account"], record["liff_id"],
                 record["ts"], record["ip"], record["ua"], record["liff_os"],
-                record["version"], record["scope"], record["policy_url"], 
+                record["version"], record["scope"], record["policy_url"],
                 record["flags"], record["locale"]
             )
         )
         await db.commit()
 
-    # キャッシュ更新
+    # キャッシュ更新（即時OKに）
     await _consent_cache.set(user_id_hash, scope, version, True)
 
-    # PDF準拠：バックグラウンドでGCS WORM保存（バグ修正済み）
+    # GCS保存（バックグラウンド）
     if bg is not None:
         consent_json = {
             "consent_id": consent_id,
-            "user_id_hash": user_id_hash,              # PDF準拠
-            "account": f"@{LINE_ACCOUNT}",             # PDF準拠  
-            "scope": [scope],                          # PDF準拠：配列
-            "version": version,                        # PDF準拠
-            "policy_url": PRIVACY_POLICY_URL,          # PDF準拠
-            "ts": ts,                                  # PDF準拠：正しいキー名
+            "user_id_hash": user_id_hash,
+            "account": record["account"],
+            "scope": [scope],
+            "version": version,
+            "policy_url": PRIVACY_POLICY_URL,
+            "ts": ts,
             "ip": record["ip"],
             "ua": record["ua"],
-            "liff_os": body.liff_os or "",             # PDF準拠
-            "locale": body.locale or "ja-JP",
-            "withdrawn": False,                        # PDF準拠
+            "liff_os": record["liff_os"],
+            "locale": record["locale"],
+            "withdrawn": False,
             "flags": flags,
             "meta": body.meta or {},
         }
         bg.add_task(_bg_gcs_save_and_mark, consent_json, consent_id)
+
+        # 追加：AI相談開始メッセージ push（可能なら）
+        # （LINEトークに定型文が1通だけ届く想定／速度低下を避けるため非同期）
+        bg.add_task(_bg_push_ai_welcome, user_token)
 
     return {
         "ok": True,
@@ -441,33 +464,20 @@ async def check_consent(
     scope: str = Query("ai"),
     version: str = Query(None),
 ):
-    """PDF準拠：同意状況確認API（完全修正版）"""
     user_token = _extract_user_token_from_request(request)
     user_id = payload.user_id if payload and payload.user_id else None
     version = payload.version or version or POLICY_VERSION_DEFAULT
     scope = payload.scope or scope
 
     if not (user_token or user_id):
-        return {
-            "valid": False, 
-            "error": "CONSENT_REQUIRED", 
-            "version": version,
-            "required_flags": REQUIRED_FLAGS
-        }
+        return {"valid": False, "error": "CONSENT_REQUIRED", "version": version, "required_flags": REQUIRED_FLAGS}
 
     user_id_raw = user_id or _user_id_from_token(user_token) or user_token
     user_id_hash = _sha256_hex(user_id_raw)
-
     ok = await fast_check_consent(user_id_hash, scope, version)
     if not ok:
-        return {
-            "valid": False, 
-            "error": "CONSENT_REQUIRED", 
-            "version": version,
-            "required_flags": REQUIRED_FLAGS
-        }
+        return {"valid": False, "error": "CONSENT_REQUIRED", "version": version, "required_flags": REQUIRED_FLAGS}
 
-    # 詳細情報取得
     threshold = _threshold_iso()
     async with _open_db() as db:
         db.row_factory = aiosqlite.Row
@@ -506,7 +516,6 @@ async def check_consent(
 
 @router.post("/withdraw")
 async def withdraw_consent(withdraw_request: 'ConsentWithdrawRequest'):
-    """同意撤回API（PDF準拠）"""
     user_hash = withdraw_request.user_id
     async with _open_db() as db:
         if withdraw_request.consent_id:
@@ -524,7 +533,6 @@ async def withdraw_consent(withdraw_request: 'ConsentWithdrawRequest'):
 
 @router.get("/user/{user_id}/history")
 async def get_consent_history(user_id: str):
-    """ユーザー同意履歴取得（PDF準拠）"""
     async with _open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -543,10 +551,10 @@ async def get_consent_history(user_id: str):
     for r in rows:
         history.append({
             "consent_id": r["consent_id"],
-            "consented_at": r["ts"],                   # PDF準拠：ts
-            "version": r["version"],                   # PDF準拠
-            "account": r["account"],                   # PDF準拠
-            "scope": json.loads(r["scope"] or "[]"),   # PDF準拠：配列
+            "consented_at": r["ts"],
+            "version": r["version"],
+            "account": r["account"],
+            "scope": json.loads(r["scope"] or "[]"),
             "withdrawn": bool(r["withdrawn"]),
             "withdrawn_at": r["withdrawn_at"],
             "flags": _parse_flags(r["flags"]),
@@ -555,29 +563,21 @@ async def get_consent_history(user_id: str):
 
 @router.get("/admin/stats")
 async def get_consent_stats():
-    """管理用：同意統計（完全修正版）"""
     async with _open_db() as db:
         db.row_factory = aiosqlite.Row
-        
-        # 基本統計
+
         cur = await db.execute("SELECT COUNT(*) as total FROM consent_logs")
-        total = (await cur.fetchone())["total"]
-        await cur.close()
+        total = (await cur.fetchone())["total"]; await cur.close()
 
         cur = await db.execute("SELECT COUNT(*) as active FROM consent_logs WHERE withdrawn=0")
-        active = (await cur.fetchone())["active"]
-        await cur.close()
+        active = (await cur.fetchone())["active"]; await cur.close()
 
         cur = await db.execute("SELECT COUNT(DISTINCT user_id_hash) as unique_users FROM consent_logs")
-        users = (await cur.fetchone())["unique_users"]
-        await cur.close()
+        users = (await cur.fetchone())["unique_users"]; await cur.close()
 
-        # WORM保存統計
         cur = await db.execute("SELECT COUNT(*) as worm_saved FROM consent_logs WHERE gcs_object_name IS NOT NULL")
-        worm_saved = (await cur.fetchone())["worm_saved"]
-        await cur.close()
+        worm_saved = (await cur.fetchone())["worm_saved"]; await cur.close()
 
-        # 日別統計（過去30日）
         cur = await db.execute(
             """
             SELECT substr(ts, 1, 10) as date, COUNT(*) as count
@@ -587,10 +587,8 @@ async def get_consent_stats():
             ORDER BY date DESC
             """
         )
-        daily_stats = [{"date": r[0], "count": r[1]} for r in await cur.fetchall()]
-        await cur.close()
+        daily_stats = [{"date": r[0], "count": r[1]} for r in await cur.fetchall()]; await cur.close()
 
-        # バージョン別統計
         cur = await db.execute(
             """
             SELECT version, COUNT(*) as count
@@ -600,8 +598,7 @@ async def get_consent_stats():
             ORDER BY count DESC
             """
         )
-        version_stats = [{"version": r[0], "count": r[1]} for r in await cur.fetchall()]
-        await cur.close()
+        version_stats = [{"version": r[0], "count": r[1]} for r in await cur.fetchall()]; await cur.close()
 
     return {
         "overview": {
@@ -620,41 +617,31 @@ async def get_consent_stats():
             "validity_months": CONSENT_VALIDITY_MONTHS,
             "gcs_bucket": GCS_CONSENT_BUCKET,
             "policy_version": POLICY_VERSION_DEFAULT,
-            "line_account": f"@{LINE_ACCOUNT}"
+            "line_account": f"@{LINE_ACCOUNT}" if LINE_ACCOUNT else ""
         },
         "generated_at": _now_iso(),
     }
 
 # =============================================================================
-# 高速チェック用ミドルウェア関数（完全修正版）
+# デコレータ（必要なAPIの保護に使用可能）
 # =============================================================================
 
 def require_valid_consent(scope: str = "ai", version: str = None):
-    """デコレータ：同意必須APIの保護（完全修正版）"""
     def decorator(func):
         async def wrapper(*args, **kwargs):
             request: Optional[Request] = kwargs.get("request") or (args[0] if args else None)
             if request:
                 user_token = _extract_user_token_from_request(request)
                 if not user_token:
-                    raise HTTPException(
-                        status_code=403, 
-                        detail="consent_required: unidentified_user"
-                    )
+                    raise HTTPException(status_code=403, detail="consent_required: unidentified_user")
                 user_id_raw = _user_id_from_token(user_token) or user_token
                 user_id_hash = _sha256_hex(user_id_raw)
-                
                 check_version = version or POLICY_VERSION_DEFAULT
                 ok = await fast_check_consent(user_id_hash, scope, check_version)
                 if not ok:
                     raise HTTPException(
-                        status_code=403, 
-                        detail={
-                            "error": "CONSENT_REQUIRED",
-                            "version": check_version,
-                            "required_flags": REQUIRED_FLAGS,
-                            "scope": scope
-                        }
+                        status_code=403,
+                        detail={"error": "CONSENT_REQUIRED", "version": check_version, "required_flags": REQUIRED_FLAGS, "scope": scope}
                     )
             return await func(*args, **kwargs)
         return wrapper
