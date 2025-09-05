@@ -175,3 +175,16 @@ async def liff_root(request: Request):
 @router.get("/liff/ping")
 def liff_ping():
     return {"ok": True}
+
+
+# ------------------------------------------------------------
+# 3) LP互換エイリアス（/line 等 → 正規入口 /line-login/start に 302）
+#    UTM/AB/state などのクエリはそのまま引き継ぐ
+# ------------------------------------------------------------
+@router.get("/line")
+@router.get("/line/add")
+@router.get("/line/contact")
+def line_entry_alias(request: Request):
+    qs = str(request.query_params)
+    url = "/line-login/start" + (f"?{qs}" if qs else "")
+    return RedirectResponse(url, status_code=302)
