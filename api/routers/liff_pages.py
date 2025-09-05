@@ -9,19 +9,8 @@ router = APIRouter(prefix="", tags=["liff"])
 # ====== 環境変数 ======
 LIFF_ID = os.getenv("LIFF_ID", "").strip()
 LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").strip()  # 例: https://liff.line.me/xxxx-yyyy
-PUBLIC_FRONT_BASE = os.getenv("PUBLIC_FRONT_BASE", "").rstrip("/")
-GA4_MEASUREMENT_ID = os.getenv("GA4_MEASUREMENT_ID", "").strip()  # 任意（あれば自動挿入）
-
-
-def _abs(url_path: str) -> str:
-    """フロントの絶対URLを作る（/liff/* など）"""
-    if not PUBLIC_FRONT_BASE:
-        return url_path
-    if url_path.startswith("http"):
-        return url_path
-    if not url_path.startswith("/"):
-        url_path = "/" + url_path
-    return f"{PUBLIC_FRONT_BASE}{url_path}"
+PUBLIC_API_BASE = os.getenv("PUBLIC_API_BASE", "").rstrip("/")  # 例: https://rag-api-xxxxxxxx.a.run.app
+GA4_MEASUREMENT_ID = os.getenv("GA4_MEASUREMENT_ID", "").strip()  # 任意
 
 
 # ------------------------------------------------------------
@@ -32,7 +21,7 @@ def _abs(url_path: str) -> str:
 def liff_consent_redirect(request: Request):
     if not LIFF_CONSENT_URL:
         return JSONResponse({"detail": "LIFF_CONSENT_URL is not configured"}, status_code=500)
-    qs = str(request.query_params)          # そのまま引き継ぐ
+    qs = str(request.query_params)  # そのまま引き継ぐ
     url = f"{LIFF_CONSENT_URL}" + (f"?{qs}" if qs else "")
     return RedirectResponse(url, status_code=302)
 
@@ -40,9 +29,13 @@ def liff_consent_redirect(request: Request):
 # ------------------------------------------------------------
 # 2) /liff: LIFF ページ本体（同意モーダル内蔵）
 #    静的な web/liff/*.html は使用しない
+#    ※ f-string で埋め込みつつ、CSS/JS の波括弧はすべて二重にしてエスケープ
 # ------------------------------------------------------------
 @router.get("/liff", response_class=HTMLResponse)
 async def liff_root(request: Request):
+    # API の絶対URL（未設定なら現在ホストを使う）
+    api_base = PUBLIC_API_BASE or f"{request.url.scheme}://{request.url.netloc}"
+
     html = f"""<!doctype html>
 <html lang=\"ja\">
 <head>
@@ -50,7 +43,7 @@ async def liff_root(request: Request):
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\" />
   <title>AI相談のご利用前の同意</title>
   <!-- GA4（存在する場合のみ） -->
-  {'<script async src="https://www.googletagmanager.com/gtag/js?id=' + GA4_MEASUREMENT_ID + '"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","' + GA4_MEASUREMENT_ID + '");</script>' if GA4_MEASUREMENT_ID else ''}
+  {'<script async src="https://www.googletagmanager.com/gtag/js?id=' + GA4_MEASUREMENT_ID + '"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){{dataLayer.push(arguments);}}gtag("js",new Date());gtag("config","' + GA4_MEASUREMENT_ID + '");</script>' if GA4_MEASUREMENT_ID else ''}
   <!-- LIFF SDK -->
   <script src=\"https://static.line-scdn.net/liff/edge/2/sdk.js\"></script>
   <style>
@@ -86,6 +79,8 @@ async def liff_root(request: Request):
 
 <script>
 (function() {{
+  const API_BASE = {api_base!r};
+
   // --- クエリは liff.state も含めて吸い上げる（user_token 等の取りこぼし防止）
   const all = new URLSearchParams(location.search);
   const stateQS = new URLSearchParams(all.get("liff.state") || "");
@@ -110,7 +105,7 @@ async def liff_root(request: Request):
   boxes.forEach(b => b.addEventListener("change", tick));
   tick();
 
-  // --- 同意保存API: /consent/save?user_token=...&scope=ai
+  // --- 同意保存API: API_BASE + "/consent/save?user_token=...&scope=ai"
   async function postConsent() {{
     const payload = {{
       agree_privacy: boxes[0].checked,
@@ -119,47 +114,31 @@ async def liff_root(request: Request):
       agree_cookie: boxes[3].checked,
       meta: {{ state, ab, utm_source, utm_medium, utm_campaign, utm_content, ua: navigator.userAgent }}
     }};
-    try {{
-      const q = new URLSearchParams({{ user_token: userToken, scope: "ai" }}).toString();
-      const res = await fetch(`/consent/save?${{q}}`, {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json", "X-User-Token": userToken }},
-        body: JSON.stringify(payload)
-      }});
-      if (!res.ok) throw new Error("consent api " + res.status);
-      return true;
-    }} catch (e) {{
-      alert("同意の記録に失敗しました。通信環境をご確認のうえ、もう一度お試しください。");
-      return false;
-    }}
+    const q = new URLSearchParams({{ user_token: userToken, scope: "ai" }}).toString();
+    const res = await fetch(API_BASE + "/consent/save?" + q, {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json", "X-User-Token": userToken }},
+      body: JSON.stringify(payload)
+    }});
+    if (!res.ok) throw new Error("consent api " + res.status);
   }}
 
   async function initLiff() {{
-    try {{
-      await liff.init({{ liffId: "{LIFF_ID}" }});
-    }} catch(e) {{
-      console.error("liff.init failed", e);
-    }}
+    try {{ await liff.init({{ liffId: {LIFF_ID!r} }}); }} catch(e) {{ console.error("liff.init failed", e); }}
   }}
 
   document.getElementById("agree").addEventListener("click", async () => {{
-    if (!await postConsent()) return;
     try {{
+      await postConsent();
       // 体感速度を落とさずAI相談を自動開始（失敗してもUIは止めない）
-      fetch("/line/after-consent", {{
+      fetch(API_BASE + "/line/after-consent", {{
         method: "POST",
         headers: {{ "Content-Type": "application/json" }},
         body: JSON.stringify({{ user_token: userToken }}),
         keepalive: true
-      }}).catch(()=>{{}});
-      if (liff.isInClient()) {{
-        liff.closeWindow();     // LINEトークへ復帰
-      }} else {{
-        window.close();         // ブラウザ起動時のフォールバック
-      }}
-    }} catch (e) {{
-      console.error(e);
-      window.close();
+      }}).catch(() => {{}});
+    }} finally {{
+      if (window.liff && liff.isInClient()) {{ liff.closeWindow(); }} else {{ window.close(); }}
     }}
   }});
 
