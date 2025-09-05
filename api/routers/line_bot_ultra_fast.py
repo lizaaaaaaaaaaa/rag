@@ -7,7 +7,7 @@
 # - Postback の data は action=..., クエリ形式, JSON, プレーン文字列 すべてに対応
 # - ★追加: LIFFの「同意して開始」ボタンが叩く記録API (POST /line/consent, 204)
 
-import logging, os, re, time, hashlib, threading, sys, pathlib, importlib, json
+import logging, os, re, time, hashlib, threading, sys, pathlib, importlib, json, traceback
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
@@ -656,32 +656,102 @@ if LINE_SDK_AVAILABLE and handler:
             logger.error(f"postback handler error: {e}")
 
 # ======================================================================
-# 同意完了後のプッシュ（AI相談を自動開始）
+# 同意完了後のプッシュ（AI相談を自動開始）★修正版
 # ======================================================================
-def _token_to_user_id(token: str) -> str:
-    """LINE UID ならそのまま、JWTなら sub/user_id/email を拾う。未判定は token を返す。"""
-    if token and token.startswith("U"):
+def _token_to_user_id(token: str) -> Optional[str]:
+    """トークンからユーザーIDを抽出（改善版）"""
+    if not token:
+        return None
+        
+    # LINE UIDの場合はそのまま使用
+    if isinstance(token, str) and token.startswith("U") and len(token) > 10:
         return token
+    
+    # JWTの場合はデコード
     try:
         import jwt
         payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256", "ES256"])
-        return payload.get("sub") or payload.get("user_id") or payload.get("email") or token
-    except Exception:
-        return token
+        
+        # 複数のフィールドから試行
+        for field in ["sub", "user_id", "email", "id", "userId"]:
+            value = payload.get(field)
+            if value and isinstance(value, str):
+                return value
+                
+        logger.warning(f"No valid user ID found in JWT payload: {list(payload.keys())}")
+        return None
+        
+    except Exception as e:
+        logger.warning(f"JWT decode failed: {e}")
+        
+    # フォールバック: トークンをそのまま使用
+    return token if len(token) > 5 else None
 
 @router.post("/line/after-consent")
-async def after_consent(payload: dict = Body(...)):
-    user_token = (payload or {}).get("user_token", "")
-    if not user_token:
-        return {"ok": False, "error": "missing_user_token"}
-    user_id = _token_to_user_id(user_token)
+async def after_consent(request: Request, payload: dict = Body(...)):
+    """同意完了後のLINE通知（修正版）"""
     try:
-        sessions.set_mode(user_id, "ai")
-        _push(user_id, RICHMENU_FIXED_RESPONSES["AI相談"])
-        return {"ok": True}
+        # user_tokenの取得（複数の方法で試行）
+        user_token = (payload or {}).get("user_token", "")
+        
+        if not user_token:
+            # ヘッダーからも試行
+            user_token = request.headers.get("X-User-Id") or request.headers.get("X-User-Token") or ""
+        
+        if not user_token:
+            logger.error("after_consent: user_token not provided")
+            return {"ok": False, "error": "missing_user_token", "detail": "user_token is required"}
+        
+        logger.info(f"after_consent: Processing for user_token: {user_token[:8]}...")
+        
+        # ユーザーID変換
+        user_id = _token_to_user_id(user_token)
+        if not user_id:
+            logger.error(f"after_consent: Could not resolve user_id from token")
+            return {"ok": False, "error": "invalid_user_token"}
+        
+        logger.info(f"after_consent: Resolved user_id: {user_id}")
+        
+        try:
+            # セッション設定
+            sessions.set_mode(user_id, "ai")
+            logger.info(f"after_consent: Session mode set to 'ai' for user: {user_id}")
+            
+            # AI相談開始メッセージをプッシュ
+            success = _push(user_id, RICHMENU_FIXED_RESPONSES["AI相談"])
+            
+            if success:
+                logger.info(f"after_consent: Successfully sent AI consultation message to user: {user_id}")
+                return {
+                    "ok": True, 
+                    "success": True,
+                    "message": "AI consultation started",
+                    "user_id": user_id
+                }
+            else:
+                logger.error(f"after_consent: Failed to send message to user: {user_id}")
+                return {
+                    "ok": False, 
+                    "error": "push_failed",
+                    "message": "Failed to send LINE message"
+                }
+                
+        except Exception as e:
+            logger.error(f"after_consent: LINE push failed for user {user_id}: {e}")
+            return {
+                "ok": False, 
+                "error": "push_failed", 
+                "detail": str(e)
+            }
+        
     except Exception as e:
-        logger.error(f"after_consent push failed: {e}")
-        return {"ok": False, "error": "push_failed"}
+        logger.error(f"after_consent: Unexpected error: {e}")
+        logger.error(traceback.format_exc())
+        return {
+            "ok": False, 
+            "error": "internal_error", 
+            "detail": str(e)
+        }
 
 # ======================================================================
 # ★追加: LIFFの「同意して開始」ボタンが叩く記録API（まずは204だけ返す）
