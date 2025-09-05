@@ -12,6 +12,7 @@ LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").strip()  # 例: https://lif
 PUBLIC_FRONT_BASE = os.getenv("PUBLIC_FRONT_BASE", "").rstrip("/")
 GA4_MEASUREMENT_ID = os.getenv("GA4_MEASUREMENT_ID", "").strip()  # 任意（あれば自動挿入）
 
+
 def _abs(url_path: str) -> str:
     """フロントの絶対URLを作る（/liff/* など）"""
     if not PUBLIC_FRONT_BASE:
@@ -21,6 +22,7 @@ def _abs(url_path: str) -> str:
     if not url_path.startswith("/"):
         url_path = "/" + url_path
     return f"{PUBLIC_FRONT_BASE}{url_path}"
+
 
 # ------------------------------------------------------------
 # 1) /liff/consent: LIFF ランチャー（302）
@@ -34,6 +36,7 @@ def liff_consent_redirect(request: Request):
     url = f"{LIFF_CONSENT_URL}" + (f"?{qs}" if qs else "")
     return RedirectResponse(url, status_code=302)
 
+
 # ------------------------------------------------------------
 # 2) /liff: LIFF ページ本体（同意モーダル内蔵）
 #    静的な web/liff/*.html は使用しない
@@ -41,15 +44,15 @@ def liff_consent_redirect(request: Request):
 @router.get("/liff", response_class=HTMLResponse)
 async def liff_root(request: Request):
     html = f"""<!doctype html>
-<html lang="ja">
+<html lang=\"ja\">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\" />
   <title>AI相談のご利用前の同意</title>
   <!-- GA4（存在する場合のみ） -->
-  {'<script async src="https://www.googletagmanager.com/gtag/js?id='+GA4_MEASUREMENT_ID+'"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","'+GA4_MEASUREMENT_ID+'");</script>' if GA4_MEASUREMENT_ID else ''}
+  {'<script async src="https://www.googletagmanager.com/gtag/js?id=' + GA4_MEASUREMENT_ID + '"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","' + GA4_MEASUREMENT_ID + '");</script>' if GA4_MEASUREMENT_ID else ''}
   <!-- LIFF SDK -->
-  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script src=\"https://static.line-scdn.net/liff/edge/2/sdk.js\"></script>
   <style>
     body{{font-family: system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial,'Noto Sans JP','Hiragino Kaku Gothic ProN',Meiryo,sans-serif;}}
     .wrap{{padding:24px;line-height:1.9}}
@@ -62,23 +65,23 @@ async def liff_root(request: Request):
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="title">AI相談のご利用前の同意</div>
-    <div class="section">
-      ・プライバシーポリシー：<a href="/privacy" target="_blank" rel="noopener">こちら</a><br/>
-      ・利用規約：<a href="/terms" target="_blank" rel="noopener">こちら</a><br/>
-      ・Cookie（外部送信の詳細）：<a href="/cookie" target="_blank" rel="noopener">こちら</a>
+  <div class=\"wrap\">
+    <div class=\"title\">AI相談のご利用前の同意</div>
+    <div class=\"section\">
+      ・プライバシーポリシー：<a href=\"/privacy\" target=\"_blank\" rel=\"noopener\">こちら</a><br/>
+      ・利用規約：<a href=\"/terms\" target=\"_blank\" rel=\"noopener\">こちら</a><br/>
+      ・Cookie（外部送信の詳細）：<a href=\"/cookie\" target=\"_blank\" rel=\"noopener\">こちら</a>
     </div>
 
-    <div class="section">
-      <label><input type="checkbox" id="c1" checked> プライバシーポリシーに同意します</label><br/>
-      <label><input type="checkbox" id="c2" checked> 入力内容が外部サービスへ送信される場合があることを理解しました</label><br/>
-      <label><input type="checkbox" id="c3" checked> AIの誤答・限界があることを理解しました</label><br/>
-      <label><input type="checkbox" id="c4" checked> Cookie等の利用（計測を含む）に同意します</label>
+    <div class=\"section\">
+      <label><input type=\"checkbox\" id=\"c1\" checked> プライバシーポリシーに同意します</label><br/>
+      <label><input type=\"checkbox\" id=\"c2\" checked> 入力内容が外部サービスへ送信される場合があることを理解しました</label><br/>
+      <label><input type=\"checkbox\" id=\"c3\" checked> AIの誤答・限界があることを理解しました</label><br/>
+      <label><input type=\"checkbox\" id=\"c4\" checked> Cookie等の利用（計測を含む）に同意します</label>
     </div>
 
-    <button id="agree" class="btn" disabled>同意して開始</button>
-    <div class="note">※同意は公式LINE内の「AI相談」にのみ適用されます。</div>
+    <button id=\"agree\" class=\"btn\" disabled>同意して開始</button>
+    <div class=\"note\">※同意は公式LINE内の「AI相談」にのみ適用されます。</div>
   </div>
 
 <script>
@@ -146,7 +149,8 @@ async def liff_root(request: Request):
       fetch("/line/after-consent", {{
         method: "POST",
         headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{ user_token: userToken }})
+        body: JSON.stringify({{ user_token: userToken }}),
+        keepalive: true
       }}).catch(()=>{{}});
       if (liff.isInClient()) {{
         liff.closeWindow();     // LINEトークへ復帰
@@ -166,6 +170,7 @@ async def liff_root(request: Request):
 </html>
 """
     return HTMLResponse(html)
+
 
 @router.get("/liff/ping")
 def liff_ping():
