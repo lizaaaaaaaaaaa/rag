@@ -142,7 +142,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         res.headers.setdefault("Referrer-Policy", "no-referrer-when-downgrade")
         res.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=()")
         
-        # ★ 修正: LIFF SDK と外部スクリプトを許可するCSP
+        # ★ LIFF / GTM / CDN を許可する最小限CSP（速度劣化なし）
         csp = (
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.line-scdn.net https://liff.line.me https://www.googletagmanager.com https://cdnjs.cloudflare.com; "
@@ -231,8 +231,8 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
             "/static", "/favicon.ico",
             "/line/webhook",
             "/line/after-consent",  # ★ 同意直後の自動Pushは通す（403対策）
-            "/line-login",  # ★ LINEログイン関連を除外（友達追加フローのため）
-            "/chat", "/chat/",  # ★ Webチャットは同意不要
+            "/line-login",          # ★ LINEログイン関連を除外（友達追加フローのため）
+            "/chat", "/chat/",      # ★ Webチャットは同意不要
         ])
         self.required_version = os.getenv(required_version_env, "").strip() or "2025-09-01"
         self.required_flags = {"pp", "tos", "cookie", "xfer", "ai_limits"}

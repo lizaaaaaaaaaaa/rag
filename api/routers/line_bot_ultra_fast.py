@@ -1,17 +1,14 @@
-# api/routers/line_bot_ultra_fast.py — 同意ゲート入り・最終版 + Postback堅牢化（修正版）
-# - リッチメニューは6項目すべて反応（文面は変更しない）
-# - 「AI相談」だけ /consent/check を叩き、未同意なら **ユーザー別** 同意URLを案内（完全URLで送付）
-# - Webhook は常に 200 を返す（LINE の再送ループ防止）
-# - RAG / 資金計画は別スレッドで push（応答遅延を防ぐ）
-# - 同意保存後に /line/after-consent で AI相談を自動開始（Push）
-# - Postback の data は action=..., クエリ形式, JSON, プレーン文字列 すべてに対応
-# - ★修正: LIFF同意フロー強化、エラーハンドリング改善、ユーザートークン処理強化
+# api/routers/line_bot_ultra_fast.py
+# 同意フロー強化版：/line/after-consent で UID（U...）を最優先使用
+# - リッチメニュー文言は既存のまま
+# - 応答速度を落とさない（非同期/スレッド・ACK 200）
+# - LIFF からの X-User-Id / body.user_id を最優先で to に使う
 
 import logging, os, re, time, hashlib, threading, sys, pathlib, importlib, json, traceback
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
-from uuid import uuid4  
+from uuid import uuid4
 
 from fastapi import APIRouter, Request, BackgroundTasks, Body, Response
 from fastapi.responses import JSONResponse
@@ -133,7 +130,7 @@ if not PUBLIC_BASE_URL:
 LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").rstrip("/")
 
 # ======================================================================
-# 固定テンプレ（※リッチメニューの文面は変更しない）
+# 固定テンプレ（※リッチメニューの文言は変更しない）
 # ======================================================================
 RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
     "follow_greeting": """こんにちは！キノエデザイン住まいAIコンシェルジュ（秋山住研）です。
@@ -278,7 +275,7 @@ RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
     "展示場来場予約": "展示場来場予約", "📍 展示場来場　予約": "展示場来場予約", "来場予約": "展示場来場予約",
     "資金計画": "資金計画", "💴 資金計画": "資金計画", "💰 資金計画": "資金計画",
     "チャット相談": "チャット相談", "💬チャット相談": "チャット相談", "チャット": "チャット相談",
-    # 可能性のある英語/シンプルdata対策（リッチメニューのdataが英語の場合）
+    # 可能性のある英語/シンプルdata対策
     "ai_consult": "AI相談", "site": "AI住まいサイト", "docs": "資料請求",
     "reservation": "展示場来場予約", "finance": "資金計画", "chat": "チャット相談",
 }
@@ -399,34 +396,26 @@ def _extract_user_id_from_token(token: str) -> Optional[str]:
     """トークンからユーザーIDを抽出（改善版）"""
     if not token:
         return None
-        
-    # LINE UIDの場合はそのまま使用（U + 32文字の英数字）
-    if isinstance(token, str) and token.startswith("U") and len(token) == 33:
+    # LINE UIDの場合はそのまま使用（U + 32の英数字が一般的）
+    if isinstance(token, str) and token.startswith("U") and 20 <= len(token) <= 64:
         return token
-    
-    # JWTの場合はデコード
+    # JWTを緩くデコードして候補を探す
     try:
         import jwt
         payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256", "ES256"])
-        
-        # 複数のフィールドから試行
-        for field in ["sub", "user_id", "email", "id", "userId"]:
-            value = payload.get(field)
-            if value and isinstance(value, str):
-                return value
-                
-        logger.warning(f"No valid user ID found in JWT payload: {list(payload.keys())}")
-        return None
-        
-    except Exception as e:
-        logger.debug(f"JWT decode failed: {e}")
-        
-    # アクセストークンの場合は、そのままuser_idとして使用
-    # （LINEの場合、LIFF getAccessToken() で取得したトークンは有効）
+        for field in ["sub", "user_id", "userId", "id"]:
+            v = payload.get(field)
+            if isinstance(v, str) and v:
+                return v
+    except Exception:
+        pass
+    # それ以外はそのまま（最後のフォールバック）
     if len(token) > 10:
         return token
-        
     return None
+
+def _is_line_uid(s: Optional[str]) -> bool:
+    return isinstance(s, str) and s.startswith("U") and 20 <= len(s) <= 64
 
 # ======================================================================
 # 同意チェック（AI相談の時だけ使う）- 修正版
@@ -440,16 +429,14 @@ def _has_consent_sync(user_id: str) -> bool:
     try:
         headers = {"user_token": user_id, "X-User-Token": user_id}
         with httpx.Client(timeout=8.0) as client:
-            r = client.post(f"{SELF_BASE}/consent/check", 
-                          json={"user_id": user_id, "scope": "ai"}, 
-                          headers=headers)
+            r = client.post(f"{SELF_BASE}/consent/check",
+                            json={"user_id": user_id, "scope": "ai"},
+                            headers=headers)
             if r.status_code == 200:
                 data = r.json()
-                is_valid = bool(data.get("valid") or data.get("is_valid"))
-                logger.info(f"Consent check for {user_id[:8]}...: {is_valid}")
-                return is_valid
+                return bool(data.get("valid") or data.get("is_valid"))
             else:
-                logger.warning(f"Consent check failed with status {r.status_code}: {r.text}")
+                logger.warning(f"Consent check failed: {r.status_code} {r.text}")
     except Exception as e:
         logger.warning(f"Consent check failed for {user_id[:8]}...: {e}")
     return False
@@ -458,10 +445,9 @@ def _has_consent_sync(user_id: str) -> bool:
 def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
     """
     LIFF の完全URL（LIFF_CONSENT_URL）を最優先で使用。
-    無い場合は PUBLIC_BASE_URL(/liff/consent) を使い、相対URLは返さない。
+    無い場合は PUBLIC_BASE_URL(/liff/consent) を使用。
     """
     q = {"user_token": user_id}
-    # ✅ デフォルトUTM（AI相談/LINEリッチメニュー流入をGA4で判別可能に）
     if not extra_qs:
         extra_qs = {
             "state": "line_ai",
@@ -475,19 +461,9 @@ def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> 
         if v:
             q[k] = v
 
-    public_base = PUBLIC_BASE_URL
-    base = ""
-    if LIFF_CONSENT_URL:
-        base = LIFF_CONSENT_URL
-    elif public_base:
-        base = f"{public_base}/liff/consent"
-    else:
-        base = "/liff/consent"  # 最低限のフォールバック
-
-    # 相対であれば、可能なら public_base を付けて完全URL化
-    if base.startswith("/") and public_base:
-        base = f"{public_base}{base}"
-
+    base = LIFF_CONSENT_URL or (f"{PUBLIC_BASE_URL}/liff/consent" if PUBLIC_BASE_URL else "/liff/consent")
+    if base.startswith("/") and PUBLIC_BASE_URL:
+        base = f"{PUBLIC_BASE_URL}{base}"
     return f"{base}?{urlencode(q)}"
 
 def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
@@ -594,7 +570,7 @@ def _resolve_postback_key(data: str) -> str:
                         return token
             break
 
-    # 4) 最後にプレーン文字列として再チェック（大文字小文字&空白トリム）
+    # 4) 最後にプレーン文字列として再チェック
     token = data.strip()
     if token in RICHMENU_KEYWORD_MAPPING:
         return RICHMENU_KEYWORD_MAPPING[token]
@@ -683,7 +659,6 @@ if LINE_SDK_AVAILABLE and handler:
             if key:
                 if key == "AI相談":
                     if not _has_consent_sync(user_id):
-                        # Postback にもユーザー別同意リンクを返す
                         _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id)); return
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
@@ -698,115 +673,67 @@ if LINE_SDK_AVAILABLE and handler:
             logger.error(f"postback handler error: {e}")
 
 # ======================================================================
-# 同意完了後のプッシュ（AI相談を自動開始）★修正版 - 強化版
+# 同意完了後のプッシュ（AI相談を自動開始）★修正版 - UID最優先
 # ======================================================================
 @router.post("/line/after-consent")
 async def after_consent(request: Request):
-    """同意完了後のLINE通知（強化版）- リッチメニュー文面は変更なし"""
+    """
+    同意完了後のLINE通知（強化版）
+    - X-User-Id / body.user_id が U… なら **最優先で to に使用**
+    - それ以外は user_token から解決（従来互換）
+    """
+    request_id = getattr(request.state, "request_id", str(uuid4())[:8])
     try:
-        request_id = getattr(request.state, "request_id", str(uuid4())[:8])
         logger.info(f"[{request_id}] after-consent: Processing request")
-        
-        # リクエストボディ解析
+
+        # JSON 取得
         try:
-            body = await request.json()
+            payload = await request.json()
         except Exception as e:
-            logger.error(f"[{request_id}] Failed to parse request body: {e}")
-            return JSONResponse(
-                content={"ok": False, "error": "invalid_json", "detail": str(e)},
-                status_code=400
-            )
-        
-        # user_tokenの取得（複数の方法で試行）
-        user_token = body.get("user_token", "")
-        
-        if not user_token:
-            # ヘッダーからも試行
-            user_token = (request.headers.get("X-User-Id") or 
-                         request.headers.get("X-User-Token") or 
-                         request.headers.get("user_token") or "")
-        
-        if not user_token:
-            logger.error(f"[{request_id}] user_token not provided")
-            return JSONResponse(
-                content={
-                    "ok": False, 
-                    "error": "missing_user_token", 
-                    "detail": "user_token is required in body or headers"
-                },
-                status_code=400
-            )
-        
-        logger.info(f"[{request_id}] Processing user_token: {user_token[:8]}...")
-        
-        # ユーザーID変換（既存の _extract_user_id_from_token を使用）
-        user_id = _extract_user_id_from_token(user_token)
-        if not user_id:
-            # フォールバック: トークンをハッシュ化してuser_idとして使用
-            user_id = f"liff_{hashlib.md5(user_token.encode()).hexdigest()[:16]}"
-            logger.info(f"[{request_id}] Using fallback user_id: {user_id}")
-        
-        logger.info(f"[{request_id}] Final user_id: {user_id[:8]}...")
-        
-        try:
-            # セッション設定（AI相談モード）- 既存のsessionsを使用
-            sessions.set_mode(user_id, "ai")
-            logger.info(f"[{request_id}] Session mode set to 'ai' for user: {user_id[:8]}...")
-            
-            # 🔒 重要：既存のリッチメニュー応答文面をそのまま使用（変更なし）
-            ai_message = RICHMENU_FIXED_RESPONSES["AI相談"]  # ← 既存の文面をそのまま使用
-            success = _push(user_id, ai_message)
-            
-            if success:
-                logger.info(f"[{request_id}] Successfully sent AI consultation message to user: {user_id[:8]}...")
-                
-                # 追加で歓迎メッセージも送信（新規メッセージなので問題なし）
-                welcome_msg = (
-                    "✅ 同意が完了しました！\n\n"
-                    "これでAI相談をご利用いただけます。\n"
-                    "住まいに関するご質問をお気軽にどうぞ😊"
-                )
-                _push(user_id, welcome_msg)
-                
-                return JSONResponse(content={
-                    "ok": True, 
-                    "success": True,
-                    "message": "AI consultation started successfully",
-                    "user_id_hash": hashlib.md5(user_id.encode()).hexdigest()[:8],  # プライバシー保護
-                    "session_mode": "ai",
-                    "request_id": request_id,
-                    "timestamp": datetime.now().isoformat()
-                }, status_code=200)
-            else:
-                logger.error(f"[{request_id}] Failed to send message to user: {user_id[:8]}...")
-                return JSONResponse(content={
-                    "ok": False, 
-                    "error": "push_failed",
-                    "message": "Failed to send LINE message",
-                    "request_id": request_id
-                }, status_code=500)
-                
-        except Exception as e:
-            logger.error(f"[{request_id}] LINE push failed for user {user_id[:8]}...: {e}")
-            logger.error(traceback.format_exc())
-            return JSONResponse(content={
-                "ok": False, 
-                "error": "push_failed", 
-                "detail": str(e),
-                "request_id": request_id
-            }, status_code=500)
-        
+            logger.error(f"[{request_id}] invalid json: {e}")
+            return JSONResponse({"ok": False, "error": "invalid_json", "detail": str(e)}, status_code=400)
+
+        # 1) UID を最優先で解決
+        uid_hdr = request.headers.get("X-User-Id") or ""
+        uid_body = (payload or {}).get("user_id") or ""
+        user_token = (payload or {}).get("user_token") or request.headers.get("X-User-Token") or request.headers.get("user_token") or ""
+
+        if _is_line_uid(uid_hdr):
+            user_id = uid_hdr
+        elif _is_line_uid(uid_body):
+            user_id = uid_body
+        else:
+            # 2) フォールバック：トークンから抽出
+            user_id = _extract_user_id_from_token(user_token or "")
+
+        if not _is_line_uid(user_id):
+            logger.error(f"[{request_id}] cannot resolve LINE userId")
+            return JSONResponse({"ok": False, "reason": "no_line_userid"}, status_code=400)
+
+        logger.info(f"[{request_id}] final user_id: {user_id[:8]}...")
+
+        # セッションをAIにセットし、既定の文面を送信（文言変更なし）
+        sessions.set_mode(user_id, "ai")
+        ok = _push(user_id, RICHMENU_FIXED_RESPONSES["AI相談"])
+        if ok:
+            _push(user_id, "✅ 同意が完了しました！\n\nこれでAI相談をご利用いただけます。\n住まいに関するご質問をお気軽にどうぞ😊")
+            return JSONResponse({
+                "ok": True,
+                "success": True,
+                "user_id_hash": hashlib.md5(user_id.encode()).hexdigest()[:8],
+                "session_mode": "ai",
+                "request_id": request_id,
+                "timestamp": datetime.now().isoformat()
+            }, status_code=200)
+        else:
+            logger.error(f"[{request_id}] push failed")
+            return JSONResponse({"ok": False, "error": "push_failed", "request_id": request_id}, status_code=500)
+
     except Exception as e:
-        request_id = getattr(request, "state", type('obj', (object,), {'request_id': 'unknown'})).request_id
-        logger.error(f"[{request_id}] after-consent: Unexpected error: {e}")
+        logger.error(f"[{request_id}] after-consent unexpected: {e}")
         logger.error(traceback.format_exc())
-        return JSONResponse(content={
-            "ok": False, 
-            "error": "internal_error", 
-            "detail": str(e),
-            "request_id": request_id,
-            "timestamp": datetime.now().isoformat()
-        }, status_code=500)
+        return JSONResponse({"ok": False, "error": "internal_error", "detail": str(e),
+                             "request_id": request_id, "timestamp": datetime.now().isoformat()}, status_code=500)
 
 # ======================================================================
 # ★追加: LIFFの「同意して開始」ボタンが叩く記録API（まずは204だけ返す）
@@ -818,17 +745,11 @@ class ConsentPayload(BaseModel):
 
 @router.post("/line/consent", tags=["liff"], status_code=204)
 async def record_consent(req: Request, payload: ConsentPayload) -> Response:
-    """
-    LIFFの同意ボタンが叩くAPI。
-    まずは204を返すだけ（ここにDB保存やLINEへのお礼メッセを後で実装可能）。
-    """
     try:
         logger.info(f"[consent] token={payload.user_token} consent={payload.consent} utm={payload.utm}")
-        # TODO: Firestore/Redis 等に consent フラグを保存したい場合はここに実装
         return Response(status_code=204)
     except Exception as e:
         logger.error(f"record_consent error: {e}")
-        # 失敗時もLIFF側を止めないため204で返す
         return Response(status_code=204)
 
 # ======================================================================
