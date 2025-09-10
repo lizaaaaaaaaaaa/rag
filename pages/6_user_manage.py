@@ -1,24 +1,19 @@
 # pages/10_user_manage.py
 import streamlit as st
-import sqlite3
 import pandas as pd
 from unicodedata import normalize
-from utils.auth import (
-    get_users, signup_user, update_password, update_role, delete_user, get_db_path
-)
+from utils.auth import get_users, signup_user, update_password, update_role, delete_user, get_db_path
 
 st.set_page_config(page_title="ユーザー管理", page_icon="👤", layout="wide")
 st.title("👤 ユーザー管理ページ（管理者専用）")
 
-# 簡易アクセス制御（ここはあなたの既存ロジックに合わせてOK）
+# 簡易アクセス制御（あなたの既存ロジックに合わせてOK）
 if st.session_state.get("user") != "admin":
     st.warning("管理者のみ利用できます。")
     st.stop()
 
-# DBパスの確認（任意）
-st.caption(f"DB_PATH = `{get_db_path()}`")
+st.caption(f"DB_PATH = `{get_db_path()}`")  # 一時確認用（必要なければ消してOK）
 
-# 一覧
 rows = get_users()
 df = pd.DataFrame(rows, columns=["id", "username", "role"])
 st.subheader("【ユーザー一覧】")

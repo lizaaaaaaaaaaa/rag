@@ -13,14 +13,12 @@ def _norm_username(u: str) -> str:
     return (u or "").strip().lower()
 
 def _norm_password(p: str) -> str:
-    # 日本語や全角記号のNFC/NFD差異を吸収
     return normalize("NFC", p or "")
 
 def _is_bcrypt_string(s: str) -> bool:
     return s.startswith("$2a$") or s.startswith("$2b$") or s.startswith("$2y$")
 
 def get_db_path() -> str:
-    """デバッグ表示などに使う"""
     return DB_PATH
 
 # ===== 初期化 =====

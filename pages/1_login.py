@@ -1,36 +1,23 @@
-# pages/1_login.py
-import os
+# pages/0_login.py
 import streamlit as st
 from unicodedata import normalize
-from utils.auth import (
-    ensure_admin_bootstrap,
-    login_user,
-    get_user_role,
-    get_users,
-    get_db_path,
-)
+from utils.auth import ensure_admin_bootstrap, login_user, get_user_role, get_users, get_db_path
 
 st.set_page_config(page_title="ログイン", page_icon="🔐", layout="centered")
 
 # --- 起動時に admin を自動生成（ADMIN_PASSWORD があれば、未作成時のみ）---
 created = ensure_admin_bootstrap()
-if created:
-    st.caption("✅ admin を自動作成しました（ADMIN_PASSWORD 使用）")
-else:
-    st.caption("ℹ️ admin 作成はスキップ（既存 or ADMIN_PASSWORD 未設定）")
+st.caption("✅ admin を自動作成（ADMIN_PASSWORD 使用）" if created else "ℹ️ admin 作成はスキップ（既存 or ADMIN_PASSWORD 未設定）")
 
 st.title("🔐 ログイン")
 
-# (任意) デバッグ表示
-with st.expander("デバッグ（暫定・本番でOFF推奨）", expanded=False):
+# (任意) デバッグ表示（確認できたらOFF推奨）
+with st.expander("デバッグ（暫定）", expanded=False):
     st.write(f"DB_PATH = `{get_db_path()}`")
     try:
         users = get_users()
         st.write(f"users 件数: {len(users)}")
-        if any(u[1] == "admin" for u in users):
-            st.write("admin: 存在します")
-        else:
-            st.write("admin: なし")
+        st.write("admin: 存在します" if any(u[1] == "admin" for u in users) else "admin: なし")
     except Exception as e:
         st.write("ユーザー取得で例外:", str(e))
 
