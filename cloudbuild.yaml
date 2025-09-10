@@ -128,7 +128,7 @@ steps:
       - --max-instances=10
       - --concurrency=500
       - --port=8080
-      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,ENV=production
+      - --set-env-vars=API_URL=https://rag-api-190389115361.asia-northeast1.run.app,ENV=production,USERS_DB_PATH=/tmp/users.db,ADMIN_PASSWORD=adminpass
       - --service-account=190389115361-compute@developer.gserviceaccount.com
     timeout: '600s'
     id: 'deploy-enhanced-frontend'

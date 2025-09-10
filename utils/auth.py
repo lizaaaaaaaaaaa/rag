@@ -4,10 +4,11 @@ from typing import List, Dict, Tuple
 
 # ---- Config ----
 def get_db_path() -> str:
+    # Cloud Run は /tmp が書き込み可
     return os.getenv("USERS_DB_PATH", "users.db")
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD_ENV = os.getenv("ADMIN_PASSWORD")  # あればブートストラップ
+ADMIN_PASSWORD_ENV = os.getenv("ADMIN_PASSWORD")  # あれば起動時にadmin作成
 
 # ---- DB helpers ----
 def _connect() -> sqlite3.Connection:
@@ -34,7 +35,7 @@ def _verify_password(password: str, stored: str) -> bool:
             dk = hashlib.pbkdf2_hmac("sha256", password.encode(),
                                      base64.b64decode(salt_b64), int(it_s))
             return hmac.compare_digest(base64.b64encode(dk).decode(), hash_b64)
-        # 旧DBが平文の場合に備えた後方互換
+        # 旧DBが平文の場合への後方互換
         return password == stored
     except Exception:
         return False
@@ -46,13 +47,11 @@ def _colset(conn: sqlite3.Connection) -> set:
 
 def create_users_table() -> None:
     """
-    users テーブルを作成（存在しなければ）し、必要なら**自動マイグレーション**を行う。
-    - 既存DBが古くても列を追加して修復する（role/created_at/updated_at）
-    - 更新トリガを再作成
+    users テーブルを作成（なければ）し、足りない列を自動追加。
+    旧DBでも role/created_at/updated_at を追加し、更新トリガを再作成。
     """
     conn = _connect()
     with conn:
-        # まず最低限のテーブル確保（古いDBだと password と username だけのことがある）
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users(
                 username  TEXT PRIMARY KEY,
@@ -60,7 +59,6 @@ def create_users_table() -> None:
             )
         """)
         cols = _colset(conn)
-
         if "role" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
         if "created_at" not in cols:
@@ -68,7 +66,6 @@ def create_users_table() -> None:
         if "updated_at" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT DEFAULT CURRENT_TIMESTAMP")
 
-        # 更新トリガ（AFTER UPDATEで updated_at を自動更新）
         conn.execute("DROP TRIGGER IF EXISTS trg_users_updated")
         conn.execute("""
             CREATE TRIGGER IF NOT EXISTS trg_users_updated
@@ -155,7 +152,7 @@ def login_user(username: str, password: str) -> bool:
     return _verify_password(password, row["password"]) if row else False
 
 def ensure_admin_bootstrap() -> bool:
-    """ADMIN_PASSWORD がセットされ、admin 不在なら作る。作成時 True"""
+    """ADMIN_PASSWORD が設定され、admin 不在なら作成（作成時 True）"""
     create_users_table()
     if user_exists(ADMIN_USERNAME):
         return False

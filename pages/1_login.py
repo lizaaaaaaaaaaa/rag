@@ -1,4 +1,3 @@
-# pages/0_login.py
 import streamlit as st
 from unicodedata import normalize
 from utils.auth import ensure_admin_bootstrap, login_user, get_user_role, get_users, get_db_path
@@ -17,7 +16,7 @@ with st.expander("デバッグ（暫定）", expanded=False):
     try:
         users = get_users()
         st.write(f"users 件数: {len(users)}")
-        st.write("admin: 存在します" if any(u[1] == "admin" for u in users) else "admin: なし")
+        st.write("admin: 存在します" if any(u.get("username") == "admin" for u in users) else "admin: なし")
     except Exception as e:
         st.write("ユーザー取得で例外:", str(e))
 
