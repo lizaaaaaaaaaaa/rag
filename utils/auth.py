@@ -1,109 +1,187 @@
+# utils/auth.py
 import os
 import sqlite3
 import bcrypt
+from typing import List, Tuple, Optional
 
-# ========== ローカル用（SQLite: ユーザー名＋パスワード認証＋role管理） ==========
-DB_PATH = "users.db"
+# ====== 設定 ======
+DB_PATH = os.getenv("USERS_DB_PATH", "users.db")
 
-def create_users_table():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
+
+# ====== 初期化 ======
+def create_users_table() -> None:
+    """usersテーブルを作成（なければ）"""
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            password TEXT,
-            role TEXT
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,      -- bcryptの文字列をTEXTで保存
+            role TEXT NOT NULL DEFAULT 'user'
         )
-    """)
-    conn.commit()
-    conn.close()
-
-def signup_user(username, password, role="user"):
-    create_users_table()
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    hashed_pw = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
-    try:
-        cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", (username, hashed_pw, role))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
-
-def login_user(username, password):
-    create_users_table()
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT password FROM users WHERE username=?", (username,))
-    result = cursor.fetchone()
-    conn.close()
-    if result and bcrypt.checkpw(password.encode(), result[0]):
-        return True
-    else:
-        return False
-
-def get_user_role(username):
-    create_users_table()
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT role FROM users WHERE username = ?", (username,))
-    result = cursor.fetchone()
-    conn.close()
-    if result and result[0]:
-        return result[0]
-    else:
-        return "user"
-
-def get_current_user():
-    # ローカル用の仮ユーザーID返却
-    return "local-user"
-
-# ========== Google OAuth + Cloud SQL(PostgreSQL)対応 ==========
-
-def get_or_create_user(email):
-    """
-    Cloud SQL (PostgreSQL) 用。メールアドレスでユーザー管理。
-    - 存在すればそのまま返す
-    - なければ role を判定してINSERTして返す
-    """
-    import psycopg2
-    conn = psycopg2.connect(
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT")
+        """
     )
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            email TEXT PRIMARY KEY,
-            role TEXT
-        )
-    """)
-    c.execute("SELECT email, role FROM users WHERE email=%s", (email,))
-    row = c.fetchone()
-    if row:
-        conn.close()
-        return {"email": row[0], "role": row[1]}
-    else:
-        role = "admin" if email.endswith("@admin.com") else "user"
-        c.execute("INSERT INTO users (email, role) VALUES (%s, %s)", (email, role))
-        conn.commit()
-        conn.close()
-        return {"email": email, "role": role}
+    con.commit()
+    con.close()
 
-def verify_google_token(id_token_str, client_id):
+
+# ====== 内部ユーティリティ ======
+def _is_bcrypt_string(s: str) -> bool:
+    return s.startswith("$2a$") or s.startswith("$2b$") or s.startswith("$2y$")
+
+
+# ====== 認証・ユーザー管理（ここだけを使う） ======
+def signup_user(username: str, password: str, role: str = "user") -> Tuple[bool, str]:
+    """新規作成：必ずbcryptでハッシュして保存"""
+    if not username or not password:
+        return False, "ユーザー名とパスワードは必須です"
+
+    create_users_table()
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    cur.execute("SELECT 1 FROM users WHERE username=?", (username,))
+    if cur.fetchone():
+        con.close()
+        return False, "既に存在するユーザーです"
+
+    hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    cur.execute(
+        "INSERT INTO users (username, password, role) VALUES (?,?,?)",
+        (username, hashed, role),
+    )
+    con.commit()
+    con.close()
+    return True, "ユーザーを作成しました"
+
+
+def login_user(username: str, password: str) -> bool:
     """
-    Google IDトークン検証。正しければemailアドレスを返す。
+    ログイン：bcryptで照合。
+    もし古いDBに“平文”が残っていて、入力が一致した場合はその場でbcryptへ自動移行。
     """
-    from google.oauth2 import id_token
-    from google.auth.transport import requests as google_requests
-    try:
-        id_info = id_token.verify_oauth2_token(id_token_str, google_requests.Request(), client_id)
-        return id_info.get("email")
-    except Exception:
-        return None
+    create_users_table()
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT password FROM users WHERE username=?", (username,))
+    row = cur.fetchone()
+    con.close()
+
+    if not row:
+        return False
+
+    stored = row[0] if isinstance(row[0], str) else str(row[0])
+
+    # 平文が残っている場合の救済（正しい入力時のみハッシュ化して即時更新）
+    if not _is_bcrypt_string(stored):
+        if stored == password:
+            update_password(username, password)  # bcrypt化して保存
+            return True
+        return False
+
+    return bcrypt.checkpw(password.encode("utf-8"), stored.encode("utf-8"))
+
+
+def update_password(username: str, new_password: str) -> Tuple[bool, str]:
+    """パスワード更新：必ずbcryptでハッシュ"""
+    if not new_password:
+        return False, "新しいパスワードを入力してください"
+
+    create_users_table()
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    cur.execute("SELECT 1 FROM users WHERE username=?", (username,))
+    if not cur.fetchone():
+        con.close()
+        return False, "ユーザーが見つかりません"
+
+    hashed = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    cur.execute("UPDATE users SET password=? WHERE username=?", (hashed, username))
+    con.commit()
+    con.close()
+    return True, "パスワードを更新しました"
+
+
+def update_role(username: str, role: str) -> Tuple[bool, str]:
+    """権限変更"""
+    create_users_table()
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    cur.execute("SELECT 1 FROM users WHERE username=?", (username,))
+    if not cur.fetchone():
+        con.close()
+        return False, "ユーザーが見つかりません"
+
+    cur.execute("UPDATE users SET role=? WHERE username=?", (role, username))
+    con.commit()
+    con.close()
+    return True, "権限を更新しました"
+
+
+def delete_user(username: str) -> Tuple[bool, str]:
+    """ユーザー削除（adminの誤削除は防止）"""
+    create_users_table()
+    if username == "admin":
+        return False, "admin は削除できません"
+
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("DELETE FROM users WHERE username=?", (username,))
+    con.commit()
+    con.close()
+    return True, "ユーザーを削除しました"
+
+
+def get_users() -> List[Tuple[int, str, str]]:
+    """(id, username, role) の一覧"""
+    create_users_table()
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT id, username, role FROM users ORDER BY id ASC")
+    rows = cur.fetchall()
+    con.close()
+    return rows
+
+
+def get_user_role(username: str) -> str:
+    """ロール取得（UI側の制御用）"""
+    create_users_table()
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT role FROM users WHERE username=?", (username,))
+    row = cur.fetchone()
+    con.close()
+    return row[0] if row and row[0] else "user"
+
+
+# ====== 初期adminのブートストラップ（任意） ======
+def ensure_admin_bootstrap() -> bool:
+    """
+    admin が未作成で、環境変数 ADMIN_PASSWORD が設定されている場合のみ作成。
+    True: 作成した / False: 既に存在 or 未設定
+    """
+    create_users_table()
+    admin_user = os.getenv("ADMIN_USERNAME", "admin")
+    admin_pass = os.getenv("ADMIN_PASSWORD")
+    if not admin_pass:
+        return False
+
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM users WHERE username=?", (admin_user,))
+    if cur.fetchone():
+        con.close()
+        return False
+
+    hashed = bcrypt.hashpw(admin_pass.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    cur.execute(
+        "INSERT INTO users (username, password, role) VALUES (?,?,?)",
+        (admin_user, hashed, "admin"),
+    )
+    con.commit()
+    con.close()
+    return True

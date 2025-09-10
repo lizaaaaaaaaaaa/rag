@@ -1,72 +1,82 @@
+# pages/10_user_manage.py
 import streamlit as st
-st.set_page_config(page_title="ユーザー管理", page_icon="👤", layout="wide")  # ←import直後！
+st.set_page_config(page_title="ユーザー管理", page_icon="👤", layout="wide")
 
 import sqlite3
 import pandas as pd
 
-DB_FILE = "users.db"  # ユーザー管理用DB
+from utils.auth import (
+    DB_PATH,
+    create_users_table,
+    get_users,
+    signup_user,
+    update_password,
+    update_role,
+    delete_user,
+)
 
-# === ページタイトル・説明 ===
+# ==== 権限チェック ====
 st.title("👤 ユーザー管理ページ（管理者専用）")
-st.write("""
-このページでは管理者ユーザーだけが、ユーザーアカウントの追加・削除・権限変更・パスワード変更を行えます。
-""")
-
-# 管理者のみ利用可
 user = st.session_state.get("user", "")
 if user != "admin":
     st.warning("管理者のみ利用できます。")
     st.stop()
 
-# DB接続 & usersテーブル作成
-conn = sqlite3.connect(DB_FILE)
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    password TEXT,
-    role TEXT
-)
-""")
+# ==== DB 初期化 & 一覧 ====
+create_users_table()
+conn = sqlite3.connect(DB_PATH)
+user_df = pd.read_sql_query("SELECT id, username, role FROM users ORDER BY id ASC;", conn)
+conn.close()
 
 st.subheader("【ユーザー一覧】")
-user_df = pd.read_sql_query("SELECT id, username, role FROM users", conn)
-st.dataframe(user_df)
+st.dataframe(user_df, use_container_width=True)
 
-# ユーザー追加
+# ==== ユーザー追加 ====
+st.subheader("【ユーザー追加】")
 with st.form(key="add_user_form"):
-    new_username = st.text_input("新規ユーザー名")
-    new_password = st.text_input("新規パスワード", type="password")
-    new_role = st.selectbox("権限", ["user", "admin"])
-    add_btn = st.form_submit_button("ユーザー追加")
-    if add_btn and new_username and new_password:
-        try:
-            cursor.execute(
-                "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-                (new_username, new_password, new_role)
-            )
-            conn.commit()
-            st.success(f"{new_username} を追加しました！")
-            st.rerun()  # ←ここだけ変更！
-        except Exception as e:
-            st.error(f"追加失敗: {e}")
+    col1, col2, col3 = st.columns([3,3,2])
+    with col1:
+        new_username = st.text_input("新規ユーザー名")
+    with col2:
+        new_password = st.text_input("新規パスワード", type="password")
+    with col3:
+        new_role = st.selectbox("権限", ["user", "admin"])
+    submitted = st.form_submit_button("ユーザー追加")
+    if submitted:
+        ok, msg = signup_user(new_username.strip(), new_password, new_role)
+        (st.success if ok else st.error)(msg)
+        if ok:
+            st.rerun()
 
-# ユーザー削除
-del_user = st.selectbox("削除するユーザー", user_df["username"].tolist())
-if st.button("ユーザー削除（注意！）"):
-    cursor.execute("DELETE FROM users WHERE username = ?", (del_user,))
-    conn.commit()
-    st.success(f"{del_user} を削除しました。")
-    st.rerun()  # ←ここも変更！
-
-# パスワード変更
+# ==== パスワード変更 ====
 st.subheader("【パスワード変更】")
-pw_user = st.selectbox("対象ユーザー", user_df["username"].tolist(), key="pw_user")
-new_pw = st.text_input("新パスワード", type="password", key="pw_new")
-if st.button("パスワード変更"):
-    cursor.execute("UPDATE users SET password = ? WHERE username = ?", (new_pw, pw_user))
-    conn.commit()
-    st.success("パスワード変更しました！")
+if len(user_df) > 0:
+    target_user = st.selectbox("対象ユーザー", user_df["username"].tolist(), key="pw_user")
+    new_pw = st.text_input("新パスワード", type="password", key="pw_new")
+    if st.button("パスワード更新"):
+        ok, msg = update_password(target_user, new_pw)
+        (st.success if ok else st.error)(msg)
 
-conn.close()
+# ==== 権限変更 ====
+st.subheader("【権限変更】")
+if len(user_df) > 0:
+    col1, col2 = st.columns(2)
+    with col1:
+        role_user = st.selectbox("対象ユーザー", user_df["username"].tolist(), key="role_user")
+    with col2:
+        new_role = st.selectbox("新しい権限", ["user", "admin"], key="role_new")
+    if st.button("権限を更新"):
+        ok, msg = update_role(role_user, new_role)
+        (st.success if ok else st.error)(msg)
+        if ok:
+            st.rerun()
+
+# ==== ユーザー削除 ====
+st.subheader("【ユーザー削除】")
+if len(user_df) > 0:
+    del_user = st.selectbox("削除するユーザー", user_df["username"].tolist(), key="del_user")
+    if st.button("ユーザー削除（注意！）"):
+        ok, msg = delete_user(del_user)
+        (st.success if ok else st.error)(msg)
+        if ok:
+            st.rerun()
