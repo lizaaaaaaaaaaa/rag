@@ -418,17 +418,21 @@ async def root():
     return {"name": "Unified RAG API", "version": "7.5.3", "docs": "/docs"}
 
 # ---------------------------------------------------------------------
-# ミドルウェア適用
+# ミドルウェア適用（★最小差分：Consent を環境変数で切替）
 # ---------------------------------------------------------------------
 if HAS_INTERNAL_MIDDLEWARE:
     try:
+        # 追加: 環境変数でON/OFF（既定: ON）
+        CONSENT_MIDDLEWARE = os.getenv("CONSENT_MIDDLEWARE", "true").lower() in ("1", "true", "yes", "on")
+
         app.add_middleware(SecurityHeadersMiddleware)
         app.add_middleware(CORSMiddleware)
         app.add_middleware(RateLimitMiddleware)
-        app.add_middleware(ConsentGateMiddleware)
+        if CONSENT_MIDDLEWARE:
+            app.add_middleware(ConsentGateMiddleware)   # ← /upload は middleware.py 側で除外済み
         app.add_middleware(AuditLoggingMiddleware)
         app.add_middleware(TimingMiddleware)
-        logger.info("✅ Middlewares registered")
+        logger.info("✅ Middlewares registered (CONSENT_MIDDLEWARE=%s)", CONSENT_MIDDLEWARE)
     except Exception as e:
         logger.warning(f"⚠️ Middleware registration failed: {e}")
 

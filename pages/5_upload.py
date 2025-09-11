@@ -10,15 +10,33 @@ import streamlit as st
 st.set_page_config(page_title="PDFアップロード & RAG質問", page_icon="📎", layout="centered")
 st.title("📎 PDFアップロード ＆ 💬 RAG質問")
 
+# ---------- 追加: ログイン必須 ----------
+REQUIRE_LOGIN = os.getenv("UPLOAD_REQUIRE_LOGIN", "true").lower() in ("1", "true", "yes", "on")
+
+def _is_logged_in() -> bool:
+    # 1_login.py 側で st.session_state["is_authenticated"]=True と ["user"] 設定済みの想定
+    return bool(st.session_state.get("is_authenticated")) and bool(st.session_state.get("user"))
+
+if REQUIRE_LOGIN and not _is_logged_in():
+    st.error("このページの利用にはログインが必要です。")
+    # Streamlit のページリンク（バージョンにより表示が変わります）
+    try:
+        st.page_link("pages/1_login.py", label="🔐 ログインページへ")
+    except Exception:
+        st.info("左のサイドバーから『login』に移動してください。")
+    st.stop()
+# --------------------------------------
+
 API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
 INGEST_URL = f"{API_URL}/upload/ingest"
 CHAT_URL   = f"{API_URL}/chat"
 
 def _auth_headers():
-    user = st.session_state.get("user", "") or "anonymous"
+    # ログイン必須にしたので 'anonymous' にはフォールバックしない
+    user = st.session_state.get("user")
     headers = {
-        "X-User-Id": user,      # ← 同意ゲート用の識別
-        "X-Platform": "web",    # ← ルーティング/緩和ルール用
+        "X-User-Id": user,      # 同意ゲート/トレーサビリティ用
+        "X-Platform": "web",    # ルーティング/緩和ルール用
     }
     # もし将来JWTを使うなら:
     token = st.session_state.get("jwt")
@@ -44,7 +62,12 @@ if st.button("アップロードして取り込む", type="primary") and uploade
             )
 
         if resp.status_code != 200:
-            st.error(f"ベクトル化に失敗しました\n{resp.status_code} / {resp.text}")
+            # 同意ミドルウェア等の誤爆にも気づけるよう詳細を表示
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+            st.error(f"ベクトル化に失敗しました\n{resp.status_code} / {detail}")
             st.stop()
 
         data = resp.json()
@@ -60,7 +83,7 @@ if st.button("アップロードして取り込む", type="primary") and uploade
         if question:
             payload = {
                 "query": question,
-                "user": st.session_state.get("user", "anonymous"),
+                "user": st.session_state.get("user"),
                 "platform": "web"
             }
             with st.spinner("RAGに質問中…"):
@@ -83,4 +106,3 @@ if st.button("アップロードして取り込む", type="primary") and uploade
         st.exception(e)
 else:
     st.caption("PDFを選んで『アップロードして取り込む』を押すと、GCS保存→ベクトル化まで実行します。")
-

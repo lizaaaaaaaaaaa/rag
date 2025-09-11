@@ -219,9 +219,10 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
 class ConsentGateMiddleware(BaseHTTPMiddleware):
     """
     同意ゲート:
-      - /upload /ingest /api /line などは同意必須
-      - Web /chat は除外（今回の要件）
-      - LINEログイン関連も除外（友達追加フローのため）
+      - /ingest /api /line などは同意必須
+      - Web /chat は除外
+      - LINEログイン関連も除外
+      - ※ 本ファイルでは /upload* を除外（アップロードUI用）
     """
     def __init__(self, app, excluded_paths: list | None = None, required_version_env: str = "POLICY_VERSION"):
         super().__init__(app)
@@ -232,7 +233,8 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
             "/line/webhook",
             "/line/after-consent",  # ★ 同意直後の自動Pushは通す（403対策）
             "/line-login",          # ★ LINEログイン関連を除外（友達追加フローのため）
-            "/chat", "/chat/",      # ★ Webチャットは同意不要
+            "/chat", "/chat/",
+            "/upload", "/upload/",  # ★ 追加: /upload* を Consent 対象外にする
         ])
         self.required_version = os.getenv(required_version_env, "").strip() or "2025-09-01"
         self.required_flags = {"pp", "tos", "cookie", "xfer", "ai_limits"}
@@ -247,8 +249,8 @@ class ConsentGateMiddleware(BaseHTTPMiddleware):
         if path == "/" and request.method == "GET":
             return await call_next(request)
 
-        # ここでは /upload /ingest /api /line を保護（ただし /line-login は除外済み）
-        protected = path.startswith(("/upload", "/ingest", "/api", "/line"))
+        # ここでは /ingest /api /line を保護（/upload は除外済み）
+        protected = path.startswith(("/ingest", "/api", "/line"))
         if not protected:
             return await call_next(request)
 
