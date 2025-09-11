@@ -1,6 +1,13 @@
+# pages/1_login.py
 import streamlit as st
 from unicodedata import normalize
-from utils.auth import ensure_admin_bootstrap, login_user, get_user_role, get_users, get_db_path
+from utils.auth import (
+    ensure_admin_bootstrap,
+    login_user,
+    get_user_role,
+    get_users,
+    get_db_path,
+)
 
 st.set_page_config(page_title="ログイン", page_icon="🔐", layout="centered")
 
@@ -17,6 +24,7 @@ with st.expander("デバッグ（暫定）", expanded=False):
         users = get_users()
         st.write(f"users 件数: {len(users)}")
         st.write("admin: 存在します" if any(u.get("username") == "admin" for u in users) else "admin: なし")
+        st.write("session_state:", {k: st.session_state[k] for k in ["user","role","is_authenticated"] if k in st.session_state})
     except Exception as e:
         st.write("ユーザー取得で例外:", str(e))
 
@@ -28,11 +36,26 @@ password_in = st.text_input("パスワード", type="password")
 username = (username_in or "").strip().lower()
 password = normalize("NFC", password_in or "")
 
-if st.button("ログイン"):
+# --- ログイン処理 ---
+if st.button("ログイン", type="primary"):
     if login_user(username, password):
         st.session_state["user"] = username
         st.session_state["role"] = get_user_role(username)
+        st.session_state["is_authenticated"] = True  # ← 追加（最小差分）
         st.success("ログイン成功！")
         st.rerun()
     else:
         st.error("ユーザー名またはパスワードが違います。")
+
+# --- （任意）ログアウト ---
+if st.session_state.get("user"):
+    if st.button("ログアウト", key="logout"):
+        for k in ["user", "role", "is_authenticated", "jwt"]:
+            st.session_state.pop(k, None)
+        st.experimental_rerun()
+
+# 補助リンク（任意）
+try:
+    st.page_link("pages/5_upload.py", label="📎 PDFアップロードへ")
+except Exception:
+    pass

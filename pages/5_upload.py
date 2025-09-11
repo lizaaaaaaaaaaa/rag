@@ -10,12 +10,12 @@ import streamlit as st
 st.set_page_config(page_title="PDFアップロード & RAG質問", page_icon="📎", layout="centered")
 st.title("📎 PDFアップロード ＆ 💬 RAG質問")
 
-# ---------- 追加: ログイン必須 ----------
+# ---------- ログイン必須 ----------
 REQUIRE_LOGIN = os.getenv("UPLOAD_REQUIRE_LOGIN", "true").lower() in ("1", "true", "yes", "on")
 
 def _is_logged_in() -> bool:
-    # 1_login.py 側で st.session_state["is_authenticated"]=True と ["user"] 設定済みの想定
-    return bool(st.session_state.get("is_authenticated")) and bool(st.session_state.get("user"))
+    # ★ 修正点：AND → OR（user か is_authenticated のどちらかが立っていれば可）
+    return bool(st.session_state.get("is_authenticated")) or bool(st.session_state.get("user"))
 
 if REQUIRE_LOGIN and not _is_logged_in():
     st.error("このページの利用にはログインが必要です。")
@@ -25,14 +25,14 @@ if REQUIRE_LOGIN and not _is_logged_in():
     except Exception:
         st.info("左のサイドバーから『login』に移動してください。")
     st.stop()
-# --------------------------------------
+# ----------------------------------
 
 API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
 INGEST_URL = f"{API_URL}/upload/ingest"
 CHAT_URL   = f"{API_URL}/chat"
 
 def _auth_headers():
-    # ログイン必須にしたので 'anonymous' にはフォールバックしない
+    # ログイン必須にしたので 'anonymous' にはフォールバックしない想定
     user = st.session_state.get("user")
     headers = {
         "X-User-Id": user,      # 同意ゲート/トレーサビリティ用
