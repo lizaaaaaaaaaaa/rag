@@ -1,142 +1,86 @@
-import streamlit as st
+# pages/5_upload.py
 import os
+import io
+import json
 import uuid
 import traceback
 import requests
-from google.cloud import storage
+import streamlit as st
 
-st.set_page_config(page_title="アップロード & RAG質問", page_icon="📤", layout="wide")
+st.set_page_config(page_title="PDFアップロード & RAG質問", page_icon="📎", layout="centered")
+st.title("📎 PDFアップロード ＆ 💬 RAG質問")
 
-if "user" not in st.session_state:
-    st.warning("ログインしてください。")
-    st.stop()
+API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
+INGEST_URL = f"{API_URL}/upload/ingest"
+CHAT_URL   = f"{API_URL}/chat"
 
-st.title("📤 PDFアップロード & 💬 RAG質問")
-st.write("""
-このページでは、PDFファイルをアップロードして、その内容に対してRAG（検索拡張生成）質問ができます。  
-アップロードしたPDFは自動的にGCSへ保存され、ベクトルストアに取り込まれます。
-""")
+def _auth_headers():
+    user = st.session_state.get("user", "") or "anonymous"
+    headers = {
+        "X-User-Id": user,      # ← 同意ゲート用の識別
+        "X-Platform": "web",    # ← ルーティング/緩和ルール用
+    }
+    # もし将来JWTを使うなら:
+    token = st.session_state.get("jwt")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
-API_URL = os.environ.get("API_URL", "https://rag-api-190389115361.asia-northeast1.run.app")
-if API_URL.endswith("/"):
-    API_URL = API_URL.rstrip("/")
+uploaded = st.file_uploader("PDFファイルを選択", type=["pdf"])
+question = st.text_input("取り込み後にすぐ聞きたい質問（任意）")
 
-GCS_BUCKET_NAME = os.environ.get(
-    "GCS_BUCKET_NAME",
-    "run-sources-rag-cloud-project-asia-northeast1"
-)
-
-os.makedirs("uploads", exist_ok=True)
-
-def save_upload_to_local(uploaded_file, save_dir="uploads"):
-    unique_filename = f"{uuid.uuid4().hex}.pdf"
-    save_path = os.path.join(save_dir, unique_filename)
-    with open(save_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    return save_path, unique_filename
-
-def upload_to_gcs(local_path, bucket_name, blob_name):
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
-    with open(local_path, "rb") as f:
-        blob.upload_from_file(f, rewind=True)
-    return f"gs://{bucket_name}/{blob_name}"
-
-if "upload_status" not in st.session_state:
-    st.session_state.upload_status = "init"
-if "local_path" not in st.session_state:
-    st.session_state.local_path = ""
-if "unique_filename" not in st.session_state:
-    st.session_state.unique_filename = ""
-if "blob_name" not in st.session_state:
-    st.session_state.blob_name = ""
-
-# === 1. アップロードフェーズ (/init) ===
-if st.session_state.upload_status == "init":
-    uploaded_file = st.file_uploader("PDFファイルを選択", type=["pdf"])
-    if uploaded_file is not None:
-        try:
-            local_path, unique_filename = save_upload_to_local(uploaded_file)
-            st.session_state.local_path = local_path
-            st.session_state.unique_filename = unique_filename
-            st.success(f"✅ ローカル保存成功: {local_path}")
-
-            blob_name = f"uploads/{unique_filename}"
-            gcs_uri = upload_to_gcs(local_path, GCS_BUCKET_NAME, blob_name)
-            st.session_state.blob_name = blob_name
-            st.success(f"✅ GCSアップロード成功: {blob_name}")
-
-            st.session_state.upload_status = "uploaded"
-            st.rerun()
-
-        except Exception as e:
-            st.error("❌ アップロード失敗")
-            st.code(traceback.format_exc())
-
-# === 2. 取り込み開始フェーズ (/uploaded) ===
-elif st.session_state.upload_status == "uploaded":
-    st.success("アップロード完了！")
-    if st.button("このPDFをベクトルストアに取り込む"):
-        st.session_state.upload_status = "ingesting"
-        st.rerun()
-    st.info("※ベクトルストアへの取り込みには数秒～数十秒かかる場合があります")
-
-# === 3. 取り込み中フェーズ (/ingesting) ===
-elif st.session_state.upload_status == "ingesting":
+if st.button("アップロードして取り込む", type="primary") and uploaded:
     try:
-        with st.spinner("ベクトルストアに取り込み中...⏳"):
-            # ←=== ここが今回の修正ポイント！ ===→
-            # ルーターprefixが「/upload」なので
-            ingest_endpoint = f"{API_URL}/upload/ingest"
-            # ingest_endpoint = f"{API_URL}/upload/upload_pdf" でもOK
-            files = {'file': open(st.session_state.local_path, 'rb')}
-            response = requests.post(ingest_endpoint, files=files, timeout=600)
-            if response.status_code != 200:
-                raise RuntimeError(f"バックエンド取り込みエラー: {response.status_code} / {response.text}")
+        pdf_bytes = uploaded.read()
+        if not pdf_bytes:
+            st.error("ファイルが空です。"); st.stop()
 
-        st.success("✅ ベクトルストア取り込み完了！")
-        st.session_state.upload_status = "done"
-        st.rerun()
+        # -------- 1) 取り込み（/upload/ingest） --------
+        files = {"file": (uploaded.name, io.BytesIO(pdf_bytes), "application/pdf")}
+        with st.spinner("取り込み中…（ベクトル化まで数十秒かかる場合があります）"):
+            resp = requests.post(
+                INGEST_URL, files=files, headers=_auth_headers(),
+                timeout=(10, 600)  # connect, read
+            )
 
-    except Exception as e:
-        st.error("❌ ベクトル化に失敗しました")
-        st.code(traceback.format_exc())
-        st.session_state.upload_status = "uploaded"
-
-# === 4. チャットフェーズ (/done) ===
-elif st.session_state.upload_status == "done":
-    st.success("取り込み完了！このPDFの内容で質問できます")
-    if st.button("最初からやり直す"):
-        for key in ["upload_status", "local_path", "unique_filename", "blob_name"]:
-            st.session_state.pop(key, None)
-        st.rerun()
-
-    st.subheader("💬 質問してみよう！")
-    question = st.text_input("アップロードしたPDFの内容について質問")
-
-    if question:
-        try:
-            with st.spinner("バックエンドへ質問を送信中...⏳"):
-                payload = {"question": question, "username": st.session_state["user"]}
-                chat_url = f"{API_URL}/chat/"
-                print("=== API に POST する URL:", chat_url)
-                st.write(f"API に POST する URL: {chat_url}")
-                r = requests.post(chat_url, json=payload, timeout=60)
-        except Exception as e:
-            st.error(f"通信エラー: {e}")
+        if resp.status_code != 200:
+            st.error(f"ベクトル化に失敗しました\n{resp.status_code} / {resp.text}")
             st.stop()
 
-        if r.status_code == 200:
-            res_json = r.json()
-            st.write(f"📘 回答: {res_json.get('answer') or '❌ 応答が見つかりませんでした'}")
-            sources = res_json.get("sources", [])
-            if sources:
-                st.write("📎 出典:")
-                for entry in sources:
-                    meta = entry.get("metadata", {})
-                    source = meta.get("source", "不明")
-                    page = meta.get("page", "?")
-                    st.write(f"- {source} (p{page})")
-        else:
-            st.error(f"API エラー: {r.status_code} / {r.text}")
+        data = resp.json()
+        st.success("取り込みが完了しました ✅")
+        st.write({
+            "filename": data.get("filename"),
+            "gcs_path": data.get("gcs_path"),
+            "added_docs": data.get("added_docs"),
+            "message": data.get("message"),
+        })
+
+        # -------- 2) すぐ質問（任意） --------
+        if question:
+            payload = {
+                "query": question,
+                "user": st.session_state.get("user", "anonymous"),
+                "platform": "web"
+            }
+            with st.spinner("RAGに質問中…"):
+                r = requests.post(
+                    CHAT_URL, json=payload, headers=_auth_headers(), timeout=(10, 60)
+                )
+            if r.status_code != 200:
+                st.error(f"/chat エラー: {r.status_code} / {r.text}")
+            else:
+                ans = r.json()
+                st.subheader("回答")
+                st.write(ans.get("answer") or ans)
+                if ans.get("sources"):
+                    st.caption("出典:")
+                    for s in ans["sources"]:
+                        st.write(f"- {s}")
+
+    except Exception as e:
+        st.error("取り込み中にエラーが発生しました。ログを確認してください。")
+        st.exception(e)
+else:
+    st.caption("PDFを選んで『アップロードして取り込む』を押すと、GCS保存→ベクトル化まで実行します。")
+
