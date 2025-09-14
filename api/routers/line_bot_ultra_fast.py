@@ -146,9 +146,9 @@ RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
 ※AIの回答は必ずしも正しいとは限りません。➡ 最終案内はスタッフが行います。
 ※AIは24時間、担当者は当日〜翌営業日に返信します。
 ※ご使用の前に、必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
-利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
-Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
+プライバシーポリシー：【https://ai.concierge.kinoedesign.co.jp/privacy-policy 】
+利用規約：【https://ai.concierge.kinoedesign.co.jp/termsofuse/service 】
+Cookie：【https://ai.concierge.kinoedesign.co.jp/cookie 】""",
 
     "AI相談": """🤖 AI住まい相談を開始します！
 キノエデザインの住まいAIコンシェルジュです。
@@ -165,9 +165,9 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 ※ AIの回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。
 ※ご質問の内容により、AIの回答までお時間を頂戴する場合がございます。何卒ご理解賜りますようお願い申し上げます。
 ※ご使用の前に、必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
-利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
-Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
+プライバシーポリシー：【https://ai.concierge.kinoedesign.co.jp/privacy-policy 】
+利用規約：【https://ai.concierge.kinoedesign.co.jp/termsofuse/service 】
+Cookie：【https://ai.concierge.kinoedesign.co.jp/cookie 】""",
 
     "AI住まいサイト": """🌐 AI住まいサイトのご案内
 キノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）
@@ -179,48 +179,18 @@ ZINE、ダウンロードもできます。
 ※ 匿名OK／保存OFF（既定）
 ※ AIの回答は必ずしも正しいとは限りません。 → 最終案内はスタッフが行います。
 📱 サイトURL：
-https://preview.studio.site/live/EjOQljz1WJ/""",
+https://ai.concierge.kinoedesign.co.jp/""",
 
-    "資料請求": """📋ありがとうございます！こちらからご覧いただけます。
-Web版と、カタログ版を選択できます
-
-
-Web版 ご希望はこちら
-サイトURL（LINE公式、ホームページ）： http//.aaa
-
-
-カタログ郵送 ご希望はこちら
-サイトURL（LINE公式、ホームページ）： http//.aaa
-
-
-※必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
-利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
-Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
+    "資料請求": """📋ありがとうございます！
+下記のリンクより、資料をご請求ください。
+リンク：https://kinoedesign.co.jp/request/""",
 
     "展示場来場予約": """📍 展示場のご来場予約:
 24 時間いつでも、予約OKです。
-ご予約の際は、以下の内容をLINEのメッセージでお送りいただくか、下記の来場予約ホームページURLよりご送信ください。：
-
-
-予約情報：
-・ご希望日時（第１・第２希望）
-・お名前 ・参加人数（大人・お子様）
-・ご質問
-・ご要望
-※確定のご連絡は追って担当より差し上げます。
-見学時間： 約90分
-展示場： 最新の住宅仕様をご確認 スタッフ一同、心よりお待ちしております！ ご質問もお気軽にどうぞ。
-
+ご予約の際は、下記の来場予約ホームページURLよりご送信ください。：
 
 来場予約ホームページURL：
-【https://preview.studio.site/live/EjOQljz1WJ/reservation 】
-
-
-※必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://preview.studio.site/live/EjOQljz1WJ/privacy-policy 】
-利用規約：【https://preview.studio.site/live/EjOQljz1WJ/termsofuse/service 】
-Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
+【https://kinoedesign.co.jp/consultation/ 】""",
 
     "資金計画": """💬 AI資金診断のご案内
 本診断は匿名でご利用いただけます。
@@ -234,10 +204,15 @@ Cookie：【https://preview.studio.site/live/EjOQljz1WJ/cookie 】""",
 ・その他の大きなご負担：（例：自動車ローン 等）
 ・頭金：
 
-
 未入力の項目があっても進められます。
 ご入力後、概算結果をご提示いたします。
-※ 結果は概算です → 詳細はスタッフがご案内します。""",
+※ 結果は概算です → 詳細はスタッフがご案内します。
+※ AIの回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。
+※ご質問の内容により、AIの回答までお時間を頂戴する場合がございます。何卒ご理解賜りますようお願い申し上げます。
+※ご使用の前に、必ず以下の取り扱いをご確認ください。
+プライバシーポリシー：【https://ai.concierge.kinoedesign.co.jp/privacy-policy 】
+利用規約：【https://ai.concierge.kinoedesign.co.jp/termsofuse/service 】
+Cookie：【https://ai.concierge.kinoedesign.co.jp/cookie 】""",
 
     "チャット相談": """💬 スタッフとのご相談
 AI より、人の方がいい方はこちら
