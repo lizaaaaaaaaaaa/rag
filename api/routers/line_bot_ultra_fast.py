@@ -133,7 +133,7 @@ LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").rstrip("/")
 # 固定テンプレ（※リッチメニューの文言は変更しない）
 # ======================================================================
 RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
-    "follow_greeting": """こんにちは！キノエデザイン住まいAIコンシェルジュ（秋山住研）です。
+    "follow_greeting": """こんにちは！キノエデザイン住まいAIプランナー（秋山住研）です。
 この度は友だち追加ありがとうございます✨
 まずはメニュー左上の「AI相談（24h）」から、 気になることを質問してみてください。
 
@@ -146,12 +146,12 @@ RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
 ※AIの回答は必ずしも正しいとは限りません。➡ 最終案内はスタッフが行います。
 ※AIは24時間、担当者は当日〜翌営業日に返信します。
 ※ご使用の前に、必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://ai.concierge.kinoedesign.co.jp/privacy-policy 】
-利用規約：【https://ai.concierge.kinoedesign.co.jp/termsofuse/service 】
-Cookie：【https://ai.concierge.kinoedesign.co.jp/cookie 】""",
+プライバシーポリシー：【https://ai.kinoedesign.co.jp/privacy-policy 】
+利用規約：【https://ai.kinoedesign.co.jp/termsofuse/service 】
+Cookie：【https://ai.kinoedesign.co.jp/cookie 】""",
 
     "AI相談": """🤖 AI住まい相談を開始します！
-キノエデザインの住まいAIコンシェルジュです。
+キノエデザインの住まいAIプランナーです。
 住まいに関するご質問をお気軽にどうぞ！
 💡 **例えば**
 ・坪単価について教えて
@@ -165,9 +165,9 @@ Cookie：【https://ai.concierge.kinoedesign.co.jp/cookie 】""",
 ※ AIの回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。
 ※ご質問の内容により、AIの回答までお時間を頂戴する場合がございます。何卒ご理解賜りますようお願い申し上げます。
 ※ご使用の前に、必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://ai.concierge.kinoedesign.co.jp/privacy-policy 】
-利用規約：【https://ai.concierge.kinoedesign.co.jp/termsofuse/service 】
-Cookie：【https://ai.concierge.kinoedesign.co.jp/cookie 】""",
+プライバシーポリシー：【https://ai.kinoedesign.co.jp/privacy-policy 】
+利用規約：【https://ai.kinoedesign.co.jp/termsofuse/service 】
+Cookie：【https://ai.kinoedesign.co.jp/cookie 】""",
 
     "AI住まいサイト": """🌐 AI住まいサイトのご案内
 キノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）
@@ -179,7 +179,7 @@ ZINE、ダウンロードもできます。
 ※ 匿名OK／保存OFF（既定）
 ※ AIの回答は必ずしも正しいとは限りません。 → 最終案内はスタッフが行います。
 📱 サイトURL：
-https://ai.concierge.kinoedesign.co.jp/""",
+https://ai.kinoedesign.co.jp/""",
 
     "資料請求": """📋ありがとうございます！
 下記のリンクより、資料をご請求ください。
@@ -210,9 +210,9 @@ https://ai.concierge.kinoedesign.co.jp/""",
 ※ AIの回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。
 ※ご質問の内容により、AIの回答までお時間を頂戴する場合がございます。何卒ご理解賜りますようお願い申し上げます。
 ※ご使用の前に、必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://ai.concierge.kinoedesign.co.jp/privacy-policy 】
-利用規約：【https://ai.concierge.kinoedesign.co.jp/termsofuse/service 】
-Cookie：【https://ai.concierge.kinoedesign.co.jp/cookie 】""",
+プライバシーポリシー：【https://ai.kinoedesign.co.jp/privacy-policy 】
+利用規約：【https://ai.kinoedesign.co.jp/termsofuse/service 】
+Cookie：【https://ai.kinoedesign.co.jp/cookie 】""",
 
     "チャット相談": """💬 スタッフとのご相談
 AI より、人の方がいい方はこちら
