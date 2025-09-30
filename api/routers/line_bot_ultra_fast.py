@@ -89,20 +89,28 @@ def _strip_citations(text: str) -> str:
     return text
 
 # ======================================================================
-# LINE SDK v3（存在しない環境でも落ちないように）
+# LINE SDK v3（Flex を分離 import。失敗しても handler は生かす）
 # ======================================================================
 try:
     from linebot.v3 import WebhookHandler
     from linebot.v3.messaging import (
         Configuration, ApiClient, MessagingApi,
         ReplyMessageRequest, PushMessageRequest, TextMessage, ApiException,
-        FlexMessage,  # ★ 追加：Flex を送るため
     )
     from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent, FollowEvent
     LINE_SDK_AVAILABLE = True
     logger.info("✅ LINE Bot SDK v3 imported")
+    # Flex は別 try。無くても SDK は有効にする
+    try:
+        from linebot.v3.messaging import FlexMessage
+        FLEX_AVAILABLE = True
+        logger.info("✅ FlexMessage available")
+    except Exception as e_flex:
+        FLEX_AVAILABLE = False
+        logger.warning(f"FlexMessage not available. Falling back to text consent. reason={e_flex}")
 except Exception as e:
     LINE_SDK_AVAILABLE = False
+    FLEX_AVAILABLE = False
     logger.error(f"❌ LINE Bot SDK import failed: {e}")
     class WebhookHandler:  # ダミー
         def __init__(self, *a, **k): ...
@@ -395,10 +403,8 @@ def _extract_user_id_from_token(token: str) -> Optional[str]:
     """トークンからユーザーIDを抽出（改善版）"""
     if not token:
         return None
-    # LINE UIDの場合はそのまま使用（U + 32の英数字が一般的）
     if isinstance(token, str) and token.startswith("U") and 20 <= len(token) <= 64:
         return token
-    # JWTを緩くデコードして候補を探す
     try:
         import jwt
         payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256", "ES256"])
@@ -408,7 +414,6 @@ def _extract_user_id_from_token(token: str) -> Optional[str]:
                 return v
     except Exception:
         pass
-    # それ以外はそのまま（最後のフォールバック）
     if len(token) > 10:
         return token
     return None
@@ -651,10 +656,13 @@ if LINE_SDK_AVAILABLE and handler:
             # リッチメニュー項目にヒット
             if key:
                 if key == "AI相談":
-                    # 未同意なら Flex ボタンのみ返信（URLは本文に出さない）
+                    # 未同意なら Flex ボタン（URLは本文に出さない）
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
-                        _reply_or_push_flex(reply_token, user_id, build_consent_flex(liff_url))
+                        if FLEX_AVAILABLE:
+                            _reply_or_push_flex(reply_token, user_id, build_consent_flex(liff_url))
+                        else:
+                            _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
@@ -699,7 +707,10 @@ if LINE_SDK_AVAILABLE and handler:
                 if key == "AI相談":
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
-                        _reply_or_push_flex(reply_token, user_id, build_consent_flex(liff_url))
+                        if FLEX_AVAILABLE:
+                            _reply_or_push_flex(reply_token, user_id, build_consent_flex(liff_url))
+                        else:
+                            _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
