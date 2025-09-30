@@ -440,13 +440,17 @@ def _has_consent_sync(user_id: str) -> bool:
         logger.warning(f"Consent check failed for {user_id[:8]}...: {e}")
     return False
 
-# --- ユーザー別「同意リンク」生成（/liff/consent） ---
+# --- ユーザー別「同意リンク」生成（/liff/consent）---
+# ★★★ 修正箇所：ここから ★★★
 def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
     """
     LIFF の完全URL（LIFF_CONSENT_URL）を最優先で使用。
     無い場合は PUBLIC_BASE_URL(/liff/consent) を使用。
+    ★ user_token は URL に含めない（LIFF SDK から直接取得）
     """
-    q = {"user_token": user_id}
+    # ✅ user_token は削除（空の辞書から開始）
+    q = {}
+    
     if not extra_qs:
         extra_qs = {
             "state": "line_ai",
@@ -455,6 +459,8 @@ def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> 
             "utm_campaign": "ai_consult",
             "utm_content": "ai_menu",
         }
+    
+    # UTMやstate、abパラメータのみを追加
     for k in ["state", "ab", "utm_source", "utm_medium", "utm_campaign", "utm_content"]:
         v = extra_qs.get(k) if extra_qs else None
         if v:
@@ -463,7 +469,10 @@ def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> 
     base = LIFF_CONSENT_URL or (f"{PUBLIC_BASE_URL}/liff/consent" if PUBLIC_BASE_URL else "/liff/consent")
     if base.startswith("/") and PUBLIC_BASE_URL:
         base = f"{PUBLIC_BASE_URL}{base}"
-    return f"{base}?{urlencode(q)}"
+    
+    # ✅ セキュアなURL（トークンなし）
+    return f"{base}?{urlencode(q)}" if q else base
+# ★★★ 修正箇所：ここまで ★★★
 
 def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
     link = _make_consent_link(user_id, extra_qs)

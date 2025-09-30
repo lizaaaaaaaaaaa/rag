@@ -102,10 +102,12 @@ window.__CFG__ = {cfg_json};
   let lineUID = "";        // ★ U で始まる LINE ユーザーID（Push の to に使用）
   let liffReady = false;
 
-  function tokenFromURL(){{
-    const qs = new URLSearchParams(location.search);
-    return qs.get('user_token') || '';
-  }}
+  // ★★★ 修正箇所1：tokenFromURL() 関数を削除 ★★★
+  // ❌ 削除された関数：
+  // function tokenFromURL(){{
+  //   const qs = new URLSearchParams(location.search);
+  //   return qs.get('user_token') || '';
+  // }}
 
   function enableIfReady(){{
     const ok = checks.every(b=>b.checked) && (accessToken || lineUID);
@@ -138,8 +140,9 @@ window.__CFG__ = {cfg_json};
         }} catch(_e){{}}
       }}
 
-      // URL 経由のトークンも最後に繋いでおく
-      if (!accessToken) accessToken = tokenFromURL();
+      // ★★★ 修正箇所2：URL経由のトークン取得を削除 ★★★
+      // ❌ 削除された行：
+      // if (!accessToken) accessToken = tokenFromURL();
 
       checks.forEach(b=>b.addEventListener('change', enableIfReady));
       enableIfReady();
