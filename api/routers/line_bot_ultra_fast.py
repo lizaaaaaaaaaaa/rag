@@ -96,6 +96,7 @@ try:
     from linebot.v3.messaging import (
         Configuration, ApiClient, MessagingApi,
         ReplyMessageRequest, PushMessageRequest, TextMessage, ApiException,
+        FlexMessage,  # ★ 追加：Flex を送るため
     )
     from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent, FollowEvent
     LINE_SDK_AVAILABLE = True
@@ -337,7 +338,7 @@ if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
         logger.error(f"LINE handler init error: {e}"); handler = None
 
 # ======================================================================
-# 送信ヘルパー
+# 送信ヘルパー（テキスト）
 # ======================================================================
 def _reply_or_push(reply_token: str, user_id: str, text: str) -> bool:
     api = _ensure_api()
@@ -362,6 +363,30 @@ def _push(user_id: str, text: str) -> bool:
         api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[TextMessage(text=text)])); return True
     except Exception as e:
         logger.error(f"LINE push failed: {e}"); return False
+
+# ======================================================================
+# ★ 送信ヘルパー（Flex）
+# ======================================================================
+def _reply_or_push_flex(reply_token: str, user_id: str, flex: "FlexMessage") -> bool:
+    api = _ensure_api()
+    if not api:
+        logger.error("MessagingApi not ready (flex)")
+        return False
+    # 重複防止キーは alt_text のみで十分（リンクは本文に含めない）
+    if dup_guard.seen(user_id, f"flex:{getattr(flex, 'alt_text', 'consent')}"):
+        return True
+    try:
+        try:
+            api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[flex]))
+            return True
+        except ApiException as e:
+            if "Invalid reply token" in str(e) or getattr(e, "status", None) == 400:
+                api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[flex])); return True
+            logger.error(f"LINE flex reply failed: {e}")
+            return False
+    except Exception as e:
+        logger.error(f"LINE flex send failed: {e}")
+        return False
 
 # ======================================================================
 # ユーザートークン処理（修正版）
@@ -447,6 +472,44 @@ def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -
         "以下のボタンから同意ページを開いてください。\n\n"
         f"{link}"
     )
+
+# ======================================================================
+# ★ 同意 Flex のビルダー（URLを本文に出さない）
+# ======================================================================
+def build_consent_flex(liff_url: str) -> "FlexMessage":
+    bubble = {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "md",
+            "contents": [
+                {"type": "text", "text": "AI相談のご利用前の同意", "weight": "bold", "size": "lg"},
+                {"type": "text", "text": "以下を確認のうえ「同意して開始」を押してください。", "wrap": True, "size": "sm", "color": "#555555"},
+                {"type": "separator"},
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "spacing": "sm",
+                    "margin": "md",
+                    "contents": [
+                        {"type": "text", "text": "・プライバシーポリシー / 利用規約", "size": "sm", "wrap": True},
+                        {"type": "text", "text": "・入力が外部サービスへ送信される場合あり", "size": "sm", "wrap": True},
+                        {"type": "text", "text": "・AIの誤答・限界の理解", "size": "sm", "wrap": True},
+                        {"type": "text", "text": "・Cookie等の利用（任意）", "size": "sm", "wrap": True},
+                    ],
+                },
+                {"type": "separator"},
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "height": "sm",
+                    "action": {"type": "uri", "label": "同意して開始", "uri": liff_url},
+                },
+            ],
+        },
+    }
+    return FlexMessage(alt_text="AI相談のご利用前の同意", contents=bubble)
 
 # ======================================================================
 # バックグラウンド・ワーカー
@@ -588,9 +651,11 @@ if LINE_SDK_AVAILABLE and handler:
             # リッチメニュー項目にヒット
             if key:
                 if key == "AI相談":
-                    # 未同意ならリンクを返して終了
+                    # 未同意なら Flex ボタンのみ返信（URLは本文に出さない）
                     if not _has_consent_sync(user_id):
-                        _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id)); return
+                        liff_url = _make_consent_link(user_id)
+                        _reply_or_push_flex(reply_token, user_id, build_consent_flex(liff_url))
+                        return
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
@@ -633,7 +698,9 @@ if LINE_SDK_AVAILABLE and handler:
             if key:
                 if key == "AI相談":
                     if not _has_consent_sync(user_id):
-                        _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id)); return
+                        liff_url = _make_consent_link(user_id)
+                        _reply_or_push_flex(reply_token, user_id, build_consent_flex(liff_url))
+                        return
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
