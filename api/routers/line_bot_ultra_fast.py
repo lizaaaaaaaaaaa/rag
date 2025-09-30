@@ -89,25 +89,20 @@ def _strip_citations(text: str) -> str:
     return text
 
 # ======================================================================
-# LINE SDK v3（Flex を分離 import。失敗しても handler は生かす）
+# LINE SDK v3（Flex を含めた完全インポート）★修正
 # ======================================================================
 try:
     from linebot.v3 import WebhookHandler
     from linebot.v3.messaging import (
         Configuration, ApiClient, MessagingApi,
         ReplyMessageRequest, PushMessageRequest, TextMessage, ApiException,
+        FlexMessage, FlexBubble, FlexBox, FlexText, FlexButton, FlexSeparator,
+        URIAction
     )
     from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent, FollowEvent
     LINE_SDK_AVAILABLE = True
-    logger.info("✅ LINE Bot SDK v3 imported")
-    # Flex は別 try。無くても SDK は有効にする
-    try:
-        from linebot.v3.messaging import FlexMessage
-        FLEX_AVAILABLE = True
-        logger.info("✅ FlexMessage available")
-    except Exception as e_flex:
-        FLEX_AVAILABLE = False
-        logger.warning(f"FlexMessage not available. Falling back to text consent. reason={e_flex}")
+    FLEX_AVAILABLE = True
+    logger.info("✅ LINE Bot SDK v3 with Flex imported")
 except Exception as e:
     LINE_SDK_AVAILABLE = False
     FLEX_AVAILABLE = False
@@ -479,41 +474,48 @@ def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -
     )
 
 # ======================================================================
-# ★ 同意 Flex のビルダー（URLを本文に出さない）
+# ★ 同意 Flex のビルダー（修正版：正しいFlexBubble構造を使用）
 # ======================================================================
 def build_consent_flex(liff_url: str) -> "FlexMessage":
-    bubble = {
-        "type": "bubble",
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "spacing": "md",
-            "contents": [
-                {"type": "text", "text": "AI相談のご利用前の同意", "weight": "bold", "size": "lg"},
-                {"type": "text", "text": "以下を確認のうえ「同意して開始」を押してください。", "wrap": True, "size": "sm", "color": "#555555"},
-                {"type": "separator"},
-                {
-                    "type": "box",
-                    "layout": "vertical",
-                    "spacing": "sm",
-                    "margin": "md",
-                    "contents": [
-                        {"type": "text", "text": "・プライバシーポリシー / 利用規約", "size": "sm", "wrap": True},
-                        {"type": "text", "text": "・入力が外部サービスへ送信される場合あり", "size": "sm", "wrap": True},
-                        {"type": "text", "text": "・AIの誤答・限界の理解", "size": "sm", "wrap": True},
-                        {"type": "text", "text": "・Cookie等の利用（任意）", "size": "sm", "wrap": True},
+    """同意用のFlexメッセージを作成（修正版）"""
+    if not FLEX_AVAILABLE:
+        raise RuntimeError("FlexMessage not available")
+    
+    # FlexBubbleを正しく構築
+    bubble = FlexBubble(
+        body=FlexBox(
+            layout="vertical",
+            spacing="md",
+            contents=[
+                FlexText(text="AI相談のご利用前の同意", weight="bold", size="lg"),
+                FlexText(
+                    text="以下を確認のうえ「同意して開始」を押してください。",
+                    wrap=True,
+                    size="sm",
+                    color="#555555"
+                ),
+                FlexSeparator(),
+                FlexBox(
+                    layout="vertical",
+                    spacing="sm",
+                    margin="md",
+                    contents=[
+                        FlexText(text="・プライバシーポリシー / 利用規約", size="sm", wrap=True),
+                        FlexText(text="・入力が外部サービスへ送信される場合あり", size="sm", wrap=True),
+                        FlexText(text="・AIの誤答・限界の理解", size="sm", wrap=True),
+                        FlexText(text="・Cookie等の利用（任意）", size="sm", wrap=True),
                     ],
-                },
-                {"type": "separator"},
-                {
-                    "type": "button",
-                    "style": "primary",
-                    "height": "sm",
-                    "action": {"type": "uri", "label": "同意して開始", "uri": liff_url},
-                },
+                ),
+                FlexSeparator(),
+                FlexButton(
+                    style="primary",
+                    height="sm",
+                    action=URIAction(label="同意して開始", uri=liff_url),
+                ),
             ],
-        },
-    }
+        ),
+    )
+    
     return FlexMessage(alt_text="AI相談のご利用前の同意", contents=bubble)
 
 # ======================================================================
@@ -621,7 +623,7 @@ def _resolve_postback_key(data: str) -> str:
     return ""
 
 # ======================================================================
-# イベントハンドラ（reply→push 方針）—— AI相談だけ同意ゲート
+# イベントハンドラ（reply→push 方針）—— AI相談だけ同意ゲート ★修正
 # ======================================================================
 if LINE_SDK_AVAILABLE and handler:
     from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent, FollowEvent
@@ -656,11 +658,21 @@ if LINE_SDK_AVAILABLE and handler:
             # リッチメニュー項目にヒット
             if key:
                 if key == "AI相談":
-                    # 未同意なら Flex ボタン（URLは本文に出さない）
+                    # 未同意なら Flex ボタン（エラー時はテキストにフォールバック）★修正
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
                         if FLEX_AVAILABLE:
-                            _reply_or_push_flex(reply_token, user_id, build_consent_flex(liff_url))
+                            try:
+                                flex_msg = build_consent_flex(liff_url)
+                                success = _reply_or_push_flex(reply_token, user_id, flex_msg)
+                                if success:
+                                    logger.info(f"Sent Flex consent to {user_id[:8]}...")
+                                else:
+                                    logger.warning(f"Flex send failed for {user_id[:8]}..., falling back to text")
+                                    _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
+                            except Exception as flex_err:
+                                logger.error(f"Flex build/send error: {flex_err}, falling back to text")
+                                _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         else:
                             _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
@@ -708,7 +720,14 @@ if LINE_SDK_AVAILABLE and handler:
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
                         if FLEX_AVAILABLE:
-                            _reply_or_push_flex(reply_token, user_id, build_consent_flex(liff_url))
+                            try:
+                                flex_msg = build_consent_flex(liff_url)
+                                success = _reply_or_push_flex(reply_token, user_id, flex_msg)
+                                if not success:
+                                    _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
+                            except Exception as flex_err:
+                                logger.error(f"Postback flex error: {flex_err}")
+                                _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         else:
                             _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
