@@ -1,4 +1,12 @@
-# pages/5_upload.py
+# -*- coding: utf-8 -*-
+"""
+pages/5_upload.py — 完全修正版（最小影響・即時反映対応）
+
+方針（最小差分）:
+- 既存のログイン制御 / ヘッダ付与 / レイアウトは維持
+- /chat のペイロードは **question** を主、互換のため **query** も同時送信
+- 取り込みレスポンスに `rag_reloaded` があれば表示
+"""
 import os
 import io
 import json
@@ -7,19 +15,22 @@ import traceback
 import requests
 import streamlit as st
 
+
 st.set_page_config(page_title="PDFアップロード & RAG質問", page_icon="📎", layout="centered")
 st.title("📎 PDFアップロード ＆ 💬 RAG質問")
+
 
 # ---------- ログイン必須 ----------
 REQUIRE_LOGIN = os.getenv("UPLOAD_REQUIRE_LOGIN", "true").lower() in ("1", "true", "yes", "on")
 
+
 def _is_logged_in() -> bool:
-    # ★ 修正点：AND → OR（user か is_authenticated のどちらかが立っていれば可）
+    # 既存実装を尊重: user か is_authenticated のどちらかが True ならOK
     return bool(st.session_state.get("is_authenticated")) or bool(st.session_state.get("user"))
+
 
 if REQUIRE_LOGIN and not _is_logged_in():
     st.error("このページの利用にはログインが必要です。")
-    # Streamlit のページリンク（バージョンにより表示が変わります）
     try:
         st.page_link("pages/1_login.py", label="🔐 ログインページへ")
     except Exception:
@@ -27,25 +38,27 @@ if REQUIRE_LOGIN and not _is_logged_in():
     st.stop()
 # ----------------------------------
 
+
 API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
 INGEST_URL = f"{API_URL}/upload/ingest"
 CHAT_URL   = f"{API_URL}/chat"
 
+
 def _auth_headers():
-    # ログイン必須にしたので 'anonymous' にはフォールバックしない想定
     user = st.session_state.get("user")
     headers = {
-        "X-User-Id": user,      # 同意ゲート/トレーサビリティ用
-        "X-Platform": "web",    # ルーティング/緩和ルール用
+        "X-User-Id": user or "",   # 同意ゲート/トレーサビリティ
+        "X-Platform": "web",      # ルーティング/緩和ルール
     }
-    # もし将来JWTを使うなら:
     token = st.session_state.get("jwt")
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
+
 uploaded = st.file_uploader("PDFファイルを選択", type=["pdf"])
 question = st.text_input("取り込み後にすぐ聞きたい質問（任意）")
+
 
 if st.button("アップロードして取り込む", type="primary") and uploaded:
     try:
@@ -62,7 +75,6 @@ if st.button("アップロードして取り込む", type="primary") and uploade
             )
 
         if resp.status_code != 200:
-            # 同意ミドルウェア等の誤爆にも気づけるよう詳細を表示
             try:
                 detail = resp.json()
             except Exception:
@@ -72,19 +84,23 @@ if st.button("アップロードして取り込む", type="primary") and uploade
 
         data = resp.json()
         st.success("取り込みが完了しました ✅")
+        # 既存項目＋ rag_reloaded を表示（存在しない環境でも KeyError にならないよう get を使用）
         st.write({
             "filename": data.get("filename"),
             "gcs_path": data.get("gcs_path"),
             "added_docs": data.get("added_docs"),
+            "rag_reloaded": data.get("rag_reloaded"),
             "message": data.get("message"),
         })
 
         # -------- 2) すぐ質問（任意） --------
         if question:
+            # 互換のため 'question' と 'query' を両方送る（サーバ側でどちらかを見る）
             payload = {
+                "question": question,
                 "query": question,
                 "user": st.session_state.get("user"),
-                "platform": "web"
+                "platform": "web",
             }
             with st.spinner("RAGに質問中…"):
                 r = requests.post(

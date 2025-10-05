@@ -1,15 +1,17 @@
-# main.py - Router登録を堅牢化した完全修正版（v7.5.3）
-# - 404多発の根因だった「import 失敗でルーター未登録」を解消
-# - /line/webhook, /liff/*, /line-login/*, /consent/* 等を確実に登録
-# - 既存の高速RAG/フォールバック/監視ロジックは維持
+# main.py - Router登録を堅牢化した完全修正版（v7.5.3+patch）
+# 変更点（最小差分）:
+# - include_router_safe: 既に同一パス群が登録済みなら重複includeを自動スキップ
+# - /chat: リクエストで question と query の両方に対応（互換強化）
+# - /ops/rag/reload: 管理APIを追加（OPS_ADMIN_SECRET 未設定なら 403 で安全停止）
+# - 既存のRAG初期化/フォールバック/監視ロジックは維持
 # -----------------------------------------------------------------------------
 
 import logging, os, asyncio, time, json, traceback, sys, pathlib, importlib, importlib.util, types
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import jwt  # PyJWT
@@ -18,7 +20,7 @@ import jwt  # PyJWT
 try:
     from middleware import (
         TimingMiddleware,
-        CORSMiddleware,
+        CORSMiddleware,  # カスタム版
         SecurityHeadersMiddleware,
         RateLimitMiddleware,
         ConsentGateMiddleware,
@@ -54,13 +56,22 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------
-# ルーター安全登録（← 追加：404の根本対策）
+# ルーター安全登録（重複ガード付き）
 # ---------------------------------------------------------------------
+
+def _router_paths(r) -> set:
+    try:
+        return {getattr(rt, "path", "") for rt in getattr(r, "routes", [])}
+    except Exception:
+        return set()
+
+
 def include_router_safe(py_path: str, attr: str = "router", prefix: str = "") -> bool:
     """
     例: py_path="api.routers.liff_pages"
     失敗時は "routers.liff_pages" → "liff_pages" の順でフォールバック。
-    見つかった時点で app.include_router して True を返す。
+    見つかった時点で app.include_router（ただし重複はスキップ）
+    を実施して True を返す。
     """
     candidates = [py_path]
     if py_path.startswith("api.routers."):
@@ -73,6 +84,12 @@ def include_router_safe(py_path: str, attr: str = "router", prefix: str = "") ->
         try:
             mod = importlib.import_module(modname)
             r = getattr(mod, attr)
+            # --- 重複ガード: すべてのパスが既存に含まれていればスキップ ---
+            existing = {getattr(rt, "path", "") for rt in app.routes}
+            incoming = _router_paths(r)
+            if incoming and incoming.issubset(existing):
+                logger.info(f"⏭️ Router already mounted: {modname}")
+                return True
             app.include_router(r, prefix=prefix)
             logger.info(f"✅ Router included: {modname}")
             return True
@@ -83,13 +100,13 @@ def include_router_safe(py_path: str, attr: str = "router", prefix: str = "") ->
 # ---- 必須ルーターを即時登録（順序も維持）----
 # 法務・同意UI・ログイン
 include_router_safe("api.routers.legal_pages")
-include_router_safe("api.routers.liff_pages")         # /liff, /liff/consent など
-include_router_safe("api.routers.consent_gate")       # /consent/* 保存/確認API
-include_router_safe("api.routers.line_login")         # /line-login/*
+include_router_safe("api.routers.liff_pages")          # /liff, /liff/consent など
+include_router_safe("api.routers.consent_gate")        # /consent/* 保存/確認API
+include_router_safe("api.routers.line_login")          # /line-login/*
 
 # LINE連携（Webhook/メニュー等）
-include_router_safe("api.routers.line_bot_ultra_fast")      # /line/webhook（最重要）
-include_router_safe("api.routers.line_proxy")                # 管理/一括設定
+include_router_safe("api.routers.line_bot_ultra_fast") # /line/webhook（最重要）
+include_router_safe("api.routers.line_proxy")           # 管理/一括設定
 include_router_safe("api.routers.line_bot_financial_planner")
 
 # 業務API/各種ユーティリティ
@@ -280,14 +297,16 @@ async def initialize_rag_components():
             logger.error(traceback.format_exc())
 
 # ---------------------------------------------------------------------
-# /chat
+# /chat（互換強化: question/query 両対応）
 # ---------------------------------------------------------------------
 class UnifiedChatRequest(BaseModel):
-    question: str
-    username: str | None = None
-    platform: str | None = "web"
-    mode: str | None = "auto"
-    debug_mode: bool | None = False
+    question: Optional[str] = None
+    query: Optional[str] = None
+    username: Optional[str] = None
+    platform: Optional[str] = "web"
+    mode: Optional[str] = "auto"
+    debug_mode: Optional[bool] = False
+
 
 def _fallback_response(question: str, request_id: str, platform: str, mode: str, t0: float, error: str = None):
     rt = time.time() - t0
@@ -301,10 +320,14 @@ def _fallback_response(question: str, request_id: str, platform: str, mode: str,
                         "request_id": request_id, "error": error or "System temporarily unavailable"}
     })
 
+
 @app.post("/chat")
 async def unified_chat(req: UnifiedChatRequest, request: Request):
     t0 = time.time()
     platform = (req.platform or "web").lower()
+    q = (req.question or req.query or "").strip()
+    if not q:
+        raise HTTPException(status_code=422, detail="'question' (or 'query') is required")
     request_id = getattr(request.state, "request_id", str(uuid4())[:8])
 
     try:
@@ -323,7 +346,7 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
         if ENABLE_RAG_INITIALIZATION and not is_initialized:
             await initialize_rag_components()
             if not is_initialized:
-                return _fallback_response(req.question, request_id, platform, req.mode or "auto", t0, "RAG initialization failed")
+                return _fallback_response(q, request_id, platform, req.mode or "auto", t0, "RAG initialization failed")
 
         # 4) chat_unified を解決
         unified_generator = None
@@ -337,18 +360,18 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
             except Exception as e:
                 last_err = e
         if unified_generator is None:
-            return _fallback_response(req.question, request_id, platform, req.mode or "auto", t0, f"Chat module unavailable: {last_err}")
+            return _fallback_response(q, request_id, platform, req.mode or "auto", t0, f"Chat module unavailable: {last_err}")
 
         # 5) 応答生成（タイムアウト制御）
         try:
             resp = await asyncio.wait_for(
-                unified_generator.generate_response(req.question, platform, req.username or f"{platform}-user", req.mode or "auto"),
+                unified_generator.generate_response(q, platform, req.username or f"{platform}-user", req.mode or "auto"),
                 timeout=30.0
             )
         except asyncio.TimeoutError:
-            return _fallback_response(req.question, request_id, platform, req.mode or "auto", t0, "Response generation timeout")
+            return _fallback_response(q, request_id, platform, req.mode or "auto", t0, "Response generation timeout")
         except Exception as e:
-            return _fallback_response(req.question, request_id, platform, req.mode or "auto", t0, f"Response generation error: {e}")
+            return _fallback_response(q, request_id, platform, req.mode or "auto", t0, f"Response generation error: {e}")
 
         rt = time.time() - t0
         return {
@@ -363,7 +386,31 @@ async def unified_chat(req: UnifiedChatRequest, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        return _fallback_response(req.question, request_id, platform, req.mode or "auto", t0, f"Unexpected error: {e}")
+        return _fallback_response(q, request_id, platform, req.mode or "auto", t0, f"Unexpected error: {e}")
+
+# ---------------------------------------------------------------------
+# 管理API: /ops/rag/reload（OPS_ADMIN_SECRET 未設定なら無効化）
+# ---------------------------------------------------------------------
+OPS_ADMIN_SECRET = os.getenv("OPS_ADMIN_SECRET", "")
+
+@app.post("/ops/rag/reload")
+async def ops_rag_reload(x_admin_secret: str = Header(default="")):
+    if not OPS_ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="admin secret not set")
+    if x_admin_secret != OPS_ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    try:
+        try:
+            fr = importlib.import_module("rag.fast_rag_chain")
+            vs = fr.refresh_vectorstore(force=True)
+            info = str(type(vs))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"refresh failed: {e}")
+        return {"status": "ok", "detail": "reloaded", "vectorstore": info}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"reload error: {e}")
 
 # ---------------------------------------------------------------------
 # デバッグ/ヘルス
