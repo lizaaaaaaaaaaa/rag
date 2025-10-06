@@ -14,6 +14,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from api.routers.debug_rag import router as debug_rag_router
 import jwt  # PyJWT
 
 # ===== 自作ミドルウェア =====
@@ -118,6 +119,7 @@ include_router_safe("api.routers.healthz")
 include_router_safe("api.routers.audit_system")
 include_router_safe("api.routers.dashboard")
 include_router_safe("api.routers.evaluation")
+include_router_safe("api.routers.debug_rag")
 # 重要：chat_unifiedは /chat エンドポイントを内包しない場合があるため、下の /chat 実装をメインに据える
 
 # ---------------------------------------------------------------------
