@@ -1,5 +1,5 @@
 # ====================
-# middleware.py（CORS/RateLimit/Headers/ConsentGate） - fixed
+# middleware.py（CORS/RateLimit/Headers/ConsentGate） - fixed for LIFF Origin=None
 # ====================
 
 import os
@@ -7,6 +7,7 @@ import time
 import uuid
 import logging
 from typing import Callable, Iterable
+from urllib.parse import urlparse  # ★ 追加：Referer 解析用
 
 from fastapi import Request, Response, status
 from fastapi.responses import JSONResponse
@@ -66,7 +67,7 @@ def _build_allowed_origins() -> list[str]:
         if o:
             origins.add(o)
 
-    # ★ 既定の許可オリジン（要件に合わせて追加）
+    # ★ 既定の許可オリジン（あなたの環境）
     defaults = [
         "https://leafy-kitsune-eb4566.netlify.app",
         "https://ai.kinoedesign.co.jp",
@@ -183,6 +184,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 class CORSMiddleware(BaseHTTPMiddleware):
     """
     自前 CORS（Origin ホワイトリスト方式）
+    - LIFF WebView で Origin が None になる端末向けに、Referer/UA から推定して許可
     """
     def __init__(self, app, allowed_origins: list[str] | None = None):
         super().__init__(app)
@@ -215,12 +217,32 @@ class CORSMiddleware(BaseHTTPMiddleware):
         resp.headers["Access-Control-Allow-Headers"] = self.allow_headers
         resp.headers["Access-Control-Max-Age"] = self.max_age
 
+    def _infer_liff_origin(self, request: Request) -> str | None:
+        """Origin が無い場合の LIFF 専用推定（Referer / UA から）"""
+        ref = request.headers.get("referer") or request.headers.get("Referer")
+        if ref:
+            p = urlparse(ref)
+            if p.scheme and p.netloc:
+                cand = f"{p.scheme}://{p.netloc}"
+                if cand.endswith(".line.me"):
+                    return cand
+        ua = request.headers.get("user-agent", "")
+        if "Line" in ua or " Line/" in ua:
+            return "https://liff.line.me"
+        return None
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         origin = request.headers.get("origin") or request.headers.get("Origin")
+
+        # ★ LIFF 対応：Origin が無い時は推定
+        if not origin and (request.url.path.startswith("/liff")
+                           or request.url.path.startswith("/consent")):
+            origin = self._infer_liff_origin(request)
+
         allowed = self._origin_is_allowed(origin)
 
         if request.method == "OPTIONS":
-            # Preflight は即時応答（許可時のみCORSヘッダを付与）
+            # Preflight：許可時のみヘッダ付与
             resp = Response(status_code=204)
             if allowed:
                 self._apply_cors(resp, origin.rstrip("/"))
