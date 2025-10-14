@@ -15,7 +15,10 @@
     button{margin-top:18px;font-size:16px;padding:10px 14px;border-radius:8px;border:1px solid #ddd;background:#06c755;color:#fff}
     button[disabled]{opacity:.5}
     small{color:#666}
+    #dbg{margin-top:12px;display:none}
   </style>
+  <!-- LIFF SDK（userId取得/クライアント内判定に使用） -->
+  <script src="https://static.line-scdn.net/liff/edge/versions/2.21.3/sdk.js"></script>
 </head>
 <body>
   <h1>AI相談のご利用前の同意</h1>
@@ -24,7 +27,7 @@
   <!-- 法務リンク（/legal 配信に統一） -->
   <div class="links" aria-label="関連ポリシー・規約へのリンク">
     <div>・プライバシーポリシー：<a href="/legal/privacy" target="_blank" rel="noopener">こちら</a></div>
-    <div>・利用規約：<a href="/legal/terms" target="_blank" rel="noopener">こちら</a></div>
+    <div>・利用規約：<a href="/legal/terms"   target="_blank" rel="noopener">こちら</a></div>
     <div>・Cookie（外部送信の詳細）：<a href="/legal/cookie" target="_blank" rel="noopener">こちら</a></div>
   </div>
 
@@ -39,6 +42,11 @@
   <button id="btn-consent" disabled>同意して開始</button>
   <p><small>※ 同意は公式LINE内の「AI相談」にのみ適用されます。</small></p>
 
+  <!-- 開発用：show_uid=1 の時だけ表示 -->
+  <div id="dbg">
+    <button id="show-uid">ユーザーIDを表示（開発用）</button>
+  </div>
+
   <script>
     // ===== ユーティリティ =====
     const qs = new URLSearchParams(location.search);
@@ -48,6 +56,10 @@
     const BASIC = (getParam("basic_id") || "__LINE_BASIC_ID__").replace(/^@?/, "@").replace(/^@@/, "@");
     const POLICY_VERSION = getParam("policy_version") || (window.__POLICY_VERSION__ || "1.0.0");
     const USER_TOKEN = getParam("user_token") || "";
+
+    // LIFF 関連
+    const LIFF_ID = "2007887876-vMNe74eX";
+    let LINE_USER_ID = ""; // 取得できたら格納
 
     // 必須3チェックONでボタン活性
     const btn = document.getElementById('btn-consent');
@@ -75,6 +87,33 @@
         history.back();
       }
     }
+
+    // ===== LIFF 初期化（可能なら userId を取得してヘッダーに乗せる） =====
+    (async () => {
+      try{
+        await liff.init({ liffId: LIFF_ID });
+        if (!liff.isLoggedIn()) {
+          // Web(LIFF外)で開かれた場合もあるので、リダイレクトを最小化
+          liff.login({ redirectUri: location.href });
+          return; // ログイン後に戻ってくる
+        }
+        // プロフィールから userId 取得（scope: profile が必要）
+        const p = await liff.getProfile().catch(()=>null);
+        if(p && p.userId) LINE_USER_ID = p.userId;
+
+        // show_uid=1 のときだけ開発ボタンを表示
+        if(qs.get("show_uid") === "1"){
+          const dbg = document.getElementById('dbg');
+          dbg.style.display = "block";
+          document.getElementById('show-uid').onclick = () => {
+            alert(LINE_USER_ID ? `userId: ${LINE_USER_ID}` : "userIdが取得できませんでした。scope=profile を確認してください。");
+          };
+        }
+      }catch(e){
+        // LIFFが無い/初期化失敗でもフローは継続
+        console.warn("LIFF init error:", e);
+      }
+    })();
 
     async function saveConsentAndStart(){
       if(!USER_TOKEN){
@@ -109,18 +148,24 @@
         const saveQs = new URLSearchParams({ user_token: USER_TOKEN, scope: "ai", version: POLICY_VERSION }).toString();
         const r1 = await fetch(`/consent/save?${saveQs}`, {
           method: "POST",
-          headers: {"Content-Type":"application/json", "X-User-Token": USER_TOKEN},
+          headers: {
+            "Content-Type":"application/json",
+            "X-User-Token": USER_TOKEN
+          },
           body: JSON.stringify(payload),
           credentials: "omit"
         });
         if(!r1.ok) throw new Error("consent_save_failed");
 
         // 2) AI相談を自動開始（サーバから定型文をPush：ユーザー操作不要）
-        //    ※ 応答は待たずに次へ（体感速度を落とさない）
+        //    可能なら X-User-Id を付ける（サーバ側は header/JSON どちらでも拾える実装推奨）
+        const hdrs = { "Content-Type":"application/json" };
+        if (LINE_USER_ID) hdrs["X-User-Id"] = LINE_USER_ID;
+
         fetch("/line/after-consent", {
           method: "POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ user_token: USER_TOKEN })
+          headers: hdrs,
+          body: JSON.stringify({ user_token: USER_TOKEN, user_id: LINE_USER_ID || undefined })
         }).catch(()=>{});
 
         // 3) LINEアプリへ戻す（LIFF内なら閉じる、外部ならDeep Link）
