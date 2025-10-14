@@ -16,15 +16,16 @@
     button[disabled]{opacity:.5}
     small{color:#666}
     #dbg{margin-top:12px;display:none}
+    #err{margin-top:12px;color:#b3261e;background:#fde7e9;border:1px solid #f5c2c7;padding:10px;border-radius:8px;display:none}
   </style>
   <!-- LIFF SDK（userId取得/クライアント内判定に使用） -->
-  <script src="https://static.line-scdn.net/liff/edge/versions/2.21.3/sdk.js"></script>
+  <script src="https://static.line-scdn.net/liff/edge/versions/2.23.1/sdk.js"></script>
 </head>
 <body>
   <h1>AI相談のご利用前の同意</h1>
   <p>以下をご確認のうえ、チェックを入れて「同意して開始」を押してください。</p>
 
-  <!-- 法務リンク（/legal 配信に統一） -->
+  <!-- 法務リンク -->
   <div class="links" aria-label="関連ポリシー・規約へのリンク">
     <div>・プライバシーポリシー：<a href="/legal/privacy" target="_blank" rel="noopener">こちら</a></div>
     <div>・利用規約：<a href="/legal/terms"   target="_blank" rel="noopener">こちら</a></div>
@@ -32,9 +33,9 @@
   </div>
 
   <!-- ✅ 必須3チェック（PP / 外部送信 / AI限界） -->
-  <label><input type="checkbox" id="chk_pp" aria-describedby="desc_pp">プライバシーポリシー（上記リンク）に同意します</label>
-  <label><input type="checkbox" id="chk_xfer" aria-describedby="desc_xfer">入力内容が外部サービスへ送信される場合があることを理解しました</label>
-  <label><input type="checkbox" id="chk_ai_limits" aria-describedby="desc_ai">AIの誤答・限界があることを理解しました</label>
+  <label><input type="checkbox" id="chk_pp">プライバシーポリシー（上記リンク）に同意します</label>
+  <label><input type="checkbox" id="chk_xfer">入力内容が外部サービスへ送信される場合があることを理解しました</label>
+  <label><input type="checkbox" id="chk_ai_limits">AIの誤答・限界があることを理解しました</label>
 
   <!-- ◇ 任意（Cookie同意は任意扱い） -->
   <label><input type="checkbox" id="chk_cookie">Cookie等の利用（計測を含む）に同意します（任意）</label>
@@ -47,19 +48,25 @@
     <button id="show-uid">ユーザーIDを表示（開発用）</button>
   </div>
 
+  <div id="err" role="alert"></div>
+
   <script>
-    // ===== ユーティリティ =====
-    const qs = new URLSearchParams(location.search);
-    const getParam = (k, d="") => qs.get(k) || d;
+    // ========= ユーティリティ =========
+    const url      = new URL(location.href);
+    const qs       = new URLSearchParams(url.search);
+    const getParam = (k, d="") => qs.get(k) ?? d;
 
     // LINE Basic ID：テンプレ置換（liff_pages.py が __LINE_BASIC_ID__ を @付きで埋め込み）
     const BASIC = (getParam("basic_id") || "__LINE_BASIC_ID__").replace(/^@?/, "@").replace(/^@@/, "@");
-    const POLICY_VERSION = getParam("policy_version") || (window.__POLICY_VERSION__ || "1.0.0");
-    const USER_TOKEN = getParam("user_token") || "";
 
-    // LIFF 関連
-    const LIFF_ID = "2007887876-vMNe74eX";
-    let LINE_USER_ID = ""; // 取得できたら格納
+    // バージョン/トークン
+    const POLICY_VERSION = getParam("policy_version") || (window.__POLICY_VERSION__ || "1.0.0");
+    const USER_TOKEN     = getParam("user_token") || getParam("ut") || "";
+
+    // APIベース：同一オリジン優先。なければ window.PUBLIC_API_BASE、最後に固定URL（rag-api本番）。
+    const API_BASE =
+      (window.PUBLIC_API_BASE) ||
+      (location.origin.includes(".run.app") ? location.origin : "https://rag-api-190389115361.asia-northeast1.run.app");
 
     // 必須3チェックONでボタン活性
     const btn = document.getElementById('btn-consent');
@@ -70,70 +77,100 @@
       btn.disabled = !ok;
     }
     ['chk_pp','chk_xfer','chk_ai_limits','chk_cookie'].forEach(id=>{
-      const el = document.getElementById(id);
+      const el=document.getElementById(id);
       if(el) el.addEventListener('change', updateButton, {passive:true});
     });
     updateButton();
 
     // Deep Link 生成（友だちなら即トーク、未追加なら追加導線）
     function openLineChatWithAI(){
-      const msg = encodeURIComponent("AI相談"); // リッチメニュー文言は変更しない
-      const oa  = BASIC.replace(/^@/, "");      // oaMessage は @を付けない形式
+      const msg = encodeURIComponent("AI相談");
+      const oa  = BASIC.replace(/^@/, "");
       if(oa){
         location.href = `https://line.me/R/oaMessage/${oa}/?${msg}`;
-        // 友だち未追加・アプリ未起動のフォールバック
         setTimeout(()=>{ location.replace(`https://line.me/R/ti/p/%40${oa}`); }, 1500);
       }else{
         history.back();
       }
     }
 
-    // ===== LIFF 初期化（可能なら userId を取得してヘッダーに乗せる） =====
+    function showError(text){
+      const box = document.getElementById("err");
+      box.textContent = `エラー：${text}`;
+      box.style.display = "block";
+    }
+
+    // ========= LIFF 初期化 & state復元 & userId取得 =========
+    const LIFF_ID = "2007887876-vMNe74eX";
+    let LINE_USER_ID = "";   // 取得できたら格納
+
     (async () => {
       try{
+        // 1) 初期化
         await liff.init({ liffId: LIFF_ID });
-        if (!liff.isLoggedIn()) {
-          // Web(LIFF外)で開かれた場合もあるので、リダイレクトを最小化
-          liff.login({ redirectUri: location.href });
-          return; // ログイン後に戻ってくる
-        }
-        // プロフィールから userId 取得（scope: profile が必要）
-        const p = await liff.getProfile().catch(()=>null);
-        if(p && p.userId) LINE_USER_ID = p.userId;
 
-        // show_uid=1 のときだけ開発ボタンを表示
-        if(qs.get("show_uid") === "1"){
+        // 2) 未ログイン → 今のクエリを丸ごと state に入れてログイン
+        if (!liff.isLoggedIn()) {
+          liff.login({ state: location.search || "" });
+          return;
+        }
+
+        // 3) ログイン後：liff.state を展開して元のパラメータを復元（show_uid=1 等）
+        const stateRaw = new URL(location.href).searchParams.get("liff.state");
+        if (stateRaw) {
+          const s = new URLSearchParams(stateRaw.startsWith("?") ? stateRaw.slice(1) : stateRaw);
+          for (const [k, v] of s.entries()) { qs.set(k, v); }
+          // URLを書き換えておく（見た目をきれいに）
+          history.replaceState(null, "", `${location.pathname}?${qs.toString()}`);
+        }
+
+        // 4) userId は IDトークンの sub を第一候補（もっとも確実）
+        try {
+          const idt = liff.getDecodedIDToken(); // 要 scope: openid
+          if (idt && idt.sub) LINE_USER_ID = idt.sub;
+        } catch(e) { console.warn("getDecodedIDToken failed:", e); }
+
+        // フォールバック：getProfile（要 scope: profile）
+        if (!LINE_USER_ID) {
+          try {
+            const p = await liff.getProfile();
+            if (p && p.userId) LINE_USER_ID = p.userId;
+          } catch(e) { console.warn("getProfile failed:", e); }
+        }
+
+        // 5) show_uid=1 のときだけ表示ボタンを出す
+        if (qs.get("show_uid") === "1") {
           const dbg = document.getElementById('dbg');
           dbg.style.display = "block";
           document.getElementById('show-uid').onclick = () => {
-            alert(LINE_USER_ID ? `userId: ${LINE_USER_ID}` : "userIdが取得できませんでした。scope=profile を確認してください。");
+            alert(LINE_USER_ID ? `userId: ${LINE_USER_ID}` : "userIdが取得できませんでした。scope=profile/openid を確認してください。");
           };
         }
       }catch(e){
-        // LIFFが無い/初期化失敗でもフローは継続
         console.warn("LIFF init error:", e);
+        // LIFFが無くても同意保存までは進めたいので落とさない
       }
     })();
 
+    // ========= 同意保存 → after-consent → LINEへ戻る =========
     async function saveConsentAndStart(){
       if(!USER_TOKEN){
-        alert("無効なアクセスです（user_token が見つかりません）");
+        showError("無効なアクセスです（user_token が見つかりません）");
         return;
       }
 
-      // 送信ペイロード
       const payload = {
         agree_privacy: document.getElementById('chk_pp').checked,
         agree_cookie: document.getElementById('chk_cookie').checked,
         understand_external_send: document.getElementById('chk_xfer').checked,
         understand_ai_may_be_wrong: document.getElementById('chk_ai_limits').checked,
         meta: {
-          state: getParam("state"),
-          ab: getParam("ab"),
-          utm_source: getParam("utm_source"),
-          utm_medium: getParam("utm_medium"),
-          utm_campaign: getParam("utm_campaign"),
-          utm_content: getParam("utm_content"),
+          state: qs.get("state"),
+          ab: qs.get("ab"),
+          utm_source: qs.get("utm_source"),
+          utm_medium: qs.get("utm_medium"),
+          utm_campaign: qs.get("utm_campaign"),
+          utm_content: qs.get("utm_content"),
           ua: navigator.userAgent
         }
       };
@@ -142,11 +179,12 @@
       btn.disabled = true;
       const prev = btn.textContent;
       btn.textContent = "保存中…";
+      document.getElementById("err").style.display = "none";
 
       try {
-        // 1) 同意保存（サーバ側：/consent/save は非同期でWORMも処理）
+        // 1) 同意保存
         const saveQs = new URLSearchParams({ user_token: USER_TOKEN, scope: "ai", version: POLICY_VERSION }).toString();
-        const r1 = await fetch(`/consent/save?${saveQs}`, {
+        const r1 = await fetch(`${API_BASE}/consent/save?${saveQs}`, {
           method: "POST",
           headers: {
             "Content-Type":"application/json",
@@ -155,32 +193,33 @@
           body: JSON.stringify(payload),
           credentials: "omit"
         });
-        if(!r1.ok) throw new Error("consent_save_failed");
+        if(!r1.ok){
+          const t = await r1.text().catch(()=>String(r1.status));
+          throw new Error(`consent_save_failed: ${t}`);
+        }
 
-        // 2) AI相談を自動開始（サーバから定型文をPush：ユーザー操作不要）
-        //    可能なら X-User-Id を付ける（サーバ側は header/JSON どちらでも拾える実装推奨）
+        // 2) after-consent（可能なら X-User-Id をヘッダ／ボディ両方に）
         const hdrs = { "Content-Type":"application/json" };
         if (LINE_USER_ID) hdrs["X-User-Id"] = LINE_USER_ID;
 
-        fetch("/line/after-consent", {
+        fetch(`${API_BASE}/line/after-consent`, {
           method: "POST",
           headers: hdrs,
           body: JSON.stringify({ user_token: USER_TOKEN, user_id: LINE_USER_ID || undefined })
         }).catch(()=>{});
 
-        // 3) LINEアプリへ戻す（LIFF内なら閉じる、外部ならDeep Link）
-        try {
-          if(window.liff && liff.isInClient()){ liff.closeWindow(); return; }
-        } catch(e){}
+        // 3) LINEへ戻る（LIFF内→閉じる / 外部→Deep Link）
+        try { if (window.liff && liff.isInClient()) { liff.closeWindow(); return; } } catch(_) {}
         openLineChatWithAI();
       } catch(e) {
-        alert("保存に失敗しました。時間をおいて再度お試しください。");
+        console.error(e);
+        showError(e.message || "Failed to fetch");
         btn.disabled = false;
         btn.textContent = prev;
       }
     }
 
-    btn.addEventListener("click", saveConsentAndStart);
+    document.getElementById("btn-consent").addEventListener("click", saveConsentAndStart);
   </script>
 </body>
 </html>
