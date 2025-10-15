@@ -88,7 +88,7 @@ steps:
       # ===== 機密は Secret Manager から（LIFF_ID_FINANCIAL を修正） =====
       - --set-secrets=DB_NAME=db-name:latest,DB_USER=db-user:latest,DB_PASSWORD=db-password:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_REDIRECT_URI=GOOGLE_REDIRECT_URI:latest,GOOGLE_SEARCH_API_KEY=GOOGLE_SEARCH_API_KEY:latest,GOOGLE_SEARCH_ENGINE_ID=GOOGLE_SEARCH_ENGINE_ID:latest,LINE_CHANNEL_ID=LINE_CHANNEL_ID:latest,LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,LINE_LOGIN_CHANNEL_ID=LINE_LOGIN_CHANNEL_ID:latest,LINE_LOGIN_CHANNEL_SECRET=LINE_LOGIN_CHANNEL_SECRET:latest,LINE_LOGIN_REDIRECT_URI=LINE_LOGIN_REDIRECT_URI:latest,LIFF_ID=LIFF_ID:latest,JWT_SECRET=JWT_SECRET:latest,LIFF_ID_FINANCIAL=LIFF_ID_FINANCIAL:latest,LIFF_CONSENT_URL=LIFF_CONSENT_URL:latest,LINE_BASIC_ID=LINE_BASIC_ID:latest,OPS_ADMIN_SECRET=OPS_ADMIN_SECRET:latest
       # ★ 既存の ALLOWED_ORIGINS はこのままでOK（値内カンマ対応）
-      - '--set-env-vars=^~^ALLOWED_ORIGINS=https://rag-frontend-jy2dt7mlwq-an.a.run.app,https://leafy-kitsune-eb4566.netlify.app,https://ai.kinoedesign.co.jp,https://liff.line.me'
+      - "--set-env-vars=^|^ALLOWED_ORIGINS=https://rag-frontend-jy2dt7mlwq-an.a.run.app|https://leafy-kitsune-eb4566.netlify.app|https://ai.kinoedesign.co.jp|https://liff.line.me"
       - --service-account=190389115361-compute@developer.gserviceaccount.com
     timeout: '1800s'
     id: 'deploy-enhanced-api'
