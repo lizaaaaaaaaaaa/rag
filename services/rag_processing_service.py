@@ -14,24 +14,20 @@ try:
     from langchain.vectorstores import VectorStore
     from langchain.chains import RetrievalQA
 except ImportError:
-    Document = None
-    VectorStore = None
-    RetrievalQA = None
+    Document = Any
+    VectorStore = Any
+    RetrievalQA = Any
 
-# リランカーのインポート
-try:
-    from rag.reranker import get_reranker
-    RERANKER_AVAILABLE = True
-except ImportError:
-    RERANKER_AVAILABLE = False
-
-# LangSmithトレース
+# LangSmithトレース（任意）
 try:
     from utils.langsmith_tracer import RAGTracer
     LANGSMITH_AVAILABLE = True
-except ImportError:
+except Exception:
     LANGSMITH_AVAILABLE = False
     class RAGTracer:
+        def __init__(self): ...
+        def start_span(self, *args, **kw): ...
+        def end_span(self, *args, **kw): ...
         def trace_retrieval(self, *args, **kwargs): pass
         def trace_generation(self, *args, **kwargs): pass
 
@@ -53,6 +49,10 @@ class OptimizedRAGProcessingService:
         self.enable_query_expansion = os.environ.get("ENABLE_QUERY_EXPANSION", "false").lower() == "true"  # デフォルトOFF
         self.enable_reranking = os.environ.get("ENABLE_RERANKING", "true").lower() == "true"
         self.enable_source_display = os.environ.get("ENABLE_SOURCE_DISPLAY", "true").lower() == "true"  # 出典表示
+        # 追加: 厳格制御フラグ
+        self.strict_rag_only = os.environ.get("STRICT_RAG_ONLY", "true").lower() in ("1","true","yes")
+        self.strict_grounded = os.environ.get("STRICT_GROUNDED_ANSWERING", "true").lower() in ("1","true","yes")
+        self.location_intent_strict = os.environ.get("LOCATION_INTENT_STRICT", "true").lower() in ("1","true","yes")
         self.rag_timeout = float(os.environ.get("OPTIMIZED_RAG_TIMEOUT", "8"))  # タイムアウト8秒
         
         # パフォーマンス統計
@@ -60,42 +60,23 @@ class OptimizedRAGProcessingService:
             "total_queries": 0,
             "successful_retrievals": 0,
             "successful_generations": 0,
-            "failed_queries": 0,
-            "timeout_queries": 0,
-            "average_retrieval_time": 0.0,
-            "average_generation_time": 0.0,
             "total_retrieval_time": 0.0,
             "total_generation_time": 0.0,
-            "reranking_count": 0,
-            "query_expansion_count": 0
+            "query_expansion_count": 0,
+            "reranking_count": 0
         }
-        
-        # クエリ処理履歴（デバッグ用・軽量化）
-        self.query_history = []
-        self.max_history_size = 20  # 削減: 100→20
 
     def initialize(self, vectorstore=None, rag_chain=None, llm_instance=None) -> bool:
-        """RAGコンポーネントの初期化"""
+        """RAGの初期化"""
         try:
-            self.vectorstore = vectorstore
-            self.rag_chain = rag_chain  
-            self.llm_instance = llm_instance
-            
-            # 初期化確認
-            components_ready = {
-                "vectorstore": self.vectorstore is not None,
-                "rag_chain": self.rag_chain is not None,
-                "llm_instance": self.llm_instance is not None,
-                "reranker": self.reranker is not None
-            }
-            
-            ready_count = sum(components_ready.values())
-            logger.info(f"🚀 Optimized RAG Service initialized: {ready_count}/4 components")
-            logger.info(f"  Config: max_docs={self.max_documents}, timeout={self.rag_timeout}s, "
-                       f"expansion={self.enable_query_expansion}, rerank={self.enable_reranking}")
-            
-            return ready_count >= 2  # 最低限必要なコンポーネント
-            
+            if vectorstore is not None:
+                self.vectorstore = vectorstore
+            if rag_chain is not None:
+                self.rag_chain = rag_chain
+            if llm_instance is not None:
+                self.llm_instance = llm_instance
+            logger.info("RAG service initialized.")
+            return True
         except Exception as e:
             logger.error(f"RAG service initialization error: {e}")
             return False
@@ -114,39 +95,28 @@ class OptimizedRAGProcessingService:
                 self._process_query_internal(query, platform, user_context, query_id),
                 timeout=self.rag_timeout
             )
-            
-            total_time = time.time() - start_time
-            logger.info(f"✅ RAG completed in {total_time:.2f}s")
-            
+            result["latency_ms"] = int((time.time() - start_time) * 1000)
+            result["query_id"] = query_id
             return result
-            
+        
         except asyncio.TimeoutError:
-            self.stats["timeout_queries"] += 1
-            total_time = time.time() - start_time
-            logger.warning(f"⏰ RAG timeout after {total_time:.2f}s")
-            
+            logger.warning(f"[{query_id}] RAG timeout")
             return {
                 "answer": self._get_timeout_response(platform),
                 "sources": [],
                 "success": False,
-                "error": "timeout",
-                "processing_time": total_time,
-                "method": "rag_timeout",
+                "processing_details": {"method": "timeout"},
+                "latency_ms": int((time.time() - start_time) * 1000),
                 "query_id": query_id
             }
-            
         except Exception as e:
-            self.stats["failed_queries"] += 1
-            total_time = time.time() - start_time
-            logger.error(f"❌ RAG failed: {e}")
-            
+            logger.error(f"[{query_id}] RAG error: {e}\n{traceback.format_exc()}")
             return {
                 "answer": self._generate_error_response(query, platform),
                 "sources": [],
                 "success": False,
-                "error": str(e),
-                "processing_time": total_time,
-                "method": "rag_error",
+                "processing_details": {"method": "error", "error": str(e)},
+                "latency_ms": int((time.time() - start_time) * 1000),
                 "query_id": query_id
             }
 
@@ -176,8 +146,8 @@ class OptimizedRAGProcessingService:
             query, retrieval_result, platform, user_context
         )
         
-        # 6. 結果の後処理（出典付き）
-        final_result = self._postprocess_result_fast(generation_result, retrieval_result)
+        # 6. 厳格ガード適用（本文には出典を付けない）
+        final_result = self._apply_strict_guards(query, generation_result, retrieval_result, platform)
         
         # 統計更新
         self._update_stats_fast(retrieval_result, generation_result)
@@ -185,110 +155,62 @@ class OptimizedRAGProcessingService:
         return final_result
 
     def _preprocess_query_fast(self, query: str) -> str:
-        """高速クエリ前処理"""
-        # 基本的なクリーニングのみ
-        processed = query.strip()
-        
-        # 複数空白の正規化
-        processed = re.sub(r'\s+', ' ', processed)
-        
-        # 長すぎるクエリの切り詰め
-        if len(processed) > 200:
-            processed = processed[:200]
-        
-        return processed
+        """高速プリプロセス"""
+        q = (query or "").strip()
+        # 余計な空白・制御文字を除去
+        q = re.sub(r"\s+", " ", q)
+        return q
 
     def _expand_query_fast(self, query: str) -> List[str]:
-        """高速クエリ拡張（最小限）"""
-        expanded = [query]
-        
-        # 重要なキーワードのみ拡張
-        key_expansions = {
-            "坪単価": ["価格"],
-            "補助金": ["助成金"],
-            "耐震": ["地震"]
-        }
-        
-        for key, synonyms in key_expansions.items():
-            if key in query:
-                # 最初の同義語のみ追加（高速化）
-                expanded.append(query.replace(key, synonyms[0]))
-                break  # 1つだけ拡張
-        
-        return expanded[:2]  # 最大2クエリ
+        """簡易クエリ拡張（同義語＋かな表記など）"""
+        variants = {query}
+        # 必要があれば簡易的に追加
+        if "エリア" in query:
+            variants.add(query.replace("エリア", "地域"))
+        if "地域" in query:
+            variants.add(query.replace("地域", "エリア"))
+        return list(variants)
 
     async def _retrieve_documents_fast(self, queries: List[str]) -> Dict[str, Any]:
         """高速ドキュメント検索"""
-        retrieval_start = time.time()
+        start = time.time()
+        docs: List[Tuple[Any, float]] = []
         
         if not self.vectorstore:
-            return {"documents": [], "retrieval_time": 0}
+            logger.warning("Vectorstore is not initialized.")
+            return {"documents": [], "retrieval_time": 0.0, "count": 0}
         
-        all_documents = []
-        
-        for query in queries[:2]:  # 最大2クエリまで
-            try:
-                # スコア付き検索（可能な場合）
-                if hasattr(self.vectorstore, 'similarity_search_with_score'):
-                    docs_with_scores = self.vectorstore.similarity_search_with_score(
-                        query, 
-                        k=self.max_documents
-                    )
-                    # 閾値フィルタリング
-                    filtered = [(doc, score) for doc, score in docs_with_scores 
-                              if score >= self.similarity_threshold]
-                    all_documents.extend(filtered)
-                else:
-                    # 通常検索
-                    docs = self.vectorstore.similarity_search(
-                        query, 
-                        k=self.max_documents
-                    )
-                    all_documents.extend([(doc, 1.0) for doc in docs])
-                
-            except Exception as e:
-                logger.error(f"Retrieval error: {e}")
-                continue
-        
-        # 重複除去（高速版）
-        unique_docs = self._deduplicate_fast(all_documents)
-        
-        retrieval_time = time.time() - retrieval_start
-        self.stats["total_retrieval_time"] += retrieval_time
-        
-        if unique_docs:
-            self.stats["successful_retrievals"] += 1
-        
-        return {
-            "documents": unique_docs,
-            "retrieval_time": retrieval_time,
-            "count": len(unique_docs)
-        }
-
-    def _deduplicate_fast(self, documents: List[Tuple[Any, float]]) -> List[Tuple[Any, float]]:
-        """高速重複除去"""
-        if not documents:
-            return []
-        
-        # スコア順にソート
-        sorted_docs = sorted(documents, key=lambda x: x[1], reverse=True)
-        
-        # 簡易的な重複チェック（最初の50文字のハッシュ）
-        seen = set()
-        unique = []
-        
-        for doc, score in sorted_docs:
-            content = getattr(doc, 'page_content', str(doc))[:50]
-            content_hash = hash(content)
+        try:
+            # ベクトル検索（Top-K）
+            for q in queries:
+                results = self.vectorstore.similarity_search_with_score(q, k=self.max_documents)
+                for d, score in results:
+                    # スコア閾値（低すぎるものは除外）
+                    if score is not None and score <= 1.0:  # VectorStoreの実装によりスコア定義が異なるため寛容に
+                        docs.append((d, score))
             
-            if content_hash not in seen:
-                seen.add(content_hash)
-                unique.append((doc, score))
-                
-                if len(unique) >= self.max_documents:
-                    break
-        
-        return unique
+            retrieval_time = time.time() - start
+            
+            # 重複排除（同一ページ等）
+            seen = set()
+            unique_docs: List[Tuple[Any, float]] = []
+            for doc, score in docs:
+                key = (getattr(doc, "metadata", {}).get("source", ""), getattr(doc, "metadata", {}).get("page", -1))
+                if key not in seen:
+                    seen.add(key)
+                    unique_docs.append((doc, score))
+            
+            # スコアでソート（昇順/降順は実装依存。必要なら逆に）
+            unique_docs = sorted(unique_docs, key=lambda x: (x[1] if x[1] is not None else 0.0))
+            
+            return {
+                "documents": unique_docs[:self.max_documents],
+                "retrieval_time": retrieval_time,
+                "count": len(unique_docs)
+            }
+        except Exception as e:
+            logger.error(f"Retrieval failed: {e}")
+            return {"documents": [], "retrieval_time": 0.0, "count": 0}
 
     def _apply_reranking(self, query: str, retrieval_result: Dict) -> Dict:
         """リランキング適用"""
@@ -326,8 +248,9 @@ class OptimizedRAGProcessingService:
         
         documents = retrieval_result.get("documents", [])
         if not documents:
+            # RAGヒットなし時は固定文（LLMで補わない）
             return {
-                "answer": "申し訳ございません。お尋ねの内容に関する情報が見つかりませんでした。",
+                "answer": "資料内に該当情報が見つかりませんでした。",
                 "method": "no_documents",
                 "generation_time": time.time() - generation_start
             }
@@ -344,9 +267,7 @@ class OptimizedRAGProcessingService:
             else:
                 raise Exception("No generation method available")
             
-            # 出典情報の追加（有効な場合）
-            if self.enable_source_display and documents:
-                answer = self._add_sources_to_answer(answer, documents)
+            # 出典情報の追加は本文に付与しない（sourcesはメタで返す）
             
             generation_time = time.time() - generation_start
             self.stats["total_generation_time"] += generation_time
@@ -390,23 +311,13 @@ class OptimizedRAGProcessingService:
         return "\n\n".join(context_parts)
 
     async def _call_llm_fast(self, query: str, context: str, platform: str) -> str:
-        """高速LLM呼び出し"""
-        # シンプルなプロンプト
-        if platform == "line":
-            prompt = f"""以下の情報を基に質問に簡潔に答えてください。
-
-情報: {context}
-
-質問: {query}
-
-回答:"""
-        else:
-            prompt = f"""以下の情報を基に質問に答えてください。
-
-情報: {context}
+        """LLMを直接呼び出す（LangChain LLMインスタンスを保持している場合）"""
+        # 簡易プロンプト（ここに“推測禁止・出典不要”はプロンプト側で設定済み想定）
+        prompt = f"""以下のコンテキストの範囲内で日本語で簡潔に回答してください。
+コンテキスト:
+{context}
 
 質問: {query}
-
 回答:"""
         
         # LLM呼び出し
@@ -460,29 +371,14 @@ class OptimizedRAGProcessingService:
         return cleaned
 
     def _add_sources_to_answer(self, answer: str, documents: List[Tuple[Any, float]]) -> str:
-        """出典情報を回答に追加"""
-        if not documents or not self.enable_source_display:
-            return answer
-        
-        # 出典情報の構築
-        sources = []
-        for i, (doc, score) in enumerate(documents[:2]):  # 上位2件のみ
-            metadata = getattr(doc, 'metadata', {})
-            source = metadata.get('source', '').replace('/tmp/', '').replace('.pdf', '')
-            if source:
-                sources.append(f"参考{i+1}: {source}")
-        
-        if sources:
-            source_text = "\n\n【出典】\n" + "\n".join(sources)
-            return answer + source_text
-        
+        """出典は本文に付与しない（sourcesはメタで返す）"""
         return answer
 
     def _postprocess_result_fast(self, generation_result: Dict, retrieval_result: Dict) -> Dict[str, Any]:
         """高速結果後処理"""
         documents = retrieval_result.get("documents", [])
         
-        # ソース情報（軽量版）
+        # ソース情報（本文には付与しないがメタで返す）
         sources = []
         if self.enable_source_display:
             for i, (doc, score) in enumerate(documents[:2]):
@@ -505,6 +401,67 @@ class OptimizedRAGProcessingService:
             }
         }
 
+    # ========= 追加：厳格ガード一式 =========
+    def _apply_strict_guards(self, query: str, generation_result: Dict, retrieval_result: Dict, platform: str) -> Dict[str, Any]:
+        """当て字・根拠外地名・RAG未ヒットをブロックし、固定文へ差し替える"""
+        documents = retrieval_result.get("documents", [])
+        answer = (generation_result or {}).get("answer", "") or ""
+
+        # 1) RAG未ヒット or 厳格RAGオンでヒット0 → 固定文
+        if self.strict_rag_only and not documents:
+            return self._fixed_noinfo_result(retrieval_result, generation_result)
+
+        if self.strict_grounded:
+            # 2) プレースホルダ検知
+            if re.search(r"(○○|◯◯|△△|XX|[Xx]{2,})", answer):
+                return self._fixed_noinfo_result(retrieval_result, generation_result)
+            # 3) 地名系は本文一致を要求
+            if self.location_intent_strict and self._is_location_intent(query):
+                if self._contains_location_like(answer):
+                    ctx = self._concat_docs_text(documents)
+                    for loc in self._extract_locations(answer):
+                        if loc not in ctx:
+                            return self._fixed_noinfo_result(retrieval_result, generation_result)
+
+        # ここまで通過したらそのまま返す（本文に出典は付けない）
+        return self._postprocess_result_fast(generation_result, retrieval_result)
+
+    def _fixed_noinfo_result(self, retrieval_result: Dict, generation_result: Dict) -> Dict[str, Any]:
+        """固定文（資料内に見つからない）で返却。sourcesは空で返す"""
+        return {
+            "answer": "資料内に該当情報が見つかりませんでした。",
+            "sources": [],
+            "success": True,
+            "processing_details": {
+                "retrieval_time": retrieval_result.get("retrieval_time", 0),
+                "generation_time": generation_result.get("generation_time", 0),
+                "document_count": 0,
+                "method": "guard_blocked"
+            }
+        }
+
+    def _is_location_intent(self, text: str) -> bool:
+        return bool(re.search(r"(どこ|エリア|地域|周辺|対応地域|施工可能|対応エリア)", text))
+
+    def _contains_location_like(self, text: str) -> bool:
+        return bool(re.search(r"(市|区|町|村|郡|都|道|府|県)", text))
+
+    def _extract_locations(self, text: str) -> List[str]:
+        return re.findall(r"([一-龠々ヶーA-Za-z0-9]+(?:市|区|町|村|郡|都|道|府|県))", text)
+
+    def _concat_docs_text(self, documents: List[Tuple[Any, float]]) -> str:
+        parts = []
+        for doc_tuple in documents:
+            try:
+                doc, score = doc_tuple
+            except Exception:
+                doc = doc_tuple[0] if isinstance(doc_tuple, (list, tuple)) else doc_tuple
+            content = getattr(doc, 'page_content', '') if doc else ''
+            if content:
+                parts.append(content)
+        return "\n".join(parts)
+    # ========= 追加ここまで =========
+
     def _get_timeout_response(self, platform: str) -> str:
         """タイムアウト時の応答"""
         if platform == "line":
@@ -521,66 +478,24 @@ class OptimizedRAGProcessingService:
 
     def _update_stats_fast(self, retrieval_result: Dict, generation_result: Dict) -> None:
         """高速統計更新"""
-        query_count = self.stats["total_queries"]
-        
-        if query_count > 1:
-            # 移動平均（簡易計算）
-            alpha = 0.1  # 平滑化係数
-            self.stats["average_retrieval_time"] = (
-                (1 - alpha) * self.stats["average_retrieval_time"] + 
-                alpha * retrieval_result.get("retrieval_time", 0)
-            )
-            self.stats["average_generation_time"] = (
-                (1 - alpha) * self.stats["average_generation_time"] + 
-                alpha * generation_result.get("generation_time", 0)
-            )
+        try:
+            self.stats["successful_retrievals"] += 1 if retrieval_result.get("documents") else 0
+        except Exception:
+            pass
+        try:
+            self.stats["successful_generations"] += 1 if generation_result.get("answer") else 0
+        except Exception:
+            pass
 
-    def get_service_stats(self) -> Dict[str, Any]:
-        """サービス統計の取得"""
-        total = self.stats["total_queries"]
-        
-        return {
-            "performance": {
-                "total_queries": total,
-                "success_rate": (self.stats["successful_retrievals"] / total * 100) if total > 0 else 0,
-                "timeout_rate": (self.stats["timeout_queries"] / total * 100) if total > 0 else 0,
-                "average_retrieval_time": round(self.stats["average_retrieval_time"], 2),
-                "average_generation_time": round(self.stats["average_generation_time"], 2)
-            },
-            "optimization": {
-                "max_documents": self.max_documents,
-                "timeout": self.rag_timeout,
-                "query_expansion": self.enable_query_expansion,
-                "reranking": self.enable_reranking,
-                "reranking_count": self.stats["reranking_count"],
-                "expansion_count": self.stats["query_expansion_count"]
-            }
-        }
 
-    def health_check(self) -> Dict[str, Any]:
-        """ヘルスチェック"""
-        return {
-            "status": "healthy" if self.vectorstore else "degraded",
-            "components": {
-                "vectorstore": self.vectorstore is not None,
-                "rag_chain": self.rag_chain is not None,
-                "llm": self.llm_instance is not None,
-                "reranker": self.reranker is not None
-            },
-            "timestamp": datetime.now().isoformat()
-        }
+# リランカー（任意）
+try:
+    from rag.reranker import get_reranker
+    RERANKER_AVAILABLE = True
+except Exception:
+    RERANKER_AVAILABLE = False
+    def get_reranker(): return None
 
-# グローバルサービスインスタンス
-_global_rag_service = None
-
-def get_rag_service() -> OptimizedRAGProcessingService:
-    """グローバルRAGサービス取得"""
-    global _global_rag_service
-    
-    if _global_rag_service is None:
-        _global_rag_service = OptimizedRAGProcessingService()
-    
-    return _global_rag_service
 
 def initialize_rag_service(vectorstore=None, rag_chain=None, llm_instance=None) -> bool:
     """RAGサービスの初期化"""
@@ -592,6 +507,15 @@ def reset_rag_service() -> OptimizedRAGProcessingService:
     global _global_rag_service
     _global_rag_service = None
     return get_rag_service()
+
+# グローバル・シングルトン
+_global_rag_service = None
+
+def get_rag_service():
+    global _global_rag_service
+    if _global_rag_service is None:
+        _global_rag_service = OptimizedRAGProcessingService()
+    return _global_rag_service
 
 # 後方互換性のためのエイリアス
 RAGProcessingService = OptimizedRAGProcessingService

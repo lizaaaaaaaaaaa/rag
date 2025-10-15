@@ -208,23 +208,9 @@ class GoogleSearcher:
             return ""
     
     def _clean_generated_answer(self, answer: str) -> str:
-        """生成された回答をクリーンアップ（軽量化）"""
-        import re
-        
-        # 不要なパターンを削除（最小限の処理）
-        unwanted_patterns = [
-            r"参考文献[:：][^\n]*",
-            r"出典[:：][^\n]*",
-        ]
-        
-        cleaned = answer
-        for pattern in unwanted_patterns:
-            cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE)
-        
-        # 余分な改行を整理（1回のパス）
-        cleaned = re.sub(r'\n\s*\n', '\n', cleaned)
-        
-        return cleaned.strip()
+        """生成された回答をクリーンアップ（※出典削除はしない）"""
+        # ここでは**出典/参考/引用の削除は行わない**（回答は上位層で最終整形）
+        return (answer or "").strip()
     
     def should_search_web(self, query: str) -> bool:
         """Web検索が必要かどうかを判定（デフォルトはFalse）"""

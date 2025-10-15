@@ -82,9 +82,17 @@ def _resolve_financial_if_needed():
 def _strip_citations(text: str) -> str:
     if not text:
         return text
-    text = re.sub(r"^\s*(参考|資料|出典)\s*[:：].*$", "", text, flags=re.MULTILINE)
-    text = re.sub(r"【出典】[\s\S]*$", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\s*\(p\.\s*\d+\s*\)\s*$", "", text, flags=re.MULTILINE)
+    # 行頭見出し（参考/資料/出典）
+    text = re.sub(r"^\s*(参考|参考資料|参考文献|資料|出典|引用)\s*[:：].*$", "", text, flags=re.MULTILINE)
+    # 「【出典】…」ブロック以降を削る
+    text = re.sub(r"【\s*(出典|参考|資料)\s*】[\s\S]*$", "", text, flags=re.MULTILINE)
+    # 末尾の (p. 12) / (P.12) 表記
+    text = re.sub(r"\s*\(\s*[pP]\.\s*\d+\s*\)\s*$", "", text, flags=re.MULTILINE)
+    # 行中の全角カッコに入った「出典：…／参考：…／引用：…」
+    text = re.sub(r"（\s*(出典|参考|引用)\s*[:：][^）]*）", "", text)
+    # 半角カッコのバリエーション
+    text = re.sub(r"\(\s*(出典|参考|引用)\s*[:：][^)]+?\)", "", text)
+    # 連続改行の整形
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text
 
@@ -223,16 +231,13 @@ AI より、人の方がいい方はこちら
 スタッフとチャット相談。
 お気軽にメッセージどうぞ！
 
-
 【対応時間】
 営業時間：9:00-18:00
-
 
 📱 ご相談方法：
 ・このLINEでの直接チャット相談
 ・お電話での相談
 ・展示場での対面相談
-
 
 📱 ご相談内容：
 ・住まいづくり全般
@@ -241,7 +246,6 @@ AI より、人の方がいい方はこちら
 ・間取り
 ・デザイン
 ・住宅性能について など
-
 
 営業時間内でしたら迅速にお返事します。
 お気軽にお声かけください！""",
@@ -349,12 +353,13 @@ def _reply_or_push(reply_token: str, user_id: str, text: str) -> bool:
     if not api: logger.error("MessagingApi not ready"); return False
     if dup_guard.seen(user_id, f"out:{text[:64]}"): return True
     try:
+        cleaned = _strip_citations(text or "")
         try:
-            api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=text)]))
+            api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=cleaned)]))
             return True
         except ApiException as e:
             if "Invalid reply token" in str(e) or getattr(e, "status", None) == 400:
-                api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[TextMessage(text=text)])); return True
+                api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[TextMessage(text=cleaned)])); return True
             logger.error(f"LINE reply failed: {e}"); return False
     except Exception as e:
         logger.error(f"LINE send failed: {e}"); return False
@@ -364,7 +369,8 @@ def _push(user_id: str, text: str) -> bool:
     if not api: logger.error("MessagingApi not ready"); return False
     if dup_guard.seen(user_id, f"out:{text[:64]}"): return True
     try:
-        api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[TextMessage(text=text)])); return True
+        cleaned = _strip_citations(text or "")
+        api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[TextMessage(text=cleaned)])); return True
     except Exception as e:
         logger.error(f"LINE push failed: {e}"); return False
 

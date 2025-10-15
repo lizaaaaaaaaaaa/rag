@@ -1,6 +1,10 @@
 # utils/fallback.py - RAGフォールバックハンドラー（リッチメニュー対応修正版）
 import logging
 from typing import Optional, Dict, Any
+# ▼▼▼ 追加（他の部分は変更なし） ▼▼▼
+import os
+import re
+# ▲▲▲ 追加ここまで ▲▲▲
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +73,24 @@ class RAGFallbackHandler:
         """エラー時のフォールバック処理（リッチメニュー対応版）"""
         logger.error(f"RAG処理エラー: {error}")
         self.stats["total_fallback_attempts"] += 1
+
+        # ▼▼▼ 追加：厳格RAGオン時は“地名系”フォールバックを全面ブロック ▼▼▼
+        try:
+            strict_on = os.getenv("STRICT_RAG_ONLY", "true").lower() in ("1", "true", "yes")
+            if strict_on and query:
+                # “どこ/エリア/地域/周辺/対応地域/施工可能/対応エリア” を含む質問は地名系とみなす
+                if re.search(r"(どこ|エリア|地域|周辺|対応地域|施工可能|対応エリア)", query):
+                    platform = user_context.get("platform", "web") if user_context else "web"
+                    return {
+                        "answer": "資料内に該当情報が見つかりませんでした。",
+                        "fallback": "blocked_by_strict_rag",
+                        "error_handled": True,
+                        "platform": platform,
+                        "processing_time": 0.01
+                    }
+        except Exception as _guard_e:
+            logger.debug(f"Strict RAG location guard skipped due to: {_guard_e}")
+        # ▲▲▲ 追加ここまで ▲▲▲
         
         # 🔧 リッチメニューボタン押下時はフォールバック処理をスキップ
         if self._is_richmenu_request(query, user_context):
