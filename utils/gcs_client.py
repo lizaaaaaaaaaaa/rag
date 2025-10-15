@@ -8,6 +8,7 @@ GCS クライアントユーティリティ
 from __future__ import annotations
 
 import json
+import os
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple, List
@@ -17,18 +18,20 @@ from google.api_core import exceptions as gcp_exceptions
 
 # ✅ 設定読込の明示（get_settings の未定義エラー対策）
 try:
-    # プロジェクト直下に config.py があり、get_settings() を公開している想定
-    from config import get_settings  # <-- ここがポイント
-except Exception as e:  # pragma: no cover
-    # もし import に失敗した場合のフォールバック（最低限動くダミー設定）
-    get_settings = None  # type: ignore[misc]
-    _import_error = e
+    # プロジェクト固有の設定ローダ（存在しない環境でも例外にならないように）
+    from config import get_settings  # type: ignore
+except Exception:  # pragma: no cover
+    get_settings = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 
 class GCSClient:
-    """Google Cloud Storage の薄いラッパー"""
+    """
+    - settings.worm_bucket_name または 環境変数からバケットを解決
+    - 監査/マニフェスト/各種の JSON/バイナリをアップロード
+    - WORM/バケット設定の検証
+    """
 
     def __init__(
         self,
@@ -45,7 +48,18 @@ class GCSClient:
                 logger.warning(f"get_settings() failed, fallback to env only: {e}")
 
         self.project_id: Optional[str] = project_id or getattr(settings, "gcp_project_id", None)
-        self.bucket_name: Optional[str] = bucket_name or getattr(settings, "worm_bucket_name", None)
+
+        # ★ 修正ポイント：バケット名のフォールバック強化
+        #   1) 引数 bucket_name
+        #   2) settings.worm_bucket_name
+        #   3) 環境変数 GCS_BUCKET_NAME → GCS_CONSENT_BUCKET → GCS_BUCKET
+        self.bucket_name: Optional[str] = (
+            bucket_name
+            or getattr(settings, "worm_bucket_name", None)
+            or os.getenv("GCS_BUCKET_NAME")
+            or os.getenv("GCS_CONSENT_BUCKET")
+            or os.getenv("GCS_BUCKET")
+        )
 
         # GCS クライアント初期化
         try:
@@ -62,13 +76,13 @@ class GCSClient:
     @property
     def bucket(self) -> storage.Bucket:
         if not self._bucket:
-            raise RuntimeError("GCS bucket is not configured. Set 'worm_bucket_name' in settings.")
+            raise RuntimeError("GCS bucket is not configured. Set 'worm_bucket_name' in settings "
+                               "or GCS_BUCKET_NAME/GCS_CONSENT_BUCKET/GCS_BUCKET in env.")
         return self._bucket
 
-    # ------------------------------
-    # アップロード
-    # ------------------------------
-
+    # ---------------------------------------------------------------------
+    # 基本 I/O
+    # ---------------------------------------------------------------------
     def upload_json(
         self,
         object_path: str,
@@ -95,7 +109,7 @@ class GCSClient:
         content_type: str = "application/octet-stream",
         metadata: Optional[Dict[str, str]] = None,
     ) -> str:
-        """バイナリをアップロードして GCS パスを返す"""
+        """バイト列をアップロードして GCS パスを返す"""
         try:
             blob = self.bucket.blob(object_path)
             if metadata:
@@ -107,10 +121,9 @@ class GCSClient:
             logger.error(f"Failed to upload bytes to {object_path}: {e}")
             raise
 
-    # ------------------------------
-    # WORM / バケット設定検証
-    # ------------------------------
-
+    # ---------------------------------------------------------------------
+    # バケット設定の検証（WORM 近似）
+    # ---------------------------------------------------------------------
     def verify_bucket_settings(self) -> Dict[str, Any]:
         """バケットの WORM/セキュリティ関連設定を検証して返す"""
         try:
@@ -143,10 +156,9 @@ class GCSClient:
             logger.error(f"Failed to verify bucket settings: {e}")
             raise
 
-    # ------------------------------
-    # マニフェスト関連
-    # ------------------------------
-
+    # ---------------------------------------------------------------------
+    # 監査マニフェスト（標準パス）: manifests/YYYY/MM/DD/<manifest_id>.json
+    # ---------------------------------------------------------------------
     def upload_audit_manifest(
         self,
         manifest_id: str,
@@ -172,10 +184,9 @@ class GCSClient:
 
         return self.upload_json(object_path, payload, metadata=metadata)
 
-    # ------------------------------
-    # 便利関数
-    # ------------------------------
-
+    # ---------------------------------------------------------------------
+    # 補助
+    # ---------------------------------------------------------------------
     def object_exists(self, object_path: str) -> bool:
         try:
             return self.bucket.blob(object_path).exists()

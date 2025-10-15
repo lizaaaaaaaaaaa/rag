@@ -1,5 +1,6 @@
 # api/routers/consent_gate.py
 # PDF準拠・完全修正版：LIFF同意ゲート（必須4チェック + GCS疑似WORM + 高速チェック + LINE push 追加）
+# 追記: ルーター内CORS（プリフライト対応 & 応答ヘッダ付与）を実装
 
 import os
 import json
@@ -13,6 +14,7 @@ import jwt
 import aiosqlite
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks, Query, Body
 from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse, Response  # ← 追加
 
 # ---- Optional Redis ---------------------------------------------------------
 try:
@@ -70,6 +72,70 @@ AI_CONSULTATION_MESSAGE = os.getenv(
 )
 
 DEFAULT_DB_PATH = os.getenv("CONSENT_SQLITE_PATH", "/tmp/consent_management.db")
+
+# ---- ここから CORS（このファイル内で自己完結） -----------------------------
+def _parse_allowed_origins() -> list[str]:
+    """
+    ALLOWED_ORIGINS は Cloud Run に
+      --set-env-vars=^|^ALLOWED_ORIGINS=url1|url2|...
+    の形式で入ってくる想定。万一カンマ区切りでも許容。
+    """
+    raw = os.getenv("ALLOWED_ORIGINS", "")
+    if not raw:
+        # デフォルト（LIFF と想定フロント）: 必要に応じて環境に合わせてOK
+        return [
+            "https://liff.line.me",
+            "https://rag-frontend-jy2dt7mlwq-an.a.run.app",
+            "https://ai.kinoedesign.co.jp",
+            "https://leafy-kitsune-eb4566.netlify.app",
+        ]
+    if "|" in raw:
+        parts = [p.strip() for p in raw.split("|") if p.strip()]
+    else:
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return parts
+
+_ALLOWED_ORIGINS = set(_parse_allowed_origins())
+_CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+_CORS_ALLOW_HEADERS = "Authorization,Content-Type,X-User-Token,X-LIFF-ID"
+_CORS_MAX_AGE = "86400"
+
+def _match_origin(origin: Optional[str]) -> Optional[str]:
+    """要求 Origin が許可リストに存在するならそのまま返す（ワイルドカードは使わない）"""
+    if not origin:
+        return None
+    return origin if origin in _ALLOWED_ORIGINS else None
+
+def _cors_json(data: Dict[str, Any] | list | bool, origin: Optional[str]) -> JSONResponse:
+    resp = JSONResponse(content=data)
+    allow = _match_origin(origin)
+    if allow:
+        resp.headers["Access-Control-Allow-Origin"] = allow
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        resp.headers["Access-Control-Expose-Headers"] = "*"
+    return resp
+
+@router.options("/{full_path:path}")
+async def _options_preflight(full_path: str, request: Request):
+    """
+    ルーター配下のすべてのプリフライトに応答。
+    """
+    origin = request.headers.get("origin")
+    allow = _match_origin(origin)
+    if not allow:
+        # 許可外 Origin には最小限の応答（CORS不成立）
+        return Response(status_code=204)
+
+    resp = Response(status_code=204)
+    resp.headers["Access-Control-Allow-Origin"] = allow
+    resp.headers["Vary"] = "Origin"
+    resp.headers["Access-Control-Allow-Credentials"] = "true"
+    resp.headers["Access-Control-Allow-Methods"] = _CORS_ALLOW_METHODS
+    resp.headers["Access-Control-Allow-Headers"] = _CORS_ALLOW_HEADERS
+    resp.headers["Access-Control-Max-Age"] = _CORS_MAX_AGE
+    return resp
+# ---- CORS ここまで ----------------------------------------------------------
 
 # =============================================================================
 # ユーティリティ
@@ -446,16 +512,20 @@ async def save_consent(
         bg.add_task(_bg_gcs_save_and_mark, consent_json, consent_id)
 
         # 追加：AI相談開始メッセージ push（可能なら）
-        # （LINEトークに定型文が1通だけ届く想定／速度低下を避けるため非同期）
         bg.add_task(_bg_push_ai_welcome, user_token)
 
-    return {
-        "ok": True,
-        "consent_id": consent_id,
-        "message": "同意が正常に保存されました",
-        "worm_scheduled": True,
-        "version": version
-    }
+    # ← CORS 付与して返す
+    origin = request.headers.get("origin")
+    return _cors_json(
+        {
+            "ok": True,
+            "consent_id": consent_id,
+            "message": "同意が正常に保存されました",
+            "worm_scheduled": True,
+            "version": version
+        },
+        origin,
+    )
 
 @router.post("/check")
 async def check_consent(
@@ -470,13 +540,19 @@ async def check_consent(
     scope = payload.scope or scope
 
     if not (user_token or user_id):
-        return {"valid": False, "error": "CONSENT_REQUIRED", "version": version, "required_flags": REQUIRED_FLAGS}
+        return _cors_json(
+            {"valid": False, "error": "CONSENT_REQUIRED", "version": version, "required_flags": REQUIRED_FLAGS},
+            request.headers.get("origin"),
+        )
 
     user_id_raw = user_id or _user_id_from_token(user_token) or user_token
     user_id_hash = _sha256_hex(user_id_raw)
     ok = await fast_check_consent(user_id_hash, scope, version)
     if not ok:
-        return {"valid": False, "error": "CONSENT_REQUIRED", "version": version, "required_flags": REQUIRED_FLAGS}
+        return _cors_json(
+            {"valid": False, "error": "CONSENT_REQUIRED", "version": version, "required_flags": REQUIRED_FLAGS},
+            request.headers.get("origin"),
+        )
 
     threshold = _threshold_iso()
     async with _open_db() as db:
@@ -494,7 +570,7 @@ async def check_consent(
         await cur.close()
 
     if not row:
-        return {"valid": True}
+        return _cors_json({"valid": True}, request.headers.get("origin"))
 
     ts = (
         datetime.fromisoformat(row["ts"].replace("Z", "+00:00"))
@@ -503,19 +579,22 @@ async def check_consent(
     )
     expires_at = ts + timedelta(days=30 * CONSENT_VALIDITY_MONTHS)
 
-    return {
-        "valid": True,
-        "version": version,
-        "account": row["account"],
-        "scope": json.loads(row["scope"] or "[]"),
-        "policy_url": row["policy_url"],
-        "consented_at": ts.isoformat(),
-        "expires_at": expires_at.isoformat(),
-        "flags": _parse_flags(row["flags"])
-    }
+    return _cors_json(
+        {
+            "valid": True,
+            "version": version,
+            "account": row["account"],
+            "scope": json.loads(row["scope"] or "[]"),
+            "policy_url": row["policy_url"],
+            "consented_at": ts.isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "flags": _parse_flags(row["flags"])
+        },
+        request.headers.get("origin"),
+    )
 
 @router.post("/withdraw")
-async def withdraw_consent(withdraw_request: 'ConsentWithdrawRequest'):
+async def withdraw_consent(withdraw_request: 'ConsentWithdrawRequest', request: Request):
     user_hash = withdraw_request.user_id
     async with _open_db() as db:
         if withdraw_request.consent_id:
@@ -529,10 +608,10 @@ async def withdraw_consent(withdraw_request: 'ConsentWithdrawRequest'):
                 (user_hash,)
             )
         await db.commit()
-    return {"success": True, "message": "同意が撤回されました"}
+    return _cors_json({"success": True, "message": "同意が撤回されました"}, request.headers.get("origin"))
 
 @router.get("/user/{user_id}/history")
-async def get_consent_history(user_id: str):
+async def get_consent_history(user_id: str, request: Request):
     async with _open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -559,10 +638,10 @@ async def get_consent_history(user_id: str):
             "withdrawn_at": r["withdrawn_at"],
             "flags": _parse_flags(r["flags"]),
         })
-    return {"user_id": user_id, "history": history, "total_records": len(history)}
+    return _cors_json({"user_id": user_id, "history": history, "total_records": len(history)}, request.headers.get("origin"))
 
 @router.get("/admin/stats")
-async def get_consent_stats():
+async def get_consent_stats(request: Request):
     async with _open_db() as db:
         db.row_factory = aiosqlite.Row
 
@@ -600,27 +679,30 @@ async def get_consent_stats():
         )
         version_stats = [{"version": r[0], "count": r[1]} for r in await cur.fetchall()]; await cur.close()
 
-    return {
-        "overview": {
-            "total_consents": total,
-            "active_consents": active,
-            "withdrawn_consents": total - active,
-            "unique_users": users,
-            "worm_saved_count": worm_saved,
-            "worm_save_rate": f"{(worm_saved/total*100):.1f}%" if total > 0 else "0%"
+    return _cors_json(
+        {
+            "overview": {
+                "total_consents": total,
+                "active_consents": active,
+                "withdrawn_consents": total - active,
+                "unique_users": users,
+                "worm_saved_count": worm_saved,
+                "worm_save_rate": f"{(worm_saved/total*100):.1f}%" if total > 0 else "0%"
+            },
+            "daily_stats": daily_stats,
+            "version_stats": version_stats,
+            "config": {
+                "required_flags": REQUIRED_FLAGS,
+                "retention_years": WORM_RETENTION_YEARS,
+                "validity_months": CONSENT_VALIDITY_MONTHS,
+                "gcs_bucket": GCS_CONSENT_BUCKET,
+                "policy_version": POLICY_VERSION_DEFAULT,
+                "line_account": f"@{LINE_ACCOUNT}" if LINE_ACCOUNT else ""
+            },
+            "generated_at": _now_iso(),
         },
-        "daily_stats": daily_stats,
-        "version_stats": version_stats,
-        "config": {
-            "required_flags": REQUIRED_FLAGS,
-            "retention_years": WORM_RETENTION_YEARS,
-            "validity_months": CONSENT_VALIDITY_MONTHS,
-            "gcs_bucket": GCS_CONSENT_BUCKET,
-            "policy_version": POLICY_VERSION_DEFAULT,
-            "line_account": f"@{LINE_ACCOUNT}" if LINE_ACCOUNT else ""
-        },
-        "generated_at": _now_iso(),
-    }
+        request.headers.get("origin"),
+    )
 
 # =============================================================================
 # デコレータ（必要なAPIの保護に使用可能）
