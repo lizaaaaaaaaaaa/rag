@@ -50,7 +50,7 @@ class OptimizedRAGProcessingService:
         self.enable_reranking = os.environ.get("ENABLE_RERANKING", "true").lower() == "true"
         self.enable_source_display = os.environ.get("ENABLE_SOURCE_DISPLAY", "true").lower() == "true"  # 出典表示
         # 追加: 厳格制御フラグ
-        self.strict_rag_only = os.environ.get("STRICT_RAG_ONLY", "true").lower() in ("1","true","yes")
+        self.strict_rag_only = os.environ.get("STRICT_RAG_ONLY", "false").lower() in ("1","false","yes")
         self.strict_grounded = os.environ.get("STRICT_GROUNDED_ANSWERING", "true").lower() in ("1","true","yes")
         self.location_intent_strict = os.environ.get("LOCATION_INTENT_STRICT", "true").lower() in ("1","true","yes")
         self.rag_timeout = float(os.environ.get("OPTIMIZED_RAG_TIMEOUT", "8"))  # タイムアウト8秒

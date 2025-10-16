@@ -76,7 +76,7 @@ class RAGFallbackHandler:
 
         # ▼▼▼ 追加：厳格RAGオン時は“地名系”フォールバックを全面ブロック ▼▼▼
         try:
-            strict_on = os.getenv("STRICT_RAG_ONLY", "true").lower() in ("1", "true", "yes")
+            strict_on = os.getenv("STRICT_RAG_ONLY", "false").lower() in ("1", "false", "yes")
             if strict_on and query:
                 # “どこ/エリア/地域/周辺/対応地域/施工可能/対応エリア” を含む質問は地名系とみなす
                 if re.search(r"(どこ|エリア|地域|周辺|対応地域|施工可能|対応エリア)", query):
