@@ -77,27 +77,31 @@ def _resolve_financial_if_needed():
     return _run_financial_plan
 
 # ======================================================================
-# 出典/参考/資料の文言は一切表示しない
+# 出典/参考/資料などの脚注文言を**本文から**一切表示しない（sources JSONは別）
 # ======================================================================
 def _strip_citations(text: str) -> str:
     if not text:
         return text
+
     # 行頭見出し（参考/資料/出典）
-    text = re.sub(r"^\s*(参考|参考資料|参考文献|資料|出典|引用)\s*[:：].*$", "", text, flags=re.MULTILINE)
-    # 「【出典】…」ブロック以降を削る
-    text = re.sub(r"【\s*(出典|参考|資料)\s*】[\s\S]*$", "", text, flags=re.MULTILINE)
-    # 末尾の (p. 12) / (P.12) 表記
-    text = re.sub(r"\s*\(\s*[pP]\.\s*\d+\s*\)\s*$", "", text, flags=re.MULTILINE)
-    # 行中の全角カッコに入った「出典：…／参考：…／引用：…」
-    text = re.sub(r"（\s*(出典|参考|引用)\s*[:：][^）]*）", "", text)
-    # 半角カッコのバリエーション
-    text = re.sub(r"\(\s*(出典|参考|引用)\s*[:：][^)]+?\)", "", text)
+    text = re.sub(r"(?m)^\s*(参考|参考資料|参考文献|資料|出典|引用)\s*[:：].*$", "", text)
+
+    # 本文中の「参考: … / 資料: … / 出典: …」も行末まで削除
+    text = re.sub(r"(参考|参考資料|資料|出典|引用)\s*[:：].*$", "", text, flags=re.MULTILINE)
+
+    # 「【出典】…」のようなブロック以降を削る
+    text = re.sub(r"【\s*(出典|参考|資料)\s*】[\s\S]*?$", "", text, flags=re.MULTILINE)
+
+    # (p.12) / (p. 12) / (p:12) / (p：12) / (p.?) / （p.？） など
+    # 半角/全角かっこ・?と全角？に対応。文中どこでも除去。
+    text = re.sub(r"[（(]\s*[pP]\s*[\.\:：]?\s*(\d+|[?？]+)\s*[)）]", "", text)
+
     # 連続改行の整形
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text
 
 # ======================================================================
-# LINE SDK v3（Flex を含めた完全インポート）★修正
+# LINE SDK v3（Flex を含めた完全インポート）
 # ======================================================================
 try:
     from linebot.v3 import WebhookHandler
@@ -214,7 +218,7 @@ https://ai.kinoedesign.co.jp/""",
 ・頭金（自己資金）：
 ・返済期間（年数）：
 ・想定金利：
-・他の借入の毎月返済額合計（車・カード・教育ローン等）:
+・他の借入の毎月返済額合計（車・カード・教育ローン等):
 ・借入時の年齢：
 
 未入力の項目があっても進められます。
@@ -375,7 +379,7 @@ def _push(user_id: str, text: str) -> bool:
         logger.error(f"LINE push failed: {e}"); return False
 
 # ======================================================================
-# ★ 送信ヘルパー（Flex）
+# 送信ヘルパー（Flex）
 # ======================================================================
 def _reply_or_push_flex(reply_token: str, user_id: str, flex: "FlexMessage") -> bool:
     api = _ensure_api()
@@ -448,16 +452,13 @@ def _has_consent_sync(user_id: str) -> bool:
     return False
 
 # --- ユーザー別「同意リンク」生成（/liff/consent）---
-# ★★★ 修正箇所：ここから ★★★
 def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
     """
     LIFF の完全URL（LIFF_CONSENT_URL）を最優先で使用。
     無い場合は PUBLIC_BASE_URL(/liff/consent) を使用。
     ★ user_token は URL に含めない（LIFF SDK から直接取得）
     """
-    # ✅ user_token は削除（空の辞書から開始）
     q = {}
-    
     if not extra_qs:
         extra_qs = {
             "state": "line_ai",
@@ -466,8 +467,6 @@ def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> 
             "utm_campaign": "ai_consult",
             "utm_content": "ai_menu",
         }
-    
-    # UTMやstate、abパラメータのみを追加
     for k in ["state", "ab", "utm_source", "utm_medium", "utm_campaign", "utm_content"]:
         v = extra_qs.get(k) if extra_qs else None
         if v:
@@ -476,10 +475,7 @@ def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> 
     base = LIFF_CONSENT_URL or (f"{PUBLIC_BASE_URL}/liff/consent" if PUBLIC_BASE_URL else "/liff/consent")
     if base.startswith("/") and PUBLIC_BASE_URL:
         base = f"{PUBLIC_BASE_URL}{base}"
-    
-    # ✅ セキュアなURL（トークンなし）
     return f"{base}?{urlencode(q)}" if q else base
-# ★★★ 修正箇所：ここまで ★★★
 
 def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
     link = _make_consent_link(user_id, extra_qs)
@@ -490,14 +486,13 @@ def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -
     )
 
 # ======================================================================
-# ★ 同意 Flex のビルダー（修正版：正しいFlexBubble構造を使用）
+# 同意 Flex のビルダー（正しいFlexBubble構造）
 # ======================================================================
 def build_consent_flex(liff_url: str) -> "FlexMessage":
     """同意用のFlexメッセージを作成（修正版）"""
     if not FLEX_AVAILABLE:
         raise RuntimeError("FlexMessage not available")
-    
-    # FlexBubbleを正しく構築
+
     bubble = FlexBubble(
         body=FlexBox(
             layout="vertical",
@@ -531,7 +526,6 @@ def build_consent_flex(liff_url: str) -> "FlexMessage":
             ],
         ),
     )
-    
     return FlexMessage(alt_text="AI相談のご利用前の同意", contents=bubble)
 
 # ======================================================================
@@ -639,7 +633,7 @@ def _resolve_postback_key(data: str) -> str:
     return ""
 
 # ======================================================================
-# イベントハンドラ（reply→push 方針）—— AI相談だけ同意ゲート ★修正
+# イベントハンドラ（reply→push 方針）—— AI相談だけ同意ゲート
 # ======================================================================
 if LINE_SDK_AVAILABLE and handler:
     from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent, FollowEvent
@@ -674,7 +668,7 @@ if LINE_SDK_AVAILABLE and handler:
             # リッチメニュー項目にヒット
             if key:
                 if key == "AI相談":
-                    # 未同意なら Flex ボタン（エラー時はテキストにフォールバック）★修正
+                    # 未同意なら Flex ボタン（エラー時はテキストにフォールバック）
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
                         if FLEX_AVAILABLE:
@@ -760,7 +754,7 @@ if LINE_SDK_AVAILABLE and handler:
             logger.error(f"postback handler error: {e}")
 
 # ======================================================================
-# 同意完了後のプッシュ（AI相談を自動開始）★修正版 - UID最優先
+# 同意完了後のプッシュ（AI相談を自動開始）— UID最優先
 # ======================================================================
 @router.post("/line/after-consent")
 async def after_consent(request: Request):
@@ -823,7 +817,7 @@ async def after_consent(request: Request):
                              "request_id": request_id, "timestamp": datetime.now().isoformat()}, status_code=500)
 
 # ======================================================================
-# ★追加: LIFFの「同意して開始」ボタンが叩く記録API（まずは204だけ返す）
+# 追加: LIFFの「同意して開始」ボタンが叩く記録API（まずは204だけ返す）
 # ======================================================================
 class ConsentPayload(BaseModel):
     user_token: str

@@ -1,5 +1,5 @@
 # api/routers/chat_unified.py
-# 統合チャット（固定テンプレ & 出典非表示(既定) & RAG優先 & 資金計画の軽量推定）
+# 統合チャット（RAG優先・出典は既定で非表示・資金計画の軽量推定）
 from __future__ import annotations
 
 import os
@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from contextlib import nullcontext
 
 # -------------------------------
-# 1) import パスを自己修復（llm/, services/, rag/ を拾えるように）
+# 0) import パスを自己修復（llm/, services/, rag/ を拾えるように）
 # -------------------------------
 _THIS = Path(__file__).resolve()
 _PROJECT_ROOT = _THIS.parents[2] if len(_THIS.parents) >= 2 else _THIS.parent
@@ -35,19 +35,19 @@ logger = logging.getLogger("chat_unified")
 router = APIRouter()
 
 # -------------------------------
-# 2) 依存（ゆるい参照）
+# 1) 依存（ゆるい参照）
 # -------------------------------
 tracer = type("T", (), {"start_span": staticmethod(lambda *_a, **_k: nullcontext())})()
 monitor = type("M", (), {"log_event": staticmethod(lambda *_a, **_k: None)})()
 web_search = _safe_import("utils.web_search", None)
 
-def _noop_should_use_web_search(q: str) -> bool:  # 検索ヒントのUI用フラグ
+def _noop_should_use_web_search(q: str) -> bool:
     return False
 
 should_use_web_search = getattr(web_search, "should_use_web_search", _noop_should_use_web_search)
 
 # -------------------------------
-# 3) UTM付き固定リンク（LINE リッチメニュー）
+# 2) UTM付き固定リンク（LINE リッチメニュー）
 # -------------------------------
 def _with_utm(url: str, campaign: str, ab: str = "A") -> str:
     if "?" in url:
@@ -82,41 +82,49 @@ def is_richmenu_pressed(q: str) -> Optional[str]:
     return _detect_richmenu_press(q)
 
 # -------------------------------
+# 3) 表示ポリシー（出典は既定で隠す）
+# -------------------------------
+# 既定: 出典を**返さない**（HIDE_SOURCES=true）
+_HIDE_SOURCES = os.getenv("HIDE_SOURCES", "true").lower() == "true"
+# 旧来の INCLUDE_SOURCES を残しておくが、_HIDE_SOURCES=true なら常に無視される
+_INCLUDE_SOURCES = os.getenv("INCLUDE_SOURCES", "false").lower() == "true"
+
+# -------------------------------
 # 4) RAG フロントドア
 #    旧/新どちらの入口にも対応:
 #      - services.rag_processing_service.ask_rag (旧)
 #      - rag_chain.get_rag_response / services.rag_chain.get_rag_response (新)
 # -------------------------------
-_INCLUDE_SOURCES = os.getenv("INCLUDE_SOURCES", "false").lower() == "true"
-
-# 旧I/F（あれば使う）
 _rag_mod_v1 = _safe_import("services.rag_processing_service", None)
 _ask_rag = getattr(_rag_mod_v1, "ask_rag", None)
 
-# 新I/F（優先）
 _rag_mod_v2 = _safe_import("rag_chain", None) or _safe_import("services.rag_chain", None)
 _get_rag_response = getattr(_rag_mod_v2, "get_rag_response", None)
 
 def _rag_answer(q: str) -> Tuple[str, List[str]]:
     """
     RAGの標準入口。返り値は (answer, sources)。
-    出典非表示の場合は sources は [] で返す。
     """
-    # 旧I/F: services.rag_processing_service.ask_rag
+    # 旧I/F
     if callable(_ask_rag):
         try:
-            out = _ask_rag(q, include_sources=_INCLUDE_SOURCES)
+            out = _ask_rag(q, include_sources=_INCLUDE_SOURCES and not _HIDE_SOURCES)
             ans = _strip_citations(_to_text(out))
-            return (ans, []) if not _INCLUDE_SOURCES else (ans, out.get("sources", []) if isinstance(out, dict) else [])
+            srcs: List[str] = []
+            if (not _HIDE_SOURCES) and _INCLUDE_SOURCES and isinstance(out, dict):
+                srcs = out.get("sources", []) or []
+            return ans, srcs
         except Exception:
             logger.exception("RAG(ask_rag) failed")
 
-    # 新I/F: rag_chain.get_rag_response / services.rag_chain.get_rag_response
+    # 新I/F
     if callable(_get_rag_response):
         try:
             ans, srcs = _get_rag_response(q)  # (str, list[str]) を想定
             ans = _strip_citations(_to_text(ans))
-            return (ans, [] if not _INCLUDE_SOURCES else (srcs or []))
+            if _HIDE_SOURCES:
+                srcs = []
+            return ans, (srcs or [])
         except Exception:
             logger.exception("RAG(get_rag_response) failed")
 
@@ -171,15 +179,26 @@ def _llm_answer(prompt: str) -> str:
 # 6) テキスト整形 & 質問の軽い正規化
 # -------------------------------
 def _strip_citations(text: str) -> str:
+    """
+    参考/出典行、ページ表記 (p.12)/(p.？)/(p.?)、全角括弧版などを徹底除去。
+    """
     if not text:
         return text
-    text = re.sub(r"^\s*(参考|資料|出典)\s*[:：].*$", "", text, flags=re.MULTILINE)
-    text = re.sub(r"【出典】[\s\S]*$", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\s*\(p\.\s*\d+\s*\)\s*$", "", text, flags=re.MULTILINE)
+
+    # 行頭の 参考: / 資料: / 出典:
+    text = re.sub(r"(?m)^\s*(参考|資料|出典)\s*[:：].*$", "", text)
+
+    # 文中の「参考: …」ブロックを改行まで削除
+    text = re.sub(r"(参考|資料|出典)\s*[:：].*$", "", text)
+
+    # (p.12), (p. 12), (p.?), （p.？） 等の削除（半角/全角・?対応）
+    text = re.sub(r"[（(]\s*p\s*[\.\:：]?\s*(\d+|[?？]+)\s*[)）]", "", text, flags=re.IGNORECASE)
+
+    # 余分な空行・伏字の抑止
     text = re.sub(r"\n{3,}", "\n\n", text)
-    # 伏字(○○市/△△町/××区…)の抑止
     text = re.sub(r"[○◯〇×]{2,}(市|区|町|村)", "（資料に記載なし）", text)
     text = re.sub(r"[○◯〇×]+[-ー]?(エリア|地域|方面)", "（資料に記載なし）", text)
+
     return text.strip()
 
 def _to_text(o: Any) -> str:
@@ -247,7 +266,7 @@ def chat(req: ChatRequest) -> Dict[str, Any]:
     return resp
 
 # -------------------------------
-# 9) メイン入口（main.py から await される）
+# 9) メイン入口
 # -------------------------------
 async def generate_response(question: str,
                             platform: str = "web",
@@ -281,10 +300,15 @@ async def generate_response(question: str,
     # c) まず RAG を試す（ここで表記ゆれを軽く正規化）
     norm = _normalize_query(raw)
     ans, srcs = _rag_answer(norm)
+
+    # 出典は既定で隠す（HIDE_SOURCES=true）。必要時のみ env で false に。
+    if _HIDE_SOURCES:
+        srcs = []
+
     if ans:
         return {
             "answer": ans,
-            "sources": srcs if _INCLUDE_SOURCES else [],
+            "sources": srcs,
             "source": "rag",
             "status": "ok",
             "elapsed": time.time() - t0,
