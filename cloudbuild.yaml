@@ -82,7 +82,7 @@ steps:
       - "--set-env-vars=^~^GCS_UPLOADS_PREFIXES=uploads/,uploads/admin/faq/"
 
       # ▼▼▼ RAG厳格モード（1トークン） ▼▼▼
-      - "--set-env-vars=STRICT_RAG_ONLY=true,STRICT_GROUNDED_ANSWERING=true,REQUIRE_CITATIONS=false,LOCATION_INTENT_STRICT=true,ENABLE_WEB_SEARCH=false"
+      - "--set-env-vars=STRICT_RAG_ONLY=true,STRICT_GROUNDED_ANSWERING=true,REQUIRE_CITATIONS=false,LOCATION_INTENT_STRICT=true,ENABLE_WEB_SEARCH=false,VECTORSTORE_TRY_GCS_SYNC=true"
       # ▲▲▲ 追加ここまで ▲▲▲
 
       # ===== 機密は Secret Manager から =====

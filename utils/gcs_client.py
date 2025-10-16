@@ -3,6 +3,7 @@
 GCS クライアントユーティリティ
 - 監査マニフェストのアップロード
 - WORM ストレージ設定の検証
+- （追加）GCS→ローカル補完: download_if_exists(...)
 """
 
 from __future__ import annotations
@@ -10,15 +11,15 @@ from __future__ import annotations
 import json
 import os
 import logging
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple, List
 
 from google.cloud import storage
 from google.api_core import exceptions as gcp_exceptions
 
-# ✅ 設定読込の明示（get_settings の未定義エラー対策）
+# ✅ 設定読込の明示（get_settings が未定義の環境でも安全にフォールバック）
 try:
-    # プロジェクト固有の設定ローダ（存在しない環境でも例外にならないように）
     from config import get_settings  # type: ignore
 except Exception:  # pragma: no cover
     get_settings = None  # type: ignore
@@ -49,7 +50,7 @@ class GCSClient:
 
         self.project_id: Optional[str] = project_id or getattr(settings, "gcp_project_id", None)
 
-        # ★ 修正ポイント：バケット名のフォールバック強化
+        # ★ バケット名のフォールバック強化
         #   1) 引数 bucket_name
         #   2) settings.worm_bucket_name
         #   3) 環境変数 GCS_BUCKET_NAME → GCS_CONSENT_BUCKET → GCS_BUCKET
@@ -76,8 +77,10 @@ class GCSClient:
     @property
     def bucket(self) -> storage.Bucket:
         if not self._bucket:
-            raise RuntimeError("GCS bucket is not configured. Set 'worm_bucket_name' in settings "
-                               "or GCS_BUCKET_NAME/GCS_CONSENT_BUCKET/GCS_BUCKET in env.")
+            raise RuntimeError(
+                "GCS bucket is not configured. Set 'worm_bucket_name' in settings "
+                "or GCS_BUCKET_NAME/GCS_CONSENT_BUCKET/GCS_BUCKET in env."
+            )
         return self._bucket
 
     # ---------------------------------------------------------------------
@@ -137,7 +140,7 @@ class GCSClient:
                 if hasattr(lifecycle_rules_raw, "__len__"):
                     lifecycle_rules_count = len(lifecycle_rules_raw)  # type: ignore[arg-type]
                 elif hasattr(lifecycle_rules_raw, "__iter__"):
-                    lifecycle_rules_count = len(list(lifecycle_rules_raw))  # 生成器 → list へ
+                    lifecycle_rules_count = len(list(lifecycle_rules_raw))  # generator → list
 
             status = {
                 "bucket": bucket.name,
@@ -203,3 +206,40 @@ class GCSClient:
         except Exception as e:
             logger.error(f"Failed to download text from {object_path}: {e}")
             raise
+
+
+# ---------------------------------------------------------------------
+# 追加: GCS にオブジェクトがあればローカルへ保存するユーティリティ
+#  - rag/fast_rag_chain.py の「起動時補完」で利用（index.faiss / index.pkl 等）
+#  - 失敗や未設定は False を返し、起動継続を阻害しない設計
+# ---------------------------------------------------------------------
+def download_if_exists(blob_name: str, local_path: str) -> bool:
+    """
+    GCS_BUCKET_NAME/<blob_name> が存在すれば local_path へ保存して True。
+    無ければ False。親ディレクトリは自動作成。例外時も False を返す。
+
+    例:
+        download_if_exists("vectorstore/index.faiss", "/tmp/rag/vectorstore/index.faiss")
+    """
+    # バケット名は広めのフォールバックで解決
+    bucket_name = (
+        (os.getenv("GCS_BUCKET_NAME") or "").strip()
+        or (os.getenv("GCS_CONSENT_BUCKET") or "").strip()
+        or (os.getenv("GCS_BUCKET") or "").strip()
+    )
+    if not bucket_name or not blob_name or not local_path:
+        logger.warning("download_if_exists skipped: missing bucket or path (bucket=%r, blob=%r)", bucket_name, blob_name)
+        return False
+    try:
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        if not blob.exists():
+            return False
+        Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+        blob.download_to_filename(local_path)
+        logger.info("download_if_exists success: gs://%s/%s -> %s", bucket_name, blob_name, local_path)
+        return True
+    except Exception as e:
+        logger.error("download_if_exists error: %s", e)
+        return False

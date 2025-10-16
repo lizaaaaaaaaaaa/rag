@@ -1,5 +1,5 @@
 # api/routers/chat_unified.py
-# 統合チャット（固定テンプレ & 出典非表示 & RAG優先 & 資金計画の軽量推定）
+# 統合チャット（固定テンプレ & 出典非表示(既定) & RAG優先 & 資金計画の軽量推定）
 from __future__ import annotations
 
 import os
@@ -9,42 +9,44 @@ import logging
 import importlib
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from contextlib import nullcontext
 
 # -------------------------------
 # 1) import パスを自己修復（llm/, services/, rag/ を拾えるように）
 # -------------------------------
 _THIS = Path(__file__).resolve()
 _PROJECT_ROOT = _THIS.parents[2] if len(_THIS.parents) >= 2 else _THIS.parent
-for _p in ("", "llm", "services", "rag"):
+for _p in ("", "llm", "services", "rag", "utils", "api", "api/routers"):
     _pp = str((_PROJECT_ROOT / _p).resolve())
     if _pp not in sys.path:
         sys.path.append(_pp)
 
-# 遅延 import（存在しない場合はダミー化）
 def _safe_import(modname: str, fallback: Optional[object] = None):
     try:
         return importlib.import_module(modname)
     except Exception:
         return fallback
 
-# -------------------------------
-# 2) 依存モジュール（存在しなくても動くように緩く参照）
-# -------------------------------
-tracer = _safe_import("utils.langsmith_tracer", type("T", (), {"start_span": lambda *_a, **_k: nullcontext()}))
-monitor = _safe_import("utils.monitoring", type("M", (), {"log_event": staticmethod(lambda *_a, **_k: None)}))
-web_search = _safe_import("utils.web_search", None)
-gcs = _safe_import("utils.gcs_client", None)
-from contextlib import contextmanager, nullcontext
-
 logger = logging.getLogger("chat_unified")
 router = APIRouter()
 
 # -------------------------------
-# 3) 定数（必要なら本番の LIFF URL に置換）
+# 2) 依存（ゆるい参照）
+# -------------------------------
+tracer = type("T", (), {"start_span": staticmethod(lambda *_a, **_k: nullcontext())})()
+monitor = type("M", (), {"log_event": staticmethod(lambda *_a, **_k: None)})()
+web_search = _safe_import("utils.web_search", None)
+
+def _noop_should_use_web_search(q: str) -> bool:  # 検索ヒントのUI用フラグ
+    return False
+should_use_web_search = getattr(web_search, "should_use_web_search", _noop_should_use_web_search)
+
+# -------------------------------
+# 3) UTM付き固定リンク（LINE リッチメニュー）
 # -------------------------------
 def _with_utm(url: str, campaign: str, ab: str = "A") -> str:
     if "?" in url:
@@ -59,51 +61,62 @@ ai_consult_link = _with_utm(AI_CONSULT_URL, "ai_consult", ab="A")
 ai_site_link    = _with_utm(AI_SITE_URL,   "ai_site",    ab="A")
 budget_link     = _with_utm(BUDGET_URL,    "budget",     ab="A")
 
-# -------------------------------
-# 4) web_search（存在しなくてもOK）
-# -------------------------------
-def _noop_should_use_web_search(q: str) -> bool:
-    return False
+RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
+    "ai_consult": f"AI相談を開始します。うまくいかない場合は {ai_consult_link} から開いてください。",
+    "site":       f"WebサイトのAIチャットは {ai_site_link} です。使い分けてご利用ください。",
+    "budget":     f"資金計画の簡易試算はこちら {budget_link} からどうぞ。",
+}
 
-should_use_web_search = getattr(web_search, "should_use_web_search", _noop_should_use_web_search)
+def _detect_richmenu_press(q: str) -> Optional[str]:
+    q2 = (q or "").strip().lower()
+    if "ai相談" in q2 or "ai_consult" in q2:
+        return "ai_consult"
+    if "サイト" in q2 or "site" in q2:
+        return "site"
+    if "資金計画" in q2 or "budget" in q2:
+        return "budget"
+    return None
+
+def is_richmenu_pressed(q: str) -> Optional[str]:
+    return _detect_richmenu_press(q)
 
 # -------------------------------
-# 5) RAG まわり（存在しない環境でも落ちないように）
+# 4) RAG フロントドア（services.rag_chain.get_rag_response）
+#    まずRAGを試し、ダメならLLMにフォールバック
 # -------------------------------
-_rag_mod = _safe_import("services.rag_processing_service", None)
-_rag_chain = getattr(_rag_mod, "ask_rag", None)
+_INCLUDE_SOURCES = os.getenv("INCLUDE_SOURCES", "false").lower() == "true"
+_srv_rag = _safe_import("services.rag_chain", None)
+_get_rag = getattr(_srv_rag, "get_rag_response", None)
 
-def _rag_answer(q: str) -> str:
+def _rag_answer(q: str) -> Tuple[str, List[str]]:
     """
-    RAG の回答取得。なければ空文字。
+    RAGの標準入口。返り値は (answer, sources)。
+    出典非表示の場合は sources は [] で返す。
     """
-    if _rag_chain is None:
-        return ""
+    if not callable(_get_rag):
+        return "", []
     try:
-        out = _rag_chain(q, include_sources=False)
-        return _strip_citations(_to_text(out))
+        ans, srcs = _get_rag((q or "").strip())  # (str, list[str])
+        if not _INCLUDE_SOURCES:
+            return (ans or "").strip(), []
+        return (ans or "").strip(), (srcs or [])
     except Exception:
-        logger.exception("RAG failed")
-        return ""
+        logger.exception("RAG frontdoor failed")
+        return "", []
 
 # -------------------------------
-# 6) LLM フォールバック（OpenAI 直 or ラッパー）
+# 5) LLM フォールバック
 # -------------------------------
 _llm_mod = _safe_import("llm.llm_runner", None)
 _openai_runner = getattr(_llm_mod, "chat_completion", None)
 
 def _llm_answer(prompt: str) -> str:
-    """
-    LLM 単体回答。最終整形は _strip_citations() で実施。
-    """
     if _openai_runner:
         try:
             out = _openai_runner(prompt)
             return _strip_citations(_to_text(out))
         except Exception:
             logger.exception("LLM runner failed; fallback to minimal client")
-
-    # 直叩き（最低限のフォールバック）
     try:
         import openai  # type: ignore
         client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -118,7 +131,6 @@ def _llm_answer(prompt: str) -> str:
         )
         text = rsp.choices[0].message.content or ""
         fin = rsp.choices[0].finish_reason or ""
-        # 必要なら“続きだけ”もう1度取りに行く
         if fin == "length":
             max_tokens2 = int(os.getenv("OPENAI_MAX_TOKENS_CONT", os.getenv("MAX_NEW_TOKENS_CONT", "600")))
             rsp2 = client.chat.completions.create(
@@ -132,15 +144,13 @@ def _llm_answer(prompt: str) -> str:
                 max_tokens=max_tokens2,
             )
             text += "\n" + (rsp2.choices[0].message.content or "")
-
         return _strip_citations(text)
     except Exception:
         logger.exception("openai.ChatCompletions fallback failed")
         return _strip_citations("")
 
 # -------------------------------
-# 7) 出典抑止（既存）
-#    ＋ 伏字地名の抑止（今回追加）
+# 6) テキスト整形（出典/伏字抑止）
 # -------------------------------
 def _strip_citations(text: str) -> str:
     if not text:
@@ -149,10 +159,8 @@ def _strip_citations(text: str) -> str:
     text = re.sub(r"【出典】[\s\S]*$", "", text, flags=re.MULTILINE)
     text = re.sub(r"\s*\(p\.\s*\d+\s*\)\s*$", "", text, flags=re.MULTILINE)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    # --- 伏字(○○市/△△町/××区 等)の抑止 ---
-    # 例: ○○市, ◯◯区, 〇〇町, ××村 などのプレースホルダを出力しない
+    # 伏字(○○市/△△町/××区…)の抑止
     text = re.sub(r"[○◯〇×]{2,}(市|区|町|村)", "（資料に記載なし）", text)
-    # 片方だけの伏字パターンにも軽く対応（例: ○○-エリア）
     text = re.sub(r"[○◯〇×]+[-ー]?(エリア|地域|方面)", "（資料に記載なし）", text)
     return text.strip()
 
@@ -166,7 +174,7 @@ def _to_text(o: Any) -> str:
     return str(o)
 
 # -------------------------------
-# 8) 「資金計画」判定と簡易推定
+# 7) 「資金計画」検出（簡易）
 # -------------------------------
 class FinancialRequest(BaseModel):
     annual_income: Optional[int] = None
@@ -175,13 +183,13 @@ class FinancialRequest(BaseModel):
     monthly_saving: Optional[int] = None
 
 def _is_financial_query(q: str) -> bool:
-    q2 = q.replace("　", " ")
+    q2 = (q or "").replace("　", " ")
     keys = ("資金計画", "ローン", "借入", "返済", "予算", "年収", "頭金", "月々")
     return any(k in q2 for k in keys)
 
 def _extract_financial(q: str) -> FinancialRequest:
-    # 超簡易：数字を拾って雰囲気で入れる
-    nums = [int(n) for n in re.findall(r"\d+", q)]
+    import re as _re
+    nums = [int(n) for n in _re.findall(r"\d+", q or "")]
     fr = FinancialRequest()
     if nums:
         fr.annual_income = nums[0]
@@ -189,66 +197,35 @@ def _extract_financial(q: str) -> FinancialRequest:
 
 def _estimate_budget(fr: FinancialRequest) -> Tuple[str, bool]:
     if fr.annual_income and fr.annual_income > 0:
-        est = int(fr.annual_income * 7 / 10)  # かなり控えめ
+        est = int(fr.annual_income * 7 / 10)  # 控えめ
         return (f"年収{fr.annual_income:,}円の場合の概算上限はおよそ{est:,}円です。詳細は個別条件で前後します。", True)
     return ("資金計画は年収や頭金などの条件が必要です。年収や頭金の目安を教えてください。", False)
 
 # -------------------------------
-# 9) リッチメニュー（押下→固定文）
-# -------------------------------
-RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
-    "ai_consult": f"AI相談を開始します。うまくいかない場合は {ai_consult_link} から開いてください。",
-    "site":       f"WebサイトのAIチャットは {ai_site_link} です。使い分けてご利用ください。",
-    "budget":     f"資金計画の簡易試算はこちら {budget_link} からどうぞ。",
-}
-
-def _detect_richmenu_press(q: str) -> Optional[str]:
-    q2 = q.strip().lower()
-    if "ai相談" in q2 or "ai_consult" in q2:
-        return "ai_consult"
-    if "サイト" in q2 or "site" in q2:
-        return "site"
-    if "資金計画" in q2 or "budget" in q2:
-        return "budget"
-    return None
-
-def is_richmenu_pressed(q: str) -> Optional[str]:
-    """外部から差し替えやすい判定フック（テスト用）"""
-    return _detect_richmenu_press(q)
-
-# -------------------------------
-# 10) 入口モデル
+# 8) API モデル & ルート
 # -------------------------------
 class ChatRequest(BaseModel):
     question: str
     source: Optional[str] = "web"  # "web" or "line"
 
-# -------------------------------
-# 11) FastAPIルート（同期互換ラッパー）
-# -------------------------------
 @router.post("/chat")
 def chat(req: ChatRequest) -> Dict[str, Any]:
-    """HTTP 入口（フロント経由）。内部ロジックは generate_response に委譲。"""
     raw = (req.question or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="Empty question")
-
-    # まず generate_response を使って統一のレスを得る
-    # （generate_response は async だが、内部は I/O を持たないので同期呼び出し互換にしておく）
     resp = _generate_response_sync(raw, req.source or "web")
     resp["elapsed"] = round(resp.get("elapsed", 0.0), 3)
     return resp
 
 # -------------------------------
-# 12) main.py から await される正規入口
+# 9) メイン入口（main.py から await される）
 # -------------------------------
 async def generate_response(question: str,
                             platform: str = "web",
                             username: str | None = None,
                             mode: str = "auto") -> Dict[str, Any]:
     """
-    正規のエントリーポイント。
-    戻り値は main.py の期待形式に合わせる: {answer, sources, source, status}
+    戻り値: {answer, sources, source, status}
     """
     t0 = time.time()
     raw = (question or "").strip()
@@ -261,92 +238,62 @@ async def generate_response(question: str,
         pressed = None
     if not pressed:
         pressed = _detect_richmenu_press(raw)
-
     if pressed:
         reply = RICHMENU_FIXED_RESPONSES.get(pressed, "")
-        return {
-            "answer": reply,
-            "sources": [],
-            "source": "richmenu",
-            "status": "ok",
-            "elapsed": time.time() - t0,
-        }
+        return {"answer": reply, "sources": [], "source": "richmenu", "status": "ok", "elapsed": time.time() - t0}
 
-    # b) 「資金計画」系は軽量推定で即答（不足時は次へ）
+    # b) 簡易「資金計画」
     if _is_financial_query(raw):
         data = _extract_financial(raw)
         text, ok = _estimate_budget(data)
         if ok:
-            return {
-                "answer": text,
-                "sources": [],
-                "source": "finance",
-                "status": "ok",
-                "elapsed": time.time() - t0,
-            }
+            return {"answer": text, "sources": [], "source": "finance", "status": "ok", "elapsed": time.time() - t0}
 
-    # c) RAG を試す（ここで初めてRAGがロードされる）
-    with tracer.start_span("RAG.try"):
-        rag_text = _rag_answer(raw)
-    if rag_text:
+    # c) まず RAG を試す（修正ポイント）
+    ans, srcs = _rag_answer(raw)
+    if ans:
         return {
-            "answer": rag_text,
-            "sources": [],
+            "answer": ans,
+            "sources": srcs if _INCLUDE_SOURCES else [],
             "source": "rag",
             "status": "ok",
             "elapsed": time.time() - t0,
         }
 
-    # d) Web検索のヒント（UIフラグ。実検索は別処理）
+    # d) Web検索ヒント（UIフラグ）
     try:
         use_web = bool(should_use_web_search(raw))
     except Exception:
         use_web = False
 
-    # e) LLM フォールバック
-    # 環境変数で RAG 厳格モードのときはフォールバックを無効化して安全に終了
+    # e) RAG厳格モードならここで終了
     if os.getenv("STRICT_RAG_ONLY", "false").lower() == "true":
         safe_msg = "資料に基づく情報が見つかりませんでした。もう少し条件（例：正式な資料名や具体のプラン名）を教えてください。"
-        return {
-            "answer": safe_msg,
-            "sources": [],
-            "source": "safety",
-            "status": "ok",
-            "used_web_search": use_web,
-            "elapsed": time.time() - t0,
-        }
-    with tracer.start_span("LLM.fallback"):
-        llm_text = _llm_answer(raw)
+        return {"answer": safe_msg, "sources": [], "source": "safety", "status": "ok", "used_web_search": use_web, "elapsed": time.time() - t0}
 
-    return {
-        "answer": llm_text,
-        "sources": [],
-        "source": "llm",
-        "status": "ok",
-        "used_web_search": use_web,
-        "elapsed": time.time() - t0,
-    }
+    # f) LLM フォールバック
+    llm_text = _llm_answer(raw)
+    return {"answer": llm_text, "sources": [], "source": "llm", "status": "ok", "used_web_search": use_web, "elapsed": time.time() - t0}
 
 # -------------------------------
-# 13) 内部用（同期互換）―― FastAPI の sync ルートからも使えるように
+# 10) 同期互換（FastAPI の sync ルートからも使う）
 # -------------------------------
 def _generate_response_sync(question: str, platform: str = "web") -> Dict[str, Any]:
-    # 非I/Oなので同期でも安全（内部のRAG/LLM呼び出しが同期実装）
     return _awaitless(generate_response(question, platform))
 
 def _awaitless(coro):
     try:
-        # 既存ループがあれば使う（FastAPIのスレッドプール内想定）
         import asyncio
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # running 環境では run_until_complete は不可。I/O無し想定なので簡易return
             return {"answer": "処理中です。", "sources": [], "source": "async", "status": "ok"}
         return loop.run_until_complete(coro)
     except Exception:
-        # 最低限のフォールバック
         return {"answer": "ただいま処理が混み合っています。少し時間をおいてお試しください。", "sources": [], "source": "error", "status": "degraded"}
 
 @router.get("/chat/ping")
 def ping() -> Dict[str, Any]:
     return {"pong": True}
+
+# 内部フック（main.py 側の切替用）
+unified_generator = sys.modules[__name__]
