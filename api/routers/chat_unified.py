@@ -43,6 +43,7 @@ web_search = _safe_import("utils.web_search", None)
 
 def _noop_should_use_web_search(q: str) -> bool:  # 検索ヒントのUI用フラグ
     return False
+
 should_use_web_search = getattr(web_search, "should_use_web_search", _noop_should_use_web_search)
 
 # -------------------------------
@@ -81,28 +82,45 @@ def is_richmenu_pressed(q: str) -> Optional[str]:
     return _detect_richmenu_press(q)
 
 # -------------------------------
-# 4) RAG フロントドア（services.rag_chain.get_rag_response）
-#    まずRAGを試し、ダメならLLMにフォールバック
+# 4) RAG フロントドア
+#    旧/新どちらの入口にも対応:
+#      - services.rag_processing_service.ask_rag (旧)
+#      - rag_chain.get_rag_response / services.rag_chain.get_rag_response (新)
 # -------------------------------
 _INCLUDE_SOURCES = os.getenv("INCLUDE_SOURCES", "false").lower() == "true"
-_srv_rag = _safe_import("services.rag_chain", None)
-_get_rag = getattr(_srv_rag, "get_rag_response", None)
+
+# 旧I/F（あれば使う）
+_rag_mod_v1 = _safe_import("services.rag_processing_service", None)
+_ask_rag = getattr(_rag_mod_v1, "ask_rag", None)
+
+# 新I/F（優先）
+_rag_mod_v2 = _safe_import("rag_chain", None) or _safe_import("services.rag_chain", None)
+_get_rag_response = getattr(_rag_mod_v2, "get_rag_response", None)
 
 def _rag_answer(q: str) -> Tuple[str, List[str]]:
     """
     RAGの標準入口。返り値は (answer, sources)。
     出典非表示の場合は sources は [] で返す。
     """
-    if not callable(_get_rag):
-        return "", []
-    try:
-        ans, srcs = _get_rag((q or "").strip())  # (str, list[str])
-        if not _INCLUDE_SOURCES:
-            return (ans or "").strip(), []
-        return (ans or "").strip(), (srcs or [])
-    except Exception:
-        logger.exception("RAG frontdoor failed")
-        return "", []
+    # 旧I/F: services.rag_processing_service.ask_rag
+    if callable(_ask_rag):
+        try:
+            out = _ask_rag(q, include_sources=_INCLUDE_SOURCES)
+            ans = _strip_citations(_to_text(out))
+            return (ans, []) if not _INCLUDE_SOURCES else (ans, out.get("sources", []) if isinstance(out, dict) else [])
+        except Exception:
+            logger.exception("RAG(ask_rag) failed")
+
+    # 新I/F: rag_chain.get_rag_response / services.rag_chain.get_rag_response
+    if callable(_get_rag_response):
+        try:
+            ans, srcs = _get_rag_response(q)  # (str, list[str]) を想定
+            ans = _strip_citations(_to_text(ans))
+            return (ans, [] if not _INCLUDE_SOURCES else (srcs or []))
+        except Exception:
+            logger.exception("RAG(get_rag_response) failed")
+
+    return "", []
 
 # -------------------------------
 # 5) LLM フォールバック
@@ -150,7 +168,7 @@ def _llm_answer(prompt: str) -> str:
         return _strip_citations("")
 
 # -------------------------------
-# 6) テキスト整形（出典/伏字抑止）
+# 6) テキスト整形 & 質問の軽い正規化
 # -------------------------------
 def _strip_citations(text: str) -> str:
     if not text:
@@ -172,6 +190,17 @@ def _to_text(o: Any) -> str:
             if isinstance(o.get(k), str):
                 return str(o[k])
     return str(o)
+
+# よくある表記ゆれを補う（クエリの当たりを広げる）
+def _normalize_query(q: str) -> str:
+    if not q:
+        return q
+    q2 = q.replace("　", " ").strip()
+    # 施工エリア系
+    q2 = q2.replace("施工可能エリア", "対応エリア 対応地域 施工対応地域 施工エリア")
+    # カタカナのゆれ（必要に応じて追加）
+    q2 = q2.replace("キノエ", "キノエ KINOE Kinoe")
+    return q2
 
 # -------------------------------
 # 7) 「資金計画」検出（簡易）
@@ -249,8 +278,9 @@ async def generate_response(question: str,
         if ok:
             return {"answer": text, "sources": [], "source": "finance", "status": "ok", "elapsed": time.time() - t0}
 
-    # c) まず RAG を試す（修正ポイント）
-    ans, srcs = _rag_answer(raw)
+    # c) まず RAG を試す（ここで表記ゆれを軽く正規化）
+    norm = _normalize_query(raw)
+    ans, srcs = _rag_answer(norm)
     if ans:
         return {
             "answer": ans,

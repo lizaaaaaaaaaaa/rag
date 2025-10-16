@@ -56,8 +56,8 @@ from langchain.chains import RetrievalQA
 # 環境変数スイッチ
 # =========================
 FAST_RAG_FAQ_FIRST = os.getenv("FAST_RAG_FAQ_FIRST", "true").lower() == "true"  # FAQ優先
-FAST_RAG_TIMEOUT = float(os.getenv("FAST_RAG_TIMEOUT", "5.0"))                 # RAG呼び上限秒
-FAST_RAG_TOP_K = int(os.getenv("FAST_RAG_TOP_K", "3"))                         # 検索k
+FAST_RAG_TIMEOUT = float(os.getenv("FAST_RAG_TIMEOUT", "10"))                 # RAG呼び上限秒
+FAST_RAG_TOP_K = int(os.getenv("FAST_RAG_TOP_K", "10"))                         # 検索k
 
 VECTOR_DIR = os.getenv("VECTOR_DIR", "rag/vectorstore")
 INDEX_NAME = os.getenv("INDEX_NAME", "index")
