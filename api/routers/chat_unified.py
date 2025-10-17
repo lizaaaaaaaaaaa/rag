@@ -85,9 +85,9 @@ def is_richmenu_pressed(q: str) -> Optional[str]:
 # 3) 表示ポリシー（出典は既定で隠す）
 # -------------------------------
 # 既定: 出典を**返さない**（HIDE_SOURCES=true）
-_HIDE_SOURCES = os.getenv("HIDE_SOURCES", "true").lower() == "true"
+_HIDE_SOURCES = os.getenv("HIDE_SOURCES", "false").lower() == "true"
 # 旧来の INCLUDE_SOURCES を残しておくが、_HIDE_SOURCES=true なら常に無視される
-_INCLUDE_SOURCES = os.getenv("INCLUDE_SOURCES", "false").lower() == "true"
+_INCLUDE_SOURCES = os.getenv("INCLUDE_SOURCES", "true").lower() == "true"
 
 # -------------------------------
 # 4) RAG フロントドア
