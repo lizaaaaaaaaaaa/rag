@@ -84,9 +84,9 @@ def is_richmenu_pressed(q: str) -> Optional[str]:
 # -------------------------------
 # 3) 表示ポリシー（出典は既定で隠す）
 # -------------------------------
-# 既定: 出典を**返さない**（HIDE_SOURCES=true）
-_HIDE_SOURCES = os.getenv("HIDE_SOURCES", "false").lower() == "true"
-# 旧来の INCLUDE_SOURCES を残しておくが、_HIDE_SOURCES=true なら常に無視される
+# 既定: 出典を「返さない」= HIDE_SOURCES=true（※ここが重要）
+_HIDE_SOURCES = os.getenv("HIDE_SOURCES", "true").lower() == "true"
+# 互換: HIDE_SOURCES=false のときのみ INCLUDE_SOURCES の真偽を尊重
 _INCLUDE_SOURCES = os.getenv("INCLUDE_SOURCES", "true").lower() == "true"
 
 # -------------------------------
@@ -101,6 +101,35 @@ _ask_rag = getattr(_rag_mod_v1, "ask_rag", None)
 _rag_mod_v2 = _safe_import("rag_chain", None) or _safe_import("services.rag_chain", None)
 _get_rag_response = getattr(_rag_mod_v2, "get_rag_response", None)
 
+def _to_text(o: Any) -> str:
+    if isinstance(o, str):
+        return o
+    if isinstance(o, dict):
+        for k in ("answer", "output", "result", "text", "final"):
+            if isinstance(o.get(k), str):
+                return str(o[k])
+    return str(o)
+
+def _strip_citations(text: str) -> str:
+    """
+    本文から「参考:…/出典:…」や「(p.12)/(p.？)」「（p.？）」などの脚注断片を徹底除去。
+    """
+    if not text:
+        return text
+
+    # 行頭の 参考: / 資料: / 出典:
+    text = re.sub(r"(?m)^\s*(参考|資料|出典)\s*[:：].*$", "", text)
+
+    # 文中の「参考: …」「出典: …」を改行まで削除
+    text = re.sub(r"(参考|資料|出典)\s*[:：].*$", "", text)
+
+    # (p.12), (p. 12), (p.?), （p.？） 等の削除（半角/全角・?対応）
+    text = re.sub(r"[（(]\s*p\s*[\.\:：]?\s*(\d+|[?？]+)\s*[)）]", "", text, flags=re.IGNORECASE)
+
+    # 余分な空白/空行
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
 def _rag_answer(q: str) -> Tuple[str, List[str]]:
     """
     RAGの標準入口。返り値は (answer, sources)。
@@ -108,7 +137,7 @@ def _rag_answer(q: str) -> Tuple[str, List[str]]:
     # 旧I/F
     if callable(_ask_rag):
         try:
-            out = _ask_rag(q, include_sources=_INCLUDE_SOURCES and not _HIDE_SOURCES)
+            out = _ask_rag(q, include_sources=(not _HIDE_SOURCES) and _INCLUDE_SOURCES)
             ans = _strip_citations(_to_text(out))
             srcs: List[str] = []
             if (not _HIDE_SOURCES) and _INCLUDE_SOURCES and isinstance(out, dict):
@@ -178,39 +207,6 @@ def _llm_answer(prompt: str) -> str:
 # -------------------------------
 # 6) テキスト整形 & 質問の軽い正規化
 # -------------------------------
-def _strip_citations(text: str) -> str:
-    """
-    参考/出典行、ページ表記 (p.12)/(p.？)/(p.?)、全角括弧版などを徹底除去。
-    """
-    if not text:
-        return text
-
-    # 行頭の 参考: / 資料: / 出典:
-    text = re.sub(r"(?m)^\s*(参考|資料|出典)\s*[:：].*$", "", text)
-
-    # 文中の「参考: …」ブロックを改行まで削除
-    text = re.sub(r"(参考|資料|出典)\s*[:：].*$", "", text)
-
-    # (p.12), (p. 12), (p.?), （p.？） 等の削除（半角/全角・?対応）
-    text = re.sub(r"[（(]\s*p\s*[\.\:：]?\s*(\d+|[?？]+)\s*[)）]", "", text, flags=re.IGNORECASE)
-
-    # 余分な空行・伏字の抑止
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"[○◯〇×]{2,}(市|区|町|村)", "（資料に記載なし）", text)
-    text = re.sub(r"[○◯〇×]+[-ー]?(エリア|地域|方面)", "（資料に記載なし）", text)
-
-    return text.strip()
-
-def _to_text(o: Any) -> str:
-    if isinstance(o, str):
-        return o
-    if isinstance(o, dict):
-        for k in ("answer", "output", "result", "text", "final"):
-            if isinstance(o.get(k), str):
-                return str(o[k])
-    return str(o)
-
-# よくある表記ゆれを補う（クエリの当たりを広げる）
 def _normalize_query(q: str) -> str:
     if not q:
         return q
@@ -262,6 +258,8 @@ def chat(req: ChatRequest) -> Dict[str, Any]:
     if not raw:
         raise HTTPException(status_code=400, detail="Empty question")
     resp = _generate_response_sync(raw, req.source or "web")
+    # 念のため本文の脚注断片を最終除去（防御的）
+    resp["answer"] = _strip_citations(resp.get("answer", ""))
     resp["elapsed"] = round(resp.get("elapsed", 0.0), 3)
     return resp
 
