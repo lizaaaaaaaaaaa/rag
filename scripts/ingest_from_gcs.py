@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-GCSに置いたPDF（例: uploads/ と uploads/admin/）を**既存の取り込みロジック**でまとめて取り込み、
-FAISS をリロードして即時反映させるだけの最小スクリプト。
+GCSに置いたPDF（例: uploads/ と uploads/admin/）を既存の取り込みロジックで一括取り込みし、
+必要に応じてFAISSをリロード＆（任意で）最新版のindexをGCSへ反映するスクリプト。
 
-既存の性能・分割・埋め込み・保存フローは `ingest_service.ingest_pdf_to_vectorstore_entry`
-にそのまま委譲するため、アプリ本体への変更は不要。
+本スクリプトは ingest_service.ingest_pdf_to_vectorstore_entry（または同等）へ委譲します。
+さらに、取り込み直前に以下の環境変数を設定して、ingested_text.py 側で
+メタデータ（original_filename / gcs_path / page）を確実に付与できるようにします：
+
+- INGEST_GCS_BUCKET
+- INGEST_GCS_BLOB_NAME
+- INGEST_ORIGINAL_FILENAME
 
 環境変数:
 - GCS_BUCKET_NAME  : 必須 例) run-sources-rag-cloud-project-asia-northeast1
@@ -40,11 +45,11 @@ except Exception:
 try:
     from rag.fast_rag_chain import refresh_vectorstore  # type: ignore
 except Exception:
-    # もしパスが違う構成なら素直に失敗してよい（本体に依存）
+    # 見つからない環境ではスキップ
     print("[warn] rag.fast_rag_chain not found; refresh will be skipped")
     refresh_vectorstore = None  # type: ignore
 
-# GCSユーティリティ（既に依存に含まれている前提）
+# GCSユーティリティ
 from google.cloud import storage  # type: ignore
 
 VECTOR_DIR = os.getenv("VECTOR_DIR", "rag/vectorstore")
@@ -84,12 +89,20 @@ def ingest_from_gcs(bucket_name: str, prefixes: Iterable[str]) -> int:
         for blob in bucket.list_blobs(prefix=prefix):
             if not _is_pdf_name(blob.name):
                 continue
+
             # 一時ファイルに落としてから既存ロジックに委譲
             with NamedTemporaryFile(suffix=".pdf") as tmp:
                 blob.download_to_filename(tmp.name)
                 try:
+                    # --- ここが今回の追加: 取り込み先に GCS メタ情報を渡す ---
+                    # ingested_text.py が original_filename / gcs_path / page を補完できるようにする
+                    os.environ["INGEST_GCS_BUCKET"] = bucket_name
+                    os.environ["INGEST_GCS_BLOB_NAME"] = blob.name
+                    os.environ["INGEST_ORIGINAL_FILENAME"] = os.path.basename(blob.name)
+
                     ingest_one(tmp.name)
                     total += 1
+
                     if total % 20 == 0:
                         print(f"[progress] ingested {total} files so far…")
                 except Exception as e:
@@ -109,7 +122,7 @@ def main() -> None:
     # （任意）更新版ベクトルストアをGCSへ反映
     _upload_vectorstore_to_gcs_if_enabled(bucket)
 
-    # ランタイムへ即時反映
+    # ランタイムへ即時反映（FAST 実装があれば）
     if callable(refresh_vectorstore):
         try:
             refresh_vectorstore(force=True)

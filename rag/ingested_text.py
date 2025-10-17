@@ -499,7 +499,30 @@ def ingest_pdf_to_vectorstore(pdf_path: str):
             separators=["\n\n", "\n", "。", "！", "？", "、", " ", ""]
         )
         documents = splitter.split_documents(docs)
-        
+
+        # --- B案: 取り込み時にメタデータを整える（original_filename / gcs_path / page）---
+        try:
+            gcs_bucket = os.getenv("INGEST_GCS_BUCKET") or ""
+            gcs_blob   = os.getenv("INGEST_GCS_BLOB_NAME") or ""
+            original   = os.getenv("INGEST_ORIGINAL_FILENAME") or os.path.basename(pdf_path)
+            gcs_path   = f"gs://{gcs_bucket}/{gcs_blob}" if gcs_bucket and gcs_blob else ""
+            for d in documents:
+                md = d.metadata or {}
+                # page系キーを page に正規化
+                page = md.get("page")
+                if page is None:
+                    page = md.get("page_number") or md.get("pageIndex")
+                    if page is not None:
+                        md["page"] = page
+                # ソース名・GCSパス補完
+                md.setdefault("original_filename", original)
+                if gcs_path:
+                    md.setdefault("gcs_path", gcs_path)
+                d.metadata = md
+        except Exception as _e:
+            # メタデータ補強は best-effort（取り込み自体は続行）
+            logger.warning(f"[ingest] metadata enrichment skipped: {_e}")
+
         # 埋め込みモデル
         embeddings = MyEmbedding("intfloat/multilingual-e5-small")
         
