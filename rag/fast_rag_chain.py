@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-rag/fast_rag_chain.py — 完全修正版（最小影響・即時反映対応）
+rag/fast_rag_chain.py — 完全修正版（最小影響・即時反映対応・伏字ガード）
 
 目的:
 - 既存I/Fを維持しつつ、アップロード直後にRAGへ**即時反映**できるようにする
 - RetrievalQAのキー差異に**両対応**（{"query", "question"} を同時に渡す）
 - ベクトルストアがローカルに無い場合、**任意でGCS補完**を試みる
+- 🔒 回答の最終段で **伏字/プレースホルダ（○○、〇〇、××、XXXX、TBD、？？？）を排除**し、
+  かつ**文末を必ず完結**させる（Cloud Run経路でも常に有効）
 
 主な公開関数:
 - load_super_fast_vectorstore() -> FAISS
@@ -19,11 +21,12 @@ ENV:
 - VECTOR_DIR (default: rag/vectorstore)
 - INDEX_NAME (default: index)
 - FAST_RAG_MODEL (default: gpt-3.5-turbo)
-- FAST_RAG_TOP_K (default: 3)
-- FAST_RAG_TIMEOUT (default: 5.0)
+- FAST_RAG_TOP_K (default: 10)
+- FAST_RAG_TIMEOUT (default: 10.0)
 - FAST_RAG_FAQ_FIRST (default: true)
 - RAG_RELOAD_COOLDOWN_SEC (default: 3)
 - VECTORSTORE_TRY_GCS_SYNC (default: true)  # ローカルに index.* がない時のみGCS補完
+- RAG_PROMPT_PATH (default: rag/prompt_template.txt)
 """
 from __future__ import annotations
 
@@ -35,6 +38,7 @@ import time
 import concurrent.futures
 from typing import Optional, Dict, Any
 import logging
+import re  # ★ 伏字サニタイズ用
 
 # --- add: ensure project root in sys.path for local runs ---
 # /rag/fast_rag_chain.py -> /<project-root>
@@ -56,17 +60,36 @@ from langchain.chains import RetrievalQA
 # 環境変数スイッチ
 # =========================
 FAST_RAG_FAQ_FIRST = os.getenv("FAST_RAG_FAQ_FIRST", "true").lower() == "true"  # FAQ優先
-FAST_RAG_TIMEOUT = float(os.getenv("FAST_RAG_TIMEOUT", "10"))                 # RAG呼び上限秒
+FAST_RAG_TIMEOUT = float(os.getenv("FAST_RAG_TIMEOUT", "10"))                   # RAG呼び上限秒
 FAST_RAG_TOP_K = int(os.getenv("FAST_RAG_TOP_K", "10"))                         # 検索k
 
 VECTOR_DIR = os.getenv("VECTOR_DIR", "rag/vectorstore")
 INDEX_NAME = os.getenv("INDEX_NAME", "index")
-MODEL_NAME = os.getenv("FAST_RAG_MODEL", "gpt-3.5-turbo")                      # OpenAIモデル名
+MODEL_NAME = os.getenv("FAST_RAG_MODEL", "gpt-3.5-turbo")                       # OpenAIモデル名
 PROMPT_PATH = os.getenv("RAG_PROMPT_PATH", "rag/prompt_template.txt")
 
 # 追加: 即時反映/補完関連
 RAG_RELOAD_COOLDOWN_SEC = int(os.getenv("RAG_RELOAD_COOLDOWN_SEC", "3"))
 VECTORSTORE_TRY_GCS_SYNC = os.getenv("VECTORSTORE_TRY_GCS_SYNC", "true").lower() == "true"
+
+
+# =========================
+# 伏字サニタイズ（最終ガード）
+# =========================
+_PLACEHOLDER_RE = re.compile(r"(○○|〇〇|××|X{2,}|XXXX|TBD|？？？)")
+
+def _sanitize_answer(text: str) -> str:
+    """伏字を排除し、文末を必ず完結させる最終ガード。"""
+    if not text:
+        return text
+    t = _PLACEHOLDER_RE.sub("（資料に記載なし）", str(text))
+    if not t.endswith(("。", "！", "？", ".", "!", "?")):
+        # ぶら下がり読点を句点に閉じる
+        if t.endswith("、"):
+            t = t[:-1] + "。"
+        else:
+            t += "。"
+    return t
 
 
 # =========================
@@ -204,6 +227,13 @@ def load_super_fast_vectorstore() -> FAISS:
                 index_name=INDEX_NAME,
                 allow_dangerous_deserialization=True,
             )
+            # 規模ログ（デバッグ用）
+            try:
+                ntotal = getattr(getattr(_VS, "index", None), "ntotal", None)
+                if ntotal is not None:
+                    logger.info("[RAG] faiss.ntotal=%s", ntotal)
+            except Exception:
+                pass
         except Exception:
             _VS = FAISS.from_texts(texts=[], embedding=emb)
         _LAST_VS_LOADED_AT = time.time()
@@ -269,13 +299,14 @@ class UltraFastFAQChain:
     def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         query = (inputs.get("query") or inputs.get("question") or "").strip()
         if not query:
-            return {"result": "ご質問が空のようです。もう一度入力してください。", "source_documents": []}
+            return {"result": _sanitize_answer("ご質問が空のようです。もう一度入力してください。"),
+                    "source_documents": []}
 
         # 1) FAQ即答（任意）
         if FAST_RAG_FAQ_FIRST:
             faq = get_ultra_fast_cached_response(query)
             if faq:
-                return {"result": faq, "source_documents": []}
+                return {"result": _sanitize_answer(faq), "source_documents": []}
 
         # 2) RAG実行（タイムボックス）
         #    🔧 両キーを渡して環境差に対応
@@ -284,12 +315,12 @@ class UltraFastFAQChain:
             res = future.result(timeout=FAST_RAG_TIMEOUT)
         except concurrent.futures.TimeoutError:
             return {
-                "result": "回答に時間がかかっています。別の聞き方でお試しください。",
+                "result": _sanitize_answer("回答に時間がかかっています。別の聞き方でお試しください。"),
                 "source_documents": [],
             }
         except Exception:
             return {
-                "result": "うまく処理できませんでした。時間をおいて再度お試しください。",
+                "result": _sanitize_answer("うまく処理できませんでした。時間をおいて再度お試しください。"),
                 "source_documents": [],
             }
 
@@ -303,6 +334,9 @@ class UltraFastFAQChain:
 
         if not self.return_source:
             src_docs = []
+
+        # ★ 最終ガード適用（伏字排除 & 句点で閉じる）
+        result_text = _sanitize_answer(result_text)
 
         return {"result": result_text, "source_documents": src_docs}
 
