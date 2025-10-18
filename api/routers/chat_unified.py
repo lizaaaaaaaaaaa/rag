@@ -130,6 +130,17 @@ def _strip_citations(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
+# -------------------------------
+# 3-1) 出口サニタイズ：プレースホルダー（○○/TBD/？？？ 等）を最終段で除去
+# -------------------------------
+_PLACEHOLDER_RE = re.compile(r"(○○|〇〇|××|X{2,}|XXXX|TBD|未定|要確認|？？？|\?{2,}|＜.*?＞|ここに.*?を書く)")
+
+def _strip_placeholders(t: str) -> str:
+    if not t:
+        return t
+    tt = _PLACEHOLDER_RE.sub("（資料に記載なし）", t)
+    return "現在参照中の資料には該当情報がありません。必要なら担当へ確認します。" if ("（資料に記載なし）" in tt and len(tt) < 40) else tt
+
 def _rag_answer(q: str) -> Tuple[str, List[str]]:
     """
     RAGの標準入口。返り値は (answer, sources)。
@@ -260,6 +271,8 @@ def chat(req: ChatRequest) -> Dict[str, Any]:
     resp = _generate_response_sync(raw, req.source or "web")
     # 念のため本文の脚注断片を最終除去（防御的）
     resp["answer"] = _strip_citations(resp.get("answer", ""))
+    # ★ 最終ガード：プレースホルダー完全ブロック（○○/TBD/？？？ 等）
+    resp["answer"] = _strip_placeholders(resp["answer"])
     resp["elapsed"] = round(resp.get("elapsed", 0.0), 3)
     return resp
 

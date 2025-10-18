@@ -1,3 +1,4 @@
+# services/rag_processing_service.py  — 完全修正版
 import logging
 import time
 import re
@@ -33,6 +34,11 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
+# 追加：プレースホルダー検知の共通パターン（禁止語）
+_PLACEHOLDER_BLOCK_RE = re.compile(
+    r"(○○|〇〇|◯◯|××|XX|[Xx]{2,}|TBD|未定|要確認|？？？|\?{2,}|＜.*?＞|ここに.*?を書く)"
+)
+
 class OptimizedRAGProcessingService:
     """最適化版RAG処理統合サービス（速度優先）"""
     
@@ -49,8 +55,8 @@ class OptimizedRAGProcessingService:
         self.enable_query_expansion = os.environ.get("ENABLE_QUERY_EXPANSION", "false").lower() == "true"  # デフォルトOFF
         self.enable_reranking = os.environ.get("ENABLE_RERANKING", "true").lower() == "true"
         self.enable_source_display = os.environ.get("ENABLE_SOURCE_DISPLAY", "true").lower() == "true"  # 出典表示
-        # 追加: 厳格制御フラグ
-        self.strict_rag_only = os.environ.get("STRICT_RAG_ONLY", "false").lower() in ("1","false","yes")
+        # 修正：厳格制御フラグの真偽値パース
+        self.strict_rag_only = os.environ.get("STRICT_RAG_ONLY", "false").lower() in ("1","true","yes","on")
         self.strict_grounded = os.environ.get("STRICT_GROUNDED_ANSWERING", "true").lower() in ("1","true","yes")
         self.location_intent_strict = os.environ.get("LOCATION_INTENT_STRICT", "true").lower() in ("1","true","yes")
         self.rag_timeout = float(os.environ.get("OPTIMIZED_RAG_TIMEOUT", "8"))  # タイムアウト8秒
@@ -185,9 +191,8 @@ class OptimizedRAGProcessingService:
             for q in queries:
                 results = self.vectorstore.similarity_search_with_score(q, k=self.max_documents)
                 for d, score in results:
-                    # スコア閾値（低すぎるものは除外）
-                    if score is not None and score <= 1.0:  # VectorStoreの実装によりスコア定義が異なるため寛容に
-                        docs.append((d, score))
+                    # 修正：しきい値フィルタを撤廃（実装間のスコア定義差を吸収）
+                    docs.append((d, score))
             
             retrieval_time = time.time() - start
             
@@ -229,7 +234,7 @@ class OptimizedRAGProcessingService:
                 top_k=min(self.max_documents, len(docs_only))
             )
             
-            # スコアを再付与
+            # スコアを再付与（簡易）
             reranked_with_scores = [(doc, 1.0 - i * 0.1) for i, doc in enumerate(reranked)]
             
             retrieval_result["documents"] = reranked_with_scores
@@ -349,7 +354,7 @@ class OptimizedRAGProcessingService:
         return self._clean_response_fast(answer)
 
     def _clean_response_fast(self, raw_response: str) -> str:
-        """高速応答クリーニング（最小限）"""
+        """高速応答クリーニング（最小限 + プレースホルダー除去）"""
         if not raw_response or len(raw_response.strip()) < 3:
             return "申し訳ございません。詳細な情報をお答えできませんでした。"
         
@@ -361,12 +366,14 @@ class OptimizedRAGProcessingService:
             r"^回答[:：]\s*",
             r"^情報[:：]\s*",
         ]
-        
         for pattern in cleanup_patterns:
             cleaned = re.sub(pattern, "", cleaned, flags=re.MULTILINE)
         
         # 改行の正規化
         cleaned = re.sub(r'\n\s*\n', '\n', cleaned)
+
+        # 追加：プレースホルダーは表示前に安全な表現に置換
+        cleaned = _PLACEHOLDER_BLOCK_RE.sub("（資料に記載なし）", cleaned)
         
         return cleaned
 
@@ -383,10 +390,11 @@ class OptimizedRAGProcessingService:
         if self.enable_source_display:
             for i, (doc, score) in enumerate(documents[:2]):
                 metadata = getattr(doc, 'metadata', {})
+                safe_score = round(score, 2) if isinstance(score, (int, float)) else None
                 sources.append({
                     "index": i,
                     "source": metadata.get('source', 'unknown'),
-                    "score": round(score, 2)
+                    "score": safe_score
                 })
         
         return {
@@ -401,7 +409,7 @@ class OptimizedRAGProcessingService:
             }
         }
 
-    # ========= 追加：厳格ガード一式 =========
+    # ========= 厳格ガード一式 =========
     def _apply_strict_guards(self, query: str, generation_result: Dict, retrieval_result: Dict, platform: str) -> Dict[str, Any]:
         """当て字・根拠外地名・RAG未ヒットをブロックし、固定文へ差し替える"""
         documents = retrieval_result.get("documents", [])
@@ -412,8 +420,8 @@ class OptimizedRAGProcessingService:
             return self._fixed_noinfo_result(retrieval_result, generation_result)
 
         if self.strict_grounded:
-            # 2) プレースホルダ検知
-            if re.search(r"(○○|◯◯|△△|XX|[Xx]{2,})", answer):
+            # 2) プレースホルダ検知（拡張）
+            if _PLACEHOLDER_BLOCK_RE.search(answer):
                 return self._fixed_noinfo_result(retrieval_result, generation_result)
             # 3) 地名系は本文一致を要求
             if self.location_intent_strict and self._is_location_intent(query):

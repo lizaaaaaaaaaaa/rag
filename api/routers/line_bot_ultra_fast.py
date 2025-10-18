@@ -89,16 +89,33 @@ def _strip_citations(text: str) -> str:
     # 本文中の「参考: … / 資料: … / 出典: …」も行末まで削除
     text = re.sub(r"(参考|参考資料|資料|出典|引用)\s*[:：].*$", "", text, flags=re.MULTILINE)
 
-    # 「【出典】…」のようなブロック以降を削る
+    # 「【出典】…」ブロック以降を削る
     text = re.sub(r"【\s*(出典|参考|資料)\s*】[\s\S]*?$", "", text, flags=re.MULTILINE)
 
-    # (p.12) / (p. 12) / (p:12) / (p：12) / (p.?) / （p.？） など
-    # 半角/全角かっこ・?と全角？に対応。文中どこでも除去。
+    # (p.12) / (p. 12) / (p:12) / (p：12) / (p.?) / （p.？） 等（半角/全角）
     text = re.sub(r"[（(]\s*[pP]\s*[\.\:：]?\s*(\d+|[?？]+)\s*[)）]", "", text)
 
     # 連続改行の整形
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text
+
+# ======================================================================
+# ★ 追加：プレースホルダー（○○/TBD/？？？ 等）の最終ガード
+# ======================================================================
+_PLACEHOLDER_RE = re.compile(r"(○○|〇〇|××|X{2,}|XXXX|TBD|未定|要確認|？？？|\?{2,}|＜.*?＞|ここに.*?を書く)")
+
+def _strip_placeholders(t: str) -> str:
+    if not t:
+        return t
+    tt = _PLACEHOLDER_RE.sub("（資料に記載なし）", t)
+    # 置換だらけで短すぎる場合は安全文に差し替え
+    if "（資料に記載なし）" in tt and len(tt) < 40:
+        return "資料内に該当情報が見つかりませんでした。必要であれば担当へ確認します。"
+    return tt
+
+def _finalize_text(t: str) -> str:
+    """送信直前の最終整形：脚注断片を除去 → プレースホルダーを除去"""
+    return _strip_placeholders(_strip_citations(t or "")).strip()
 
 # ======================================================================
 # LINE SDK v3（Flex を含めた完全インポート）
@@ -357,7 +374,7 @@ def _reply_or_push(reply_token: str, user_id: str, text: str) -> bool:
     if not api: logger.error("MessagingApi not ready"); return False
     if dup_guard.seen(user_id, f"out:{text[:64]}"): return True
     try:
-        cleaned = _strip_citations(text or "")
+        cleaned = _finalize_text(text)  # ← 脚注・プレースホルダーを最終除去
         try:
             api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=cleaned)]))
             return True
@@ -373,7 +390,7 @@ def _push(user_id: str, text: str) -> bool:
     if not api: logger.error("MessagingApi not ready"); return False
     if dup_guard.seen(user_id, f"out:{text[:64]}"): return True
     try:
-        cleaned = _strip_citations(text or "")
+        cleaned = _finalize_text(text)  # ← 脚注・プレースホルダーを最終除去
         api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[TextMessage(text=cleaned)])); return True
     except Exception as e:
         logger.error(f"LINE push failed: {e}"); return False
@@ -538,7 +555,7 @@ def _worker_finance(user_id: str, user_text: str):
             _push(user_id, "資金診断を準備中です。時間をおいてお試しください。"); return
         import inspect, asyncio
         result = asyncio.run(run_financial_plan(user_text)) if inspect.iscoroutinefunction(run_financial_plan) else run_financial_plan(user_text)
-        _push(user_id, _strip_citations(result or "").strip() or "結果を作成できませんでした。")
+        _push(user_id, result or "結果を作成できませんでした。")  # ← 送信側で最終サニタイズ
     except Exception as e:
         logger.error(f"_worker_finance fatal: {e}")
 
@@ -551,7 +568,7 @@ def _worker_ai(user_id: str, user_text: str):
             answer, _ = rag_fn(user_text)
         except Exception as e:
             logger.error(f"RAG error: {e}"); answer = "該当情報が見つかりませんでした。別の聞き方でお試しください。"
-        _push(user_id, _strip_citations(answer or "").strip() or "回答を作成できませんでした。")
+        _push(user_id, answer or "回答を作成できませんでした。")  # ← 送信側で最終サニタイズ
     except Exception as e:
         logger.error(f"_worker_ai fatal: {e}")
 
