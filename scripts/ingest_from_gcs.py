@@ -16,8 +16,10 @@ from __future__ import annotations
 import os
 import sys
 import pathlib
+import re
+import tempfile
 import traceback
-from typing import Iterable, Tuple, Optional
+from typing import Iterable
 
 # ---- プロジェクトルートを import パスへ（ローカル実行安定化）----
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -71,8 +73,21 @@ def _iter_prefixes(raw: str) -> Iterable[str]:
                 p += "/"
             yield p
 
-def _list_objects(bucket: storage.Bucket, prefix: str) -> Iterable[storage.Blob]:
+def _list_objects(bucket: storage.Bucket, prefix: str):
     return bucket.list_blobs(prefix=prefix)
+
+def _safe_local_name(blob_name: str) -> str:
+    # Windows でも安全なファイル名にする
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", blob_name)
+
+def _download_to_temp(bucket: storage.Bucket, blob_name: str) -> str:
+    tmp_root = pathlib.Path(tempfile.gettempdir()) / "rag" / "gcs_ingest"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    local_path = tmp_root / _safe_local_name(blob_name)
+    blob = bucket.blob(blob_name)
+    blob.download_to_filename(str(local_path))
+    print(f"[download] gs://{bucket.name}/{blob_name} -> {local_path}")
+    return str(local_path)
 
 def _upload_vectorstore_to_gcs_if_enabled(bucket: storage.Bucket) -> None:
     if not UPLOAD_UPDATED_VECTORSTORE_TO_GCS:
@@ -121,13 +136,15 @@ def main():
             original_filename = os.path.basename(b.name)
             gcs_path = f"gs://{bucket_name}/{b.name}"
 
+            # 取り込みメタデータを環境変数で渡す（ingest側で拾う）
             os.environ["INGEST_GCS_BUCKET"] = bucket_name
             os.environ["INGEST_GCS_BLOB_NAME"] = b.name
             os.environ["INGEST_ORIGINAL_FILENAME"] = original_filename
 
             try:
-                print(f"[ingest] {gcs_path}")
-                _ingest_func(gcs_path)  # ← ingest_pdf_to_vectorstore_entry(str path)
+                local_path = _download_to_temp(bucket, b.name)
+                print(f"[ingest] {gcs_path} (local={local_path})")
+                _ingest_func(local_path)  # ← ローカルに落としてから取り込み
                 success += 1
             except Exception as e:
                 failed += 1
