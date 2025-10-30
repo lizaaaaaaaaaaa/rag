@@ -161,57 +161,56 @@ if not PUBLIC_BASE_URL:
 
 # LIFF の同意用 URL（最優先で使用）
 LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").rstrip("/")
+# 友だち共有 LIFF
+LIFF_ID_SHARE  = os.getenv("LIFF_ID_SHARE", "").strip()
+LIFF_SHARE_URL = os.getenv("LIFF_SHARE_URL", "").strip()
+
+def _share_liff_url() -> str:
+    if LIFF_SHARE_URL:
+        return LIFF_SHARE_URL
+    if LIFF_ID_SHARE:
+        return f"https://liff.line.me/{LIFF_ID_SHARE}/share"
+    return (PUBLIC_BASE_URL or "https://ai.kinoedesign.co.jp/")
 
 # ======================================================================
 # 固定テンプレ（※リッチメニューの文言は変更しない）
 # ======================================================================
 RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
-    "follow_greeting": """こんにちは！キノエデザイン住まいAIプランナー（秋山住研）です。
+    "follow_greeting": """こんにちは！キノエデザイン住まいAIプランナーです。
 この度は友だち追加ありがとうございます✨
-まずはメニュー左上の「AI相談（24h）」から、 気になることを質問してみてください。
-
-
-すぐ使えるメニューはこちら👇
-🤖AI相談 / 📍来場予約 / 📄資料請求 / 💴資金計画 / 🌐サイト / 💬チャット
-
-
-※匿名OK／保存OFF（既定）
-※AIの回答は必ずしも正しいとは限りません。➡ 最終案内はスタッフが行います。
-※AIは24時間、担当者は当日〜翌営業日に返信します。
-※ご使用の前に、必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://ai.kinoedesign.co.jp/privacy-policy 】
-利用規約：【https://ai.kinoedesign.co.jp/termsofuse/service 】
-Cookie：【https://ai.kinoedesign.co.jp/cookie 】""",
+このAIは住宅検討の参考用に設計された自動応答です。
+最終的な、ご提案はスタッフが行います。
+また、AIに個人情報は入力しないでください。
+📸💪 キノエデザインの設計思想とAI技術が、理想の住まいづくりを完全サポート！
+📱💬まずはリッチメニューから気になる項目をタップ
+または、直接メッセージでご質問ください。
+📍 各展示場でも実際にご相談いただけます""",
 
     "AI相談": """🤖 AI住まい相談を開始します！
 キノエデザインの住まいAIプランナーです。
 住まいに関するご質問をお気軽にどうぞ！
-💡 **例えば**
+💡 例えば
 ・坪単価について教えて
 ・標準仕様はどんな感じ？
 ・耐震性能について知りたい
 ・断熱性能はどのくらい？
 何でもお聞きください😊
 
+※AIに個人情報は入力しないでください。
+※このAIは住宅検討の参考用に設計された自動応答です。
+※AIの回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。
+※ご質問の内容により、AIの回答までお時間を頂戴する場合がございます。
+※ご使用の前に、必ず同意が必要となります。何卒ご理解賜りますようお願い申し上げます。""",
 
-→ ＜AI相談（24h）＞
-※ AIに個人情報は入力しないでください。
-※ AIの回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。
-※ご質問の内容により、AIの回答までお時間を頂戴する場合がございます。何卒ご理解賜りますようお願い申し上げます。
-※ご使用の前に、必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://ai.kinoedesign.co.jp/privacy-policy 】
-利用規約：【https://ai.kinoedesign.co.jp/termsofuse/service 】
-Cookie：【https://ai.kinoedesign.co.jp/cookie 】""",
-
-    "AI住まいサイト": """🌐 AI住まいサイトのご案内
-キノエデザインの住まい情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）
-🏠
-回遊動線／資金目安／土地・学区／性能・保証など、 気になることや、お悩みを AI が、お答え解決するホームページです。
+    "AI住まいサイト": """🌐 住まいAIサイトのご案内
+キノエデザインの住まいAI情報サイトをご紹介します。（家づくりの疑問にAIが24時間即回答）
+🏠気になることや、お悩みをAIが、お答え・解決するホームページです。
 ZINE、ダウンロードもできます。
-
-
-※ 匿名OK／保存OFF（既定）
-※ AIの回答は必ずしも正しいとは限りません。 → 最終案内はスタッフが行います。
+※ AIに個人情報は入力しないでください／保存OFF（既定）
+※ このAIは住宅検討の参考用に設計された自動応答です。
+※ AIの回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。
+※ ご質問の内容により、AIの回答までお時間を頂戴する場合がございます。
+※ ご使用の前に、必ず同意が必要となります。何卒ご理解賜りますようお願い申し上げます。
 📱 サイトURL：
 https://ai.kinoedesign.co.jp/""",
 
@@ -221,56 +220,21 @@ https://ai.kinoedesign.co.jp/""",
 
     "展示場来場予約": """📍 展示場のご来場予約:
 24 時間いつでも、予約OKです。
-ご予約の際は、下記の来場予約ホームページURLよりご送信ください。：
-
+ご予約の際は、下記の来場予約ホームページURLよりご送信ください。
 来場予約ホームページURL：
 【https://kinoedesign.co.jp/consultation/ 】""",
 
-    "資金計画": """💬 AI資金診断のご案内
-本診断は匿名でご利用いただけます。
-ご回答内容は保存いたしません。
-算出される金額は試算（概算）であり、目安としてご確認ください。
-お手数ですが、以下の項目をご入力ください。
-
-・世帯年収（合算の有無）：
-・頭金（自己資金）：
-・返済期間（年数）：
-・想定金利：
-・他の借入の毎月返済額合計（車・カード・教育ローン等):
-・借入時の年齢：
-
-未入力の項目があっても進められます。
-ご入力後、概算結果をご提示いたします。
-※ 金融機関・金利変動で変わってきますので、あくまで目安として参照ください。
-※ 結果は概算です → 詳細はスタッフがご案内します。
-※ AIの回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。
-※ご使用の前に、必ず以下の取り扱いをご確認ください。
-プライバシーポリシー：【https://ai.kinoedesign.co.jp/privacy-policy 】
-利用規約：【https://ai.kinoedesign.co.jp/termsofuse/service 】
-Cookie：【https://ai.kinoedesign.co.jp/cookie 】""",
-
     "チャット相談": """💬 スタッフとのご相談
-AI より、人の方がいい方はこちら
+AIより、人の方がお好みの方はこちら。
 スタッフとチャット相談。
 お気軽にメッセージどうぞ！
-
 【対応時間】
 営業時間：9:00-18:00
-
 📱 ご相談方法：
 ・このLINEでの直接チャット相談
-・お電話での相談
-・展示場での対面相談
-
-📱 ご相談内容：
-・住まいづくり全般
-・土地探し
-・資金計画
-・間取り
-・デザイン
-・住宅性能について など
-
-営業時間内でしたら迅速にお返事します。
+・お電話での相談 0794-82-8540
+・展示場での対面相談 https://kinoedesign.co.jp/consultation/
+・メールでのお問い合わせ https://kinoedesign.co.jp/contact/
 お気軽にお声かけください！""",
 }
 
@@ -279,11 +243,11 @@ RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
     "AI住まいサイト": "AI住まいサイト", "🌐 AI住まいサイト": "AI住まいサイト", "サイト": "AI住まいサイト", "ホームページ": "AI住まいサイト",
     "資料請求": "資料請求", "📋 資料請求": "資料請求",
     "展示場来場予約": "展示場来場予約", "📍 展示場来場　予約": "展示場来場予約", "来場予約": "展示場来場予約",
-    "資金計画": "資金計画", "💴 資金計画": "資金計画", "💰 資金計画": "資金計画",
     "チャット相談": "チャット相談", "💬チャット相談": "チャット相談", "チャット": "チャット相談",
+    "友だちに紹介": "友だちに紹介", "友達に紹介": "友だちに紹介", "👬 友だちに紹介": "友だちに紹介",
     # 可能性のある英語/シンプルdata対策
     "ai_consult": "AI相談", "site": "AI住まいサイト", "docs": "資料請求",
-    "reservation": "展示場来場予約", "finance": "資金計画", "chat": "チャット相談",
+    "reservation": "展示場来場予約", "chat": "チャット相談",
 }
 
 # ======================================================================
@@ -706,15 +670,35 @@ if LINE_SDK_AVAILABLE and handler:
                             _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
                     sessions.set_mode(user_id, "ai")
-                elif key == "資金計画":
-                    sessions.set_mode(user_id, "finance")
-                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key]); return
+                elif key == "友だちに紹介":
+                    share_url = _share_liff_url()
+                    template = {
+                        "type": "template",
+                        "altText": "友だちに紹介",
+                        "template": {
+                            "type": "buttons",
+                            "text": "友だちに共有するリンクを開きますか？",
+                            "actions": [{
+                                "type": "uri",
+                                "label": "友だちに共有",
+                                "uri": share_url
+                            }]
+                        }
+                    }
+                    try:
+                        api = _ensure_api()
+                        if api:
+                            from linebot.v3.messaging import ReplyMessageRequest
+                            api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[template]))
+                    except Exception:
+                        _reply_or_push(reply_token, user_id, f"友だちに共有するにはこちらを開いてください：\n{share_url}")
+                    return
 
             # モードに応じて振り分け
             mode = sessions.get_mode(user_id)
-            if mode == "finance":
-                _reply_or_push(reply_token, user_id, "📊 試算中です。少しお待ちください…")
-                threading.Thread(target=_worker_finance, args=(user_id, text), daemon=True).start(); return
+            if mode == "ai":
+                _reply_or_push(reply_token, user_id, "🔎 少しお待ちください…")
+                threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start(); return
             if mode == "ai":
                 _reply_or_push(reply_token, user_id, "🔎 少しお待ちください…")
                 threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start(); return
@@ -723,7 +707,7 @@ if LINE_SDK_AVAILABLE and handler:
             fallback = (
                 "ご質問ありがとうございます😊\n\n"
                 "目的のボタンをタップしてください👇\n"
-                ":robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :yen:資金計画 / :globe_with_meridians:サイト / :speech_balloon:チャット\n\n"
+                ":robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :globe_with_meridians:サイト / :speech_balloon:チャット\n\n"
                 "具体的なご質問もお気軽にどうぞ:sparkles:"
             )
             _reply_or_push(reply_token, user_id, fallback)
@@ -761,13 +745,33 @@ if LINE_SDK_AVAILABLE and handler:
                             _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
                     sessions.set_mode(user_id, "ai")
-                elif key == "資金計画":
-                    sessions.set_mode(user_id, "finance")
-                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key]); return
+                elif key == "友だちに紹介":
+                    share_url = _share_liff_url()
+                    template = {
+                        "type": "template",
+                        "altText": "友だちに紹介",
+                        "template": {
+                            "type": "buttons",
+                            "text": "友だちに共有するリンクを開きますか？",
+                            "actions": [{
+                                "type": "uri",
+                                "label": "友だちに共有",
+                                "uri": share_url
+                            }]
+                        }
+                    }
+                    try:
+                        api = _ensure_api()
+                        if api:
+                            from linebot.v3.messaging import ReplyMessageRequest
+                            api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[template]))
+                    except Exception:
+                        _reply_or_push(reply_token, user_id, f"友だちに共有するにはこちらを開いてください：\n{share_url}")
+                    return
 
             _reply_or_push(
                 reply_token, user_id,
-                "目的のボタンをタップしてください😊\n\n:robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :yen:資金計画 / :globe_with_meridians:サイト / :speech_balloon:チャット",
+                "目的のボタンをタップしてください😊\n\n:robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :globe_with_meridians:サイト / :speech_balloon:チャット",
             )
         except Exception as e:
             logger.error(f"postback handler error: {e}")

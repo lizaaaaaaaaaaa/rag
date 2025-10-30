@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>友だちに紹介</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+</head>
+<body>
+  <script>
+    (async () => {
+      try {
+        const LIFF_ID = "{{LIFF_ID_SHARE}}"; // ビルド時/テンプレ差し込みでもOK
+        await liff.init({ liffId: LIFF_ID });
+        if (!liff.isLoggedIn()) await liff.login();
+
+        // 共有する内容（必要に応じて編集）
+        const shareUrl = "{{PUBLIC_FRONT_BASE || 'https://ai.kinoedesign.co.jp/'}}";
+        await liff.shareTargetPicker([
+          { type: "text", text: `🏡 キノエデザインのAI相談はこちら → ${shareUrl}` }
+        ]);
+      } catch(e) {
+        console.error(e);
+      } finally {
+        try { liff.closeWindow(); } catch(_) {}
+      }
+    })();
+  </script>
+</body>
+</html>
