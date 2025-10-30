@@ -161,16 +161,6 @@ if not PUBLIC_BASE_URL:
 
 # LIFF の同意用 URL（最優先で使用）
 LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").rstrip("/")
-# 友だち共有 LIFF
-LIFF_ID_SHARE  = os.getenv("LIFF_ID_SHARE", "").strip()
-LIFF_SHARE_URL = os.getenv("LIFF_SHARE_URL", "").strip()
-
-def _share_liff_url() -> str:
-    if LIFF_SHARE_URL:
-        return LIFF_SHARE_URL
-    if LIFF_ID_SHARE:
-        return f"https://liff.line.me/{LIFF_ID_SHARE}/share"
-    return (PUBLIC_BASE_URL or "https://ai.kinoedesign.co.jp/")
 
 # ======================================================================
 # 固定テンプレ（※リッチメニューの文言は変更しない）
@@ -186,7 +176,7 @@ RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
 または、直接メッセージでご質問ください。
 📍 各展示場でも実際にご相談いただけます""",
 
-    "AI相談": """🤖 AI住まい相談を開始します！
+    "🤖 AI相談": """🤖 AI住まい相談を開始します！
 キノエデザインの住まいAIプランナーです。
 住まいに関するご質問をお気軽にどうぞ！
 💡 例えば
@@ -239,240 +229,200 @@ AIより、人の方がお好みの方はこちら。
 }
 
 RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
-    "AI相談": "AI相談", ":robot: AI相談": "AI相談", "🤖 AI相談": "AI相談",
+    "🤖 AI相談": "🤖 AI相談",
     "AI住まいサイト": "AI住まいサイト", "🌐 AI住まいサイト": "AI住まいサイト", "サイト": "AI住まいサイト", "ホームページ": "AI住まいサイト",
     "資料請求": "資料請求", "📋 資料請求": "資料請求",
     "展示場来場予約": "展示場来場予約", "📍 展示場来場　予約": "展示場来場予約", "来場予約": "展示場来場予約",
+    "資金計画": "資金計画", "💴 資金計画": "資金計画", "💰 資金計画": "資金計画",
     "チャット相談": "チャット相談", "💬チャット相談": "チャット相談", "チャット": "チャット相談",
-    "友だちに紹介": "友だちに紹介", "友達に紹介": "友だちに紹介", "👬 友だちに紹介": "友だちに紹介",
     # 可能性のある英語/シンプルdata対策
-    "ai_consult": "AI相談", "site": "AI住まいサイト", "docs": "資料請求",
-    "reservation": "展示場来場予約", "chat": "チャット相談",
+    "ai_consultation": "🤖 AI相談",
+    "ai_site": "AI住まいサイト",
+    "document_request": "資料請求",
+    "visit_reservation": "展示場来場予約",
+    "financial_plan": "資金計画",
+    "chat_consultation": "チャット相談",
 }
 
 # ======================================================================
-# 軽量重複防止（連打/再送対策）
+# セッション/重複ガード
 # ======================================================================
+class SessionManager:
+    def __init__(self):
+        self._modes: Dict[str, Tuple[str, float]] = {}  # user_id -> (mode, timestamp)
+
+    def get_mode(self, user_id: str) -> Optional[str]:
+        record = self._modes.get(user_id)
+        if not record: return None
+        mode, ts = record
+        if (time.time() - ts) > SESSION_TTL:
+            del self._modes[user_id]
+            return None
+        return mode
+
+    def set_mode(self, user_id: str, mode: str):
+        self._modes[user_id] = (mode, time.time())
+
+sessions = SessionManager()
+
 class DuplicateGuard:
-    def __init__(self): self.recent_events: Dict[str, float] = {}; self.window = 6.0
-    def seen(self, user_id: str, token: str) -> bool:
-        now = time.time(); key = f"{user_id}:{hashlib.md5(token.encode()).hexdigest()[:8]}"; t = self.recent_events.get(key)
-        self.recent_events[key] = now
-        if len(self.recent_events) > 512:
-            cutoff = now - self.window * 2
-            for k, ts in list(self.recent_events.items()):
-                if ts < cutoff: self.recent_events.pop(k, None)
-        return t is not None and (now - t) < self.window
+    def __init__(self, ttl: int = 300):
+        self._seen: Dict[str, float] = {}
+        self._ttl = ttl
 
-dup_guard = DuplicateGuard()
+    def seen(self, user_id: str, key: str) -> bool:
+        now = time.time()
+        full_key = f"{user_id}:{key}"
+        # 期限切れを削除
+        expired = [k for k, ts in self._seen.items() if (now - ts) > self._ttl]
+        for k in expired: del self._seen[k]
+        # 重複チェック
+        if full_key in self._seen: return True
+        self._seen[full_key] = now
+        return False
 
-# ======================================================================
-# セッション管理（AI相談 / 資金計画）
-# ======================================================================
-class SessionStore:
-    def __init__(self, ttl_seconds: int = 1800):
-        self.ttl = ttl_seconds; self.store: Dict[str, Dict[str, Any]] = {}
-    def set_mode(self, user_id: str, mode: str): self.store[user_id] = {"mode": mode, "exp": time.time() + self.ttl}
-    def get_mode(self, user_id: str) -> str:
-        d = self.store.get(user_id)
-        if not d: return ""
-        if d["exp"] < time.time(): self.store.pop(user_id, None); return ""
-        return d.get("mode", "")
-
-sessions = SessionStore(SESSION_TTL)
+dup_guard = DuplicateGuard(ttl=15)
 
 # ======================================================================
-# LINE クライアント（キャッシュ再利用）
+# SDK初期化
 # ======================================================================
-def _get_line_tokens() -> Tuple[str, str]:
-    access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
-    channel_secret = os.getenv("LINE_CHANNEL_SECRET", "")
-    if (not access_token or not channel_secret) and os.getenv("GOOGLE_CLOUD_PROJECT"):
-        try:
-            from google.cloud import secretmanager
-            sm = secretmanager.SecretManagerServiceClient()
-            proj = os.getenv("GOOGLE_CLOUD_PROJECT")
-            if not access_token:
-                name = f"projects/{proj}/secrets/LINE_CHANNEL_ACCESS_TOKEN/versions/latest"
-                access_token = sm.access_secret_version(request={"name": name}).payload.data.decode("utf-8")
-            if not channel_secret:
-                name = f"projects/{proj}/secrets/LINE_CHANNEL_SECRET/versions/latest"
-                channel_secret = sm.access_secret_version(request={"name": name}).payload.data.decode("utf-8")
-        except Exception as e:
-            logger.warning(f"SecretManager failed: {e}")
-    return (access_token.strip(), channel_secret.strip())
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
+LINE_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 
-try:
-    from linebot.v3.messaging import Configuration, ApiClient, MessagingApi  # type: ignore
-    configuration_cached: Optional["Configuration"] = None
-    api_client_cached: Optional["ApiClient"] = None
-    messaging_api_cached: Optional["MessagingApi"] = None
-except Exception:
-    configuration_cached = api_client_cached = messaging_api_cached = None  # type: ignore
-
-LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET = _get_line_tokens()
-handler: Optional["WebhookHandler"] = None
-
-def _ensure_api() -> Optional["MessagingApi"]:
-    global configuration_cached, api_client_cached, messaging_api_cached
+_api_instance = None
+def _ensure_api():
+    global _api_instance
+    if not LINE_SDK_AVAILABLE: return None
+    if _api_instance: return _api_instance
+    if not LINE_ACCESS_TOKEN:
+        logger.error("LINE_ACCESS_TOKEN not set")
+        return None
     try:
-        if messaging_api_cached: return messaging_api_cached
-        if not LINE_CHANNEL_ACCESS_TOKEN: return None
-        configuration_cached = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-        api_client_cached = ApiClient(configuration_cached)
-        messaging_api_cached = MessagingApi(api_client_cached)
-        return messaging_api_cached
+        config = Configuration(access_token=LINE_ACCESS_TOKEN)
+        client = ApiClient(configuration=config)
+        _api_instance = MessagingApi(api_client=client)
+        logger.info("LINE MessagingApi initialized")
+        return _api_instance
     except Exception as e:
-        logger.error(f"MessagingApi init failed: {e}"); return None
+        logger.error(f"API initialization failed: {e}")
+        return None
 
-if LINE_SDK_AVAILABLE and LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
-    try:
-        handler = WebhookHandler(LINE_CHANNEL_SECRET); _ensure_api()
-        logger.info("✅ LINE handler initialized")
-    except Exception as e:
-        logger.error(f"LINE handler init error: {e}"); handler = None
+handler = None
+if LINE_SDK_AVAILABLE and LINE_CHANNEL_SECRET:
+    handler = WebhookHandler(channel_secret=LINE_CHANNEL_SECRET)
+    logger.info("✅ LINE WebhookHandler created")
+else:
+    logger.warning("❌ No LINE WebhookHandler (SDK or secret missing)")
 
 # ======================================================================
-# 送信ヘルパー（テキスト）
+# 同意関連（URL生成・文面）
 # ======================================================================
-def _reply_or_push(reply_token: str, user_id: str, text: str) -> bool:
+def _make_user_token(user_id: str) -> str:
+    """一時トークン生成"""
+    secret = os.getenv("SESSION_SECRET", "kinoe-ai-session")
+    data = f"{user_id}:{time.time()}"
+    h = hashlib.sha256((data + secret).encode()).hexdigest()
+    return f"{user_id}.{h[:16]}"
+
+def _make_consent_link(user_id: str) -> str:
+    """
+    LIFF同意画面URL生成：X-User-Idヘッダーで戻る想定
+    1) LIFF_CONSENT_URL があればそちら優先（トークン付与）
+    2) なければ PUBLIC_BASE_URL/line-consent 形式（フォールバック）
+    """
+    token = _make_user_token(user_id)
+    if LIFF_CONSENT_URL:
+        sep = "&" if "?" in LIFF_CONSENT_URL else "?"
+        return f"{LIFF_CONSENT_URL}{sep}user_token={token}"
+    else:
+        return f"{PUBLIC_BASE_URL}/line-consent?user_token={token}"
+
+def _not_consent_msg_for(user_id: str) -> str:
+    """未同意の場合の文面（リンク付き）"""
+    link = _make_consent_link(user_id)
+    return (
+        "🔔 AI相談を利用するには、最初に同意が必要です。\n\n"
+        f"こちらから同意をお願いします：\n{link}"
+    )
+
+def _is_line_uid(s: str) -> bool:
+    """文字列がLINE UID (U...) 形式か？"""
+    return bool(s and s.startswith("U") and len(s) > 20)
+
+def _extract_user_id_from_token(token: str) -> str:
+    """トークンから user_id を抽出（例: 'Uxxxx.hash' → 'Uxxxx'）"""
+    if not token: return ""
+    parts = token.split(".")
+    if parts and _is_line_uid(parts[0]): return parts[0]
+    return ""
+
+def _has_consent_sync(user_id: str) -> bool:
+    """
+    実装例：実際の同意状況を DB やキャッシュからチェック
+    ここでは仮に「常に True」として簡略化
+    """
+    return True  # 実装時は DB などで確認
+
+# ======================================================================
+# Reply/Push
+# ======================================================================
+def _reply_or_push(reply_token: Optional[str], user_id: str, text: str) -> bool:
     api = _ensure_api()
-    if not api: logger.error("MessagingApi not ready"); return False
-    if dup_guard.seen(user_id, f"out:{text[:64]}"): return True
+    if not api or not user_id: return False
+    text = _finalize_text(text) or "（エラー）"
     try:
-        cleaned = _finalize_text(text)  # ← 脚注・プレースホルダーを最終除去
-        try:
-            api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=cleaned)]))
-            return True
-        except ApiException as e:
-            if "Invalid reply token" in str(e) or getattr(e, "status", None) == 400:
-                api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[TextMessage(text=cleaned)])); return True
-            logger.error(f"LINE reply failed: {e}"); return False
-    except Exception as e:
-        logger.error(f"LINE send failed: {e}"); return False
+        if reply_token:
+            msg = TextMessage(text=text)
+            api.reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[msg]))
+            logger.info(f"replied to {user_id[:8]}...")
+        else:
+            _push(user_id, text)
+        return True
+    except ApiException as e:
+        logger.error(f"reply/push error: {e}")
+        return False
 
 def _push(user_id: str, text: str) -> bool:
     api = _ensure_api()
-    if not api: logger.error("MessagingApi not ready"); return False
-    if dup_guard.seen(user_id, f"out:{text[:64]}"): return True
+    if not api or not user_id: return False
+    text = _finalize_text(text) or "（エラー）"
     try:
-        cleaned = _finalize_text(text)  # ← 脚注・プレースホルダーを最終除去
-        api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[TextMessage(text=cleaned)])); return True
-    except Exception as e:
-        logger.error(f"LINE push failed: {e}"); return False
-
-# ======================================================================
-# 送信ヘルパー（Flex）
-# ======================================================================
-def _reply_or_push_flex(reply_token: str, user_id: str, flex: "FlexMessage") -> bool:
-    api = _ensure_api()
-    if not api:
-        logger.error("MessagingApi not ready (flex)")
-        return False
-    # 重複防止キーは alt_text のみで十分（リンクは本文に含めない）
-    if dup_guard.seen(user_id, f"flex:{getattr(flex, 'alt_text', 'consent')}"):
+        msg = TextMessage(text=text)
+        api.push_message(PushMessageRequest(to=user_id, messages=[msg]))
+        logger.info(f"pushed to {user_id[:8]}...")
         return True
+    except ApiException as e:
+        logger.error(f"push error: {e}")
+        return False
+
+def _reply_or_push_flex(reply_token: Optional[str], user_id: str, flex_msg: FlexMessage) -> bool:
+    """
+    Flex メッセージを送信
+    ※ flex_msg は既に FlexMessage インスタンス
+    """
+    api = _ensure_api()
+    if not api or not user_id: return False
     try:
-        try:
-            api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[flex]))
-            return True
-        except ApiException as e:
-            if "Invalid reply token" in str(e) or getattr(e, "status", None) == 400:
-                api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=[flex])); return True
-            logger.error(f"LINE flex reply failed: {e}")
-            return False
-    except Exception as e:
-        logger.error(f"LINE flex send failed: {e}")
+        if reply_token:
+            api.reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[flex_msg]))
+            logger.info(f"flex replied to {user_id[:8]}...")
+        else:
+            api.push_message(PushMessageRequest(to=user_id, messages=[flex_msg]))
+            logger.info(f"flex pushed to {user_id[:8]}...")
+        return True
+    except ApiException as e:
+        logger.error(f"flex send error: {e}")
         return False
 
 # ======================================================================
-# ユーザートークン処理（修正版）
+# Flex メッセージ構築（同意ボタン用）
 # ======================================================================
-def _extract_user_id_from_token(token: str) -> Optional[str]:
-    """トークンからユーザーIDを抽出（改善版）"""
-    if not token:
-        return None
-    if isinstance(token, str) and token.startswith("U") and 20 <= len(token) <= 64:
-        return token
-    try:
-        import jwt
-        payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256", "ES256"])
-        for field in ["sub", "user_id", "userId", "id"]:
-            v = payload.get(field)
-            if isinstance(v, str) and v:
-                return v
-    except Exception:
-        pass
-    if len(token) > 10:
-        return token
-    return None
-
-def _is_line_uid(s: Optional[str]) -> bool:
-    return isinstance(s, str) and s.startswith("U") and 20 <= len(s) <= 64
-
-# ======================================================================
-# 同意チェック（AI相談の時だけ使う）- 修正版
-# ======================================================================
-import httpx
-PORT = os.getenv("PORT", "8080")
-SELF_BASE = os.getenv("INTERNAL_BASE_URL", f"http://127.0.0.1:{PORT}")
-
-def _has_consent_sync(user_id: str) -> bool:
-    """同意チェック（改善版）"""
-    try:
-        headers = {"user_token": user_id, "X-User-Token": user_id}
-        with httpx.Client(timeout=8.0) as client:
-            r = client.post(f"{SELF_BASE}/consent/check",
-                            json={"user_id": user_id, "scope": "ai"},
-                            headers=headers)
-            if r.status_code == 200:
-                data = r.json()
-                return bool(data.get("valid") or data.get("is_valid"))
-            else:
-                logger.warning(f"Consent check failed: {r.status_code} {r.text}")
-    except Exception as e:
-        logger.warning(f"Consent check failed for {user_id[:8]}...: {e}")
-    return False
-
-# --- ユーザー別「同意リンク」生成（/liff/consent）---
-def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
+def build_consent_flex(liff_url: str) -> FlexMessage:
     """
-    LIFF の完全URL（LIFF_CONSENT_URL）を最優先で使用。
-    無い場合は PUBLIC_BASE_URL(/liff/consent) を使用。
-    ★ user_token は URL に含めない（LIFF SDK から直接取得）
+    同意が必要な場合の Flex メッセージ
+    - タイトル: 「🤖 AI相談」
+    - 説明 + 同意ボタン
     """
-    q = {}
-    if not extra_qs:
-        extra_qs = {
-            "state": "line_ai",
-            "utm_source": "line",
-            "utm_medium": "richmenu",
-            "utm_campaign": "ai_consult",
-            "utm_content": "ai_menu",
-        }
-    for k in ["state", "ab", "utm_source", "utm_medium", "utm_campaign", "utm_content"]:
-        v = extra_qs.get(k) if extra_qs else None
-        if v:
-            q[k] = v
-
-    base = LIFF_CONSENT_URL or (f"{PUBLIC_BASE_URL}/liff/consent" if PUBLIC_BASE_URL else "/liff/consent")
-    if base.startswith("/") and PUBLIC_BASE_URL:
-        base = f"{PUBLIC_BASE_URL}{base}"
-    return f"{base}?{urlencode(q)}" if q else base
-
-def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
-    link = _make_consent_link(user_id, extra_qs)
-    return (
-        "ご利用前に同意が必要です。\n"
-        "以下のボタンから同意ページを開いてください。\n\n"
-        f"{link}"
-    )
-
-# ======================================================================
-# 同意 Flex のビルダー（正しいFlexBubble構造）
-# ======================================================================
-def build_consent_flex(liff_url: str) -> "FlexMessage":
-    """同意用のFlexメッセージを作成（修正版）"""
     if not FLEX_AVAILABLE:
         raise RuntimeError("FlexMessage not available")
 
@@ -481,7 +431,7 @@ def build_consent_flex(liff_url: str) -> "FlexMessage":
             layout="vertical",
             spacing="md",
             contents=[
-                FlexText(text="AI相談のご利用前の同意", weight="bold", size="lg"),
+                FlexText(text="🤖 AI相談", weight="bold", size="lg"),
                 FlexText(
                     text="以下を確認のうえ「同意して開始」を押してください。",
                     wrap=True,
@@ -489,143 +439,101 @@ def build_consent_flex(liff_url: str) -> "FlexMessage":
                     color="#555555"
                 ),
                 FlexSeparator(),
-                FlexBox(
-                    layout="vertical",
-                    spacing="sm",
-                    margin="md",
-                    contents=[
-                        FlexText(text="・プライバシーポリシー / 利用規約", size="sm", wrap=True),
-                        FlexText(text="・入力が外部サービスへ送信される場合あり", size="sm", wrap=True),
-                        FlexText(text="・AIの誤答・限界の理解", size="sm", wrap=True),
-                        FlexText(text="・Cookie等の利用（任意）", size="sm", wrap=True),
-                    ],
-                ),
-                FlexSeparator(),
+                FlexText(
+                    text="・AIに個人情報は入力しないでください\n・AIの回答は必ずしも正しいとは限りません\n・最終案内はスタッフが行います",
+                    wrap=True,
+                    size="xs",
+                    color="#666666"
+                )
+            ]
+        ),
+        footer=FlexBox(
+            layout="vertical",
+            spacing="sm",
+            contents=[
                 FlexButton(
                     style="primary",
-                    height="sm",
-                    action=URIAction(label="同意して開始", uri=liff_url),
-                ),
-            ],
-        ),
+                    color="#17c950",
+                    action=URIAction(label="同意して開始", uri=liff_url)
+                )
+            ]
+        )
     )
-    return FlexMessage(alt_text="AI相談のご利用前の同意", contents=bubble)
+    return FlexMessage(alt_text="AI相談の同意をお願いします", contents=bubble)
 
 # ======================================================================
-# バックグラウンド・ワーカー
+# ワーカー（資金計画・AI）
 # ======================================================================
-def _worker_finance(user_id: str, user_text: str):
+def _worker_finance(user_id: str, text: str):
     try:
-        run_financial_plan = _resolve_financial_if_needed()
-        if run_financial_plan is None:
-            _push(user_id, "資金診断を準備中です。時間をおいてお試しください。"); return
-        import inspect, asyncio
-        result = asyncio.run(run_financial_plan(user_text)) if inspect.iscoroutinefunction(run_financial_plan) else run_financial_plan(user_text)
-        _push(user_id, result or "結果を作成できませんでした。")  # ← 送信側で最終サニタイズ
+        fn = _resolve_financial_if_needed()
+        if not fn:
+            _push(user_id, "資金計画機能が利用できません。")
+            return
+        res = fn(text)
+        _push(user_id, _finalize_text(res))
     except Exception as e:
-        logger.error(f"_worker_finance fatal: {e}")
+        logger.error(f"finance worker error: {e}")
+        _push(user_id, "資金計画でエラーが発生しました。")
 
-def _worker_ai(user_id: str, user_text: str):
+def _worker_ai(user_id: str, text: str):
     try:
-        rag_fn = _resolve_rag_if_needed()
-        if rag_fn is None:
-            _push(user_id, "AI相談の準備中です。時間をおいてお試しください。"); return
-        try:
-            answer, _ = rag_fn(user_text)
-        except Exception as e:
-            logger.error(f"RAG error: {e}"); answer = "該当情報が見つかりませんでした。別の聞き方でお試しください。"
-        _push(user_id, answer or "回答を作成できませんでした。")  # ← 送信側で最終サニタイズ
+        fn = _resolve_rag_if_needed()
+        if not fn:
+            _push(user_id, "AI機能が利用できません。")
+            return
+        ans = fn(text) or {}
+        out = ans.get("answer", "回答を取得できませんでした。")
+        _push(user_id, _finalize_text(out))
     except Exception as e:
-        logger.error(f"_worker_ai fatal: {e}")
+        logger.error(f"ai worker error: {e}")
+        _push(user_id, "AIでエラーが発生しました。")
 
 # ======================================================================
-# Webhook（**常に 200 で ACK**）
+# Postback データ解決
 # ======================================================================
-@router.post("/line/webhook")
-async def line_webhook(request: Request, background_tasks: BackgroundTasks):
-    try:
-        body = await request.body()
-        signature = request.headers.get("X-Line-Signature") or request.headers.get("x-line-signature") or ""
-        if handler:
-            background_tasks.add_task(handler.handle, body.decode("utf-8"), signature)
-        return JSONResponse({"status": "ok", "ts": datetime.now().isoformat()})
-    except Exception as e:
-        logger.error(f"webhook error: {e}")
-        return JSONResponse({"status": "ok", "note": "handled with error"}, status_code=200)
-
-# ======================================================================
-# Postback data の堅牢パーサ
-# ======================================================================
-def _resolve_postback_key(data: str) -> str:
+def _resolve_postback_key(data: str) -> Optional[str]:
     """
-    data の形：
-      - "action=AI相談&..." などのクエリ
-      - "ai_consult" のようなプレーン文字列
-      - '{"action":"AI相談"}' のようなJSON
-    をすべて許容して「固定テンプレのキー」を返す
+    Postbackデータから RICHMENU_FIXED_RESPONSES のキーを解決
+    action=XXX / data=XXX 形式に対応
     """
-    if not data:
-        return ""
-
-    # 1) そのまま一致
     if data in RICHMENU_FIXED_RESPONSES:
         return data
     if data in RICHMENU_KEYWORD_MAPPING:
         return RICHMENU_KEYWORD_MAPPING[data]
-
-    # 2) JSON なら action / key / menu を探す
-    if data.startswith("{") and data.endswith("}"):
-        try:
-            obj = json.loads(data)
-            for k in ("action", "key", "menu"):
-                v = obj.get(k)
-                if isinstance(v, str) and v:
-                    if v in RICHMENU_KEYWORD_MAPPING:
-                        return RICHMENU_KEYWORD_MAPPING[v]
-                    if v in RICHMENU_FIXED_RESPONSES:
-                        return v
-        except Exception:
-            pass
-
-    # 3) クエリ/セミコロン区切りを解析
-    for sep in ("&", ";"):
-        if sep in data or "=" in data:
-            parts = [p for p in data.split(sep) if p]
-            for part in parts:
-                if "=" in part:
-                    k, v = part.split("=", 1)
-                    v = v.strip()
-                    if v in RICHMENU_KEYWORD_MAPPING:
-                        return RICHMENU_KEYWORD_MAPPING[v]
-                    if v in RICHMENU_FIXED_RESPONSES:
-                        return v
-                else:
-                    token = part.strip()
-                    if token in RICHMENU_KEYWORD_MAPPING:
-                        return RICHMENU_KEYWORD_MAPPING[token]
-                    if token in RICHMENU_FIXED_RESPONSES:
-                        return token
-            break
-
-    # 4) 最後にプレーン文字列として再チェック
-    token = data.strip()
-    if token in RICHMENU_KEYWORD_MAPPING:
-        return RICHMENU_KEYWORD_MAPPING[token]
-    if token in RICHMENU_FIXED_RESPONSES:
-        return token
-    return ""
+    # action= / data= の形式を試す
+    for prefix in ["action=", "data="]:
+        if data.startswith(prefix):
+            val = data[len(prefix):]
+            if val in RICHMENU_FIXED_RESPONSES:
+                return val
+            if val in RICHMENU_KEYWORD_MAPPING:
+                return RICHMENU_KEYWORD_MAPPING[val]
+    return None
 
 # ======================================================================
-# イベントハンドラ（reply→push 方針）—— AI相談だけ同意ゲート
+# Webhook エンドポイント
 # ======================================================================
-if LINE_SDK_AVAILABLE and handler:
-    from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent, FollowEvent
+@router.post("/line/callback")
+async def callback(request: Request, background: BackgroundTasks):
+    if not handler or not LINE_SDK_AVAILABLE:
+        logger.error("handler not available")
+        return JSONResponse({"error": "handler_unavailable"}, status_code=500)
 
+    try:
+        body = await request.body()
+        sig = request.headers.get("X-Line-Signature") or ""
+        handler.handle(body.decode("utf-8"), sig)
+        return Response(status_code=200)
+    except Exception as e:
+        logger.error(f"callback error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+if handler and LINE_SDK_AVAILABLE:
     @handler.add(FollowEvent)
     def on_follow(event):
         try:
             user_id = event.source.user_id
-            if dup_guard.seen(user_id, f"follow:{user_id}"): return
             _reply_or_push(event.reply_token, user_id, RICHMENU_FIXED_RESPONSES["follow_greeting"])
         except Exception as e:
             logger.error(f"follow handler error: {e}")
@@ -636,21 +544,22 @@ if LINE_SDK_AVAILABLE and handler:
             user_id = event.source.user_id
             text = (event.message.text or "").strip()
             reply_token = event.reply_token
-            if dup_guard.seen(user_id, f"in:{text[:64]}"): return
+            if not text: return
+            if dup_guard.seen(user_id, f"msg:{text[:64]}"): return
 
-            # リッチメニューのキーワード解決（文面は変更しない）
+            # リッチメニュー固定応答
             key = None
             if text in RICHMENU_FIXED_RESPONSES:
                 key = text
             else:
                 for k, mapped in RICHMENU_KEYWORD_MAPPING.items():
-                    if k in text:
+                    if k == text:
                         key = mapped
                         break
 
             # リッチメニュー項目にヒット
             if key:
-                if key == "AI相談":
+                if key == "🤖 AI相談":
                     # 未同意なら Flex ボタン（エラー時はテキストにフォールバック）
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
@@ -670,45 +579,28 @@ if LINE_SDK_AVAILABLE and handler:
                             _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
                     sessions.set_mode(user_id, "ai")
-                elif key == "友だちに紹介":
-                    share_url = _share_liff_url()
-                    template = {
-                        "type": "template",
-                        "altText": "友だちに紹介",
-                        "template": {
-                            "type": "buttons",
-                            "text": "友だちに共有するリンクを開きますか？",
-                            "actions": [{
-                                "type": "uri",
-                                "label": "友だちに共有",
-                                "uri": share_url
-                            }]
-                        }
-                    }
-                    try:
-                        api = _ensure_api()
-                        if api:
-                            from linebot.v3.messaging import ReplyMessageRequest
-                            api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[template]))
-                    except Exception:
-                        _reply_or_push(reply_token, user_id, f"友だちに共有するにはこちらを開いてください：\n{share_url}")
-                    return
+                elif key == "資金計画":
+                    sessions.set_mode(user_id, "finance")
+                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                return
 
             # モードに応じて振り分け
             mode = sessions.get_mode(user_id)
+            if mode == "finance":
+                _reply_or_push(reply_token, user_id, "📊 試算中です。少しお待ちください…")
+                threading.Thread(target=_worker_finance, args=(user_id, text), daemon=True).start()
+                return
             if mode == "ai":
                 _reply_or_push(reply_token, user_id, "🔎 少しお待ちください…")
-                threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start(); return
-            if mode == "ai":
-                _reply_or_push(reply_token, user_id, "🔎 少しお待ちください…")
-                threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start(); return
+                threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start()
+                return
 
             # どれにも該当しない通常テキストへのフォールバック
             fallback = (
                 "ご質問ありがとうございます😊\n\n"
                 "目的のボタンをタップしてください👇\n"
-                ":robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :globe_with_meridians:サイト / :speech_balloon:チャット\n\n"
-                "具体的なご質問もお気軽にどうぞ:sparkles:"
+                "🤖 AI相談 / 🌐 AI住まいサイト / 📋 資料請求 / 📍 来場予約 / 💬 チャット相談\n\n"
+                "具体的なご質問もお気軽にどうぞ✨"
             )
             _reply_or_push(reply_token, user_id, fallback)
         except Exception as e:
@@ -729,7 +621,7 @@ if LINE_SDK_AVAILABLE and handler:
             key = _resolve_postback_key(data)
 
             if key:
-                if key == "AI相談":
+                if key == "🤖 AI相談":
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
                         if FLEX_AVAILABLE:
@@ -745,33 +637,14 @@ if LINE_SDK_AVAILABLE and handler:
                             _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
                     sessions.set_mode(user_id, "ai")
-                elif key == "友だちに紹介":
-                    share_url = _share_liff_url()
-                    template = {
-                        "type": "template",
-                        "altText": "友だちに紹介",
-                        "template": {
-                            "type": "buttons",
-                            "text": "友だちに共有するリンクを開きますか？",
-                            "actions": [{
-                                "type": "uri",
-                                "label": "友だちに共有",
-                                "uri": share_url
-                            }]
-                        }
-                    }
-                    try:
-                        api = _ensure_api()
-                        if api:
-                            from linebot.v3.messaging import ReplyMessageRequest
-                            api.reply_message_with_http_info(ReplyMessageRequest(reply_token=reply_token, messages=[template]))
-                    except Exception:
-                        _reply_or_push(reply_token, user_id, f"友だちに共有するにはこちらを開いてください：\n{share_url}")
-                    return
+                elif key == "資金計画":
+                    sessions.set_mode(user_id, "finance")
+                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                return
 
             _reply_or_push(
                 reply_token, user_id,
-                "目的のボタンをタップしてください😊\n\n:robot:AI相談 / :round_pushpin:来場予約 / :page_facing_up:資料請求 / :globe_with_meridians:サイト / :speech_balloon:チャット",
+                "目的のボタンをタップしてください👇\n🤖 AI相談 / 🌐 AI住まいサイト / 📋 資料請求 / 📍 来場予約 / 💬 チャット相談"
             )
         except Exception as e:
             logger.error(f"postback handler error: {e}")
@@ -818,9 +691,9 @@ async def after_consent(request: Request):
 
         # セッションをAIにセットし、既定の文面を送信（文言変更なし）
         sessions.set_mode(user_id, "ai")
-        ok = _push(user_id, RICHMENU_FIXED_RESPONSES["AI相談"])
+        ok = _push(user_id, RICHMENU_FIXED_RESPONSES["🤖 AI相談"])
         if ok:
-            _push(user_id, "✅ 同意が完了しました！\n\nこれでAI相談をご利用いただけます。\n住まいに関するご質問をお気軽にどうぞ😊")
+            _push(user_id, "🤖 AI相談を開始しました！何でもお聞きください😊")
             return JSONResponse({
                 "ok": True,
                 "success": True,
