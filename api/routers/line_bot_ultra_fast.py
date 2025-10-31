@@ -195,7 +195,7 @@ LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").rstrip("/")
 
 # 友だち紹介 LIFF
 LIFF_ID_SHARE = os.getenv("LIFF_ID_SHARE", "").strip()
-LIFF_SHARE_URL = os.getenv("LIFF_SHARE_URL", "").strip()  # 例: https://liff.line.me/<LIFF_ID>
+LIFF_SHARE_URL = os.getenv("LIFF_SHARE_URL", "").strip()
 PUBLIC_FRONT_BASE = os.getenv("PUBLIC_FRONT_BASE", "").rstrip("/")  # 例: https://rag-frontend-...run.app
 
 # ======================================================================
@@ -306,25 +306,34 @@ SHARE_KEYS = {
 
 
 def _share_url() -> str:
-    """友だち紹介で開く LIFF or 静的HTML の URL を決定"""
+    """友だち紹介で開く LIFF or 静的HTML の URL を決定（空文字は返さない）"""
     if LIFF_SHARE_URL:
+        logger.info(f"[share] using LIFF_SHARE_URL={LIFF_SHARE_URL}")
         return LIFF_SHARE_URL
     if LIFF_ID_SHARE:
-        return f"https://liff.line.me/{LIFF_ID_SHARE}"
+        url = f"https://liff.line.me/{LIFF_ID_SHARE}"
+        logger.info(f"[share] fallback LIFF_ID_SHARE -> {url}")
+        return url
     if PUBLIC_FRONT_BASE:
-        return f"{PUBLIC_FRONT_BASE}/web/liff/share.html"
-    # 最終フォールバック（ローカルや不明時）
+        url = f"{PUBLIC_FRONT_BASE}/web/liff/share.html"
+        logger.info(f"[share] fallback PUBLIC_FRONT_BASE -> {url}")
+        return url
+    logger.warning("[share] no LIFF url found; using safe placeholder")
+    # 空文字を返すと LINE 側で 400 (May not be empty) になるため、プレースホルダURLを返す
     return "https://example.com/web/liff/share.html"
 
 
-def reply_share_message() -> list[dict]:
+from typing import List
+
+# SDKモデルで返す（辞書混在を避ける）
+def reply_share_message() -> List["TextMessage"]:
     url = _share_url()
     text = (
         "友だちに共有するにはこちらを開いてください：\n"
         f"{url}\n\n"
         "リンクを開くと共有画面が起動します。"
     )
-    return [{"type": "text", "text": text}]
+    return [TextMessage(text=text)]
 
 # ======================================================================
 # 軽量重複防止（連打/再送対策）
@@ -770,7 +779,7 @@ if LINE_SDK_AVAILABLE and handler:
                         api.push_message_with_http_info(PushMessageRequest(to=user_id, messages=msgs))
                 return
 
-            # リッチメニューのキーワード解決（文面は変更しない）
+            # リッチメニューのキーワード解決（文言は変更しない）
             key = None
             if text in RICHMENU_FIXED_RESPONSES:
                 key = text
@@ -981,4 +990,9 @@ def health():
         except Exception:
             return False
 
-    return {"status": "ok" if _ready() else "degraded", "ts": datetime.now().isoformat(), "timeout": LINE_RESPONSE_TIMEOUT}
+    return {
+        "status": "ok" if _ready() else "degraded",
+        "ts": datetime.now().isoformat(),
+        "timeout": LINE_RESPONSE_TIMEOUT,
+        "share_url": _share_url(),
+    }
