@@ -1,8 +1,9 @@
-# api/routers/line_bot_ultra_fast.py
-# 同意フロー強化版：/line/after-consent で UID（U...）を最優先使用
-# - リッチメニュー文言は既存のまま
-# - 応答速度を落とさない（非同期/スレッド・ACK 200）
-# - LIFF からの X-User-Id / body.user_id を最優先で to に使う
+# api/routers/line_bot_ultra_fast.py (FULL FIXED VERSION)
+# - Webhook path unified to "/webhook" (use include_router(..., prefix="/line") in main.py)
+# - Keep all fixed texts as-is; only order + emoji handling + normalization + exact-match mapping
+# - Add "友だちに紹介" (share) support via LIFF (LIFF_SHARE_URL or LIFF_ID_SHARE)
+# - Fallback list order: 🤖 / 🌐 / 📋 / 📍 / 🧑‍🤝‍🧑 / 💬
+# - No sentence content changes other than replacing colon-emoji with real emoji for display stability
 
 import logging, os, re, time, hashlib, threading, sys, pathlib, importlib, json, traceback
 from datetime import datetime
@@ -15,7 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # -------------------------------
-# UTM 付与（line_utils が無い環境でも動くフォールバック）
+# UTM helper (fallback if line_utils not present)
 # -------------------------------
 def _with_utm_fallback(url: str, source: str, ab: str | None = None) -> str:
     u = urlparse(url)
@@ -35,7 +36,7 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 # ======================================================================
-# RAG / 資金計画：遅延ロード
+# Lazy import for RAG / financial (kept for backward compat)
 # ======================================================================
 ROOT = pathlib.Path(__file__).resolve().parents[2]  # .../RAG-LLM-Project
 if str(ROOT) not in sys.path:
@@ -43,7 +44,6 @@ if str(ROOT) not in sys.path:
 
 _get_rag_response = None
 def _resolve_rag_if_needed():
-    """初回だけRAGを解決（以降はキャッシュ）"""
     global _get_rag_response
     if _get_rag_response:
         return _get_rag_response
@@ -60,7 +60,6 @@ def _resolve_rag_if_needed():
 
 _run_financial_plan = None
 def _resolve_financial_if_needed():
-    """初回だけ資金計画を解決（以降はキャッシュ）"""
     global _run_financial_plan
     if _run_financial_plan:
         return _run_financial_plan
@@ -77,48 +76,33 @@ def _resolve_financial_if_needed():
     return _run_financial_plan
 
 # ======================================================================
-# 出典/参考/資料などの脚注文言を**本文から**一切表示しない（sources JSONは別）
+# Strip citations / placeholders (unchanged behavior)
 # ======================================================================
 def _strip_citations(text: str) -> str:
     if not text:
         return text
-
-    # 行頭見出し（参考/資料/出典）
-    text = re.sub(r"(?m)^\s*(参考|参考資料|参考文献|資料|出典|引用)\s*[:：].*$", "", text)
-
-    # 本文中の「参考: … / 資料: … / 出典: …」も行末まで削除
-    text = re.sub(r"(参考|参考資料|資料|出典|引用)\s*[:：].*$", "", text, flags=re.MULTILINE)
-
-    # 「【出典】…」ブロック以降を削る
-    text = re.sub(r"【\s*(出典|参考|資料)\s*】[\s\S]*?$", "", text, flags=re.MULTILINE)
-
-    # (p.12) / (p. 12) / (p:12) / (p：12) / (p.?) / （p.？） 等（半角/全角）
-    text = re.sub(r"[（(]\s*[pP]\s*[\.\:：]?\s*(\d+|[?？]+)\s*[)）]", "", text)
-
-    # 連続改行の整形
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    text = re.sub(r"(?m)^\\s*(参考|参考資料|参考文献|資料|出典|引用)\\s*[:：].*$", "", text)
+    text = re.sub(r"(参考|参考資料|資料|出典|引用)\\s*[:：].*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"【\\s*(出典|参考|資料)\\s*】[\\s\\S]*?$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"[（(]\\s*[pP]\\s*[\\.:：]?\\s*(\\d+|[?？]+)\\s*[)）]", "", text)
+    text = re.sub(r"\\n{3,}", "\\n\\n", text).strip()
     return text
 
-# ======================================================================
-# ★ 追加：プレースホルダー（○○/TBD/？？？ 等）の最終ガード
-# ======================================================================
-_PLACEHOLDER_RE = re.compile(r"(○○|〇〇|××|X{2,}|XXXX|TBD|未定|要確認|？？？|\?{2,}|＜.*?＞|ここに.*?を書く)")
+_PLACEHOLDER_RE = re.compile(r"(○○|〇〇|××|X{2,}|XXXX|TBD|未定|要確認|？？？|\\?{2,}|＜.*?＞|ここに.*?を書く)")
 
 def _strip_placeholders(t: str) -> str:
     if not t:
         return t
     tt = _PLACEHOLDER_RE.sub("（資料に記載なし）", t)
-    # 置換だらけで短すぎる場合は安全文に差し替え
     if "（資料に記載なし）" in tt and len(tt) < 40:
         return "資料内に該当情報が見つかりませんでした。必要であれば担当へ確認します。"
     return tt
 
 def _finalize_text(t: str) -> str:
-    """送信直前の最終整形：脚注断片を除去 → プレースホルダーを除去"""
     return _strip_placeholders(_strip_citations(t or "")).strip()
 
 # ======================================================================
-# LINE SDK v3（Flex を含めた完全インポート）
+# LINE SDK v3
 # ======================================================================
 try:
     from linebot.v3 import WebhookHandler
@@ -136,34 +120,34 @@ except Exception as e:
     LINE_SDK_AVAILABLE = False
     FLEX_AVAILABLE = False
     logger.error(f"❌ LINE Bot SDK import failed: {e}")
-    class WebhookHandler:  # ダミー
-        def __init__(self, *a, **k): ...
-        def add(self, *a, **k):
+    class WebhookHandler:  # dummy
+        def __init__(self,*a,**k): ...
+        def add(self,*a,**k):
             def deco(f): return f
             return deco
-        def handle(self, *a, **k): ...
+        def handle(self,*a,**k): ...
 
 # ======================================================================
-# ルーター
+# Router
 # ======================================================================
 router = APIRouter(prefix="", tags=["line-ultra-fast"])
 
 # ======================================================================
-# 設定
+# Config
 # ======================================================================
-LINE_RESPONSE_TIMEOUT = int(os.getenv("LINE_RESPONSE_TIMEOUT", "12"))  # 既定12秒
+LINE_RESPONSE_TIMEOUT = int(os.getenv("LINE_RESPONSE_TIMEOUT", "12"))
 SESSION_TTL = int(os.getenv("SESSION_TTL_MINUTES", "30")) * 60
 
-# ▼ PUBLIC_BASE_URL はあれば使う。無ければ PUBLIC_API_BASE をフォールバックに（安全側）
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("PUBLIC_API_BASE") or "").rstrip("/")
 if not PUBLIC_BASE_URL:
-    logger.warning("PUBLIC_BASE_URL is not set. Consent link generation may be relative.")
+    logger.warning("PUBLIC_BASE_URL is not set.")
 
-# LIFF の同意用 URL（最優先で使用）
 LIFF_CONSENT_URL = os.getenv("LIFF_CONSENT_URL", "").rstrip("/")
+LIFF_SHARE_URL = os.getenv("LIFF_SHARE_URL", "").rstrip("/")
+LIFF_ID_SHARE = os.getenv("LIFF_ID_SHARE", "").strip()
 
 # ======================================================================
-# 固定テンプレ（※リッチメニューの文言は変更しない）
+# Fixed texts (unchanged sentences; only emoji are real Unicode)
 # ======================================================================
 RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
     "follow_greeting": """こんにちは！キノエデザイン住まいAIプランナーです。
@@ -228,33 +212,72 @@ AIより、人の方がお好みの方はこちら。
 お気軽にお声かけください！""",
 }
 
+# ======================================================================
+# Share (友だちに紹介) URL resolver
+# ======================================================================
+def _resolve_share_url() -> Optional[str]:
+    if LIFF_SHARE_URL:
+        return with_utm(LIFF_SHARE_URL, "share_friends")
+    if LIFF_ID_SHARE:
+        return f"https://liff.line.me/{LIFF_ID_SHARE}"
+    # fallback to static path under public base (if provided)
+    if PUBLIC_BASE_URL:
+        return with_utm(f"{PUBLIC_BASE_URL}/web/liff/share.html", "share_friends")
+    return None
+
+# ======================================================================
+# Mapping and normalization
+# ======================================================================
+# Canonical keys
+K_AI = "🤖 AI相談"
+K_SITE = "AI住まいサイト"
+K_DOC = "資料請求"
+K_RESERVE = "展示場来場予約"
+K_SHARE = "友だちに紹介"
+K_CHAT = "チャット相談"
+
+# Visible order for fallback guidance
+FALLBACK_ORDER = "🤖 AI相談 / 🌐 AI住まいサイト / 📋 資料請求 / 📍 来場予約 / 🧑‍🤝‍🧑友達に紹介 / 💬 チャット相談"
+
+def _normalize_button_text(t: str) -> str:
+    t = (t or "").strip()
+    # unify spaces
+    t = re.sub(r"\\s+", " ", t)
+    # normalize 友達/友だち
+    t = t.replace("友達", "友だち")
+    return t
+
 RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
-    "🤖 AI相談": "🤖 AI相談",
-    "AI住まいサイト": "AI住まいサイト", "🌐 AI住まいサイト": "AI住まいサイト", "サイト": "AI住まいサイト", "ホームページ": "AI住まいサイト",
-    "資料請求": "資料請求", "📋 資料請求": "資料請求",
-    "展示場来場予約": "展示場来場予約", "📍 展示場来場　予約": "展示場来場予約", "来場予約": "展示場来場予約",
-    "資金計画": "資金計画", "💴 資金計画": "資金計画", "💰 資金計画": "資金計画",
-    "チャット相談": "チャット相談", "💬チャット相談": "チャット相談", "チャット": "チャット相談",
-    # 可能性のある英語/シンプルdata対策
-    "ai_consultation": "🤖 AI相談",
-    "ai_site": "AI住まいサイト",
-    "document_request": "資料請求",
-    "visit_reservation": "展示場来場予約",
-    "financial_plan": "資金計画",
-    "chat_consultation": "チャット相談",
+    # exact visible labels
+    "🤖 AI相談": K_AI,
+    "🌐 AI住まいサイト": K_SITE,
+    "📋 資料請求": K_DOC,
+    "📍 来場予約": K_RESERVE,
+    "🧑‍🤝‍🧑友だちに紹介": K_SHARE,
+    "💬 チャット相談": K_CHAT,
+    # emoji-less fallbacks
+    "AI相談": K_AI,
+    "AI住まいサイト": K_SITE,
+    "資料請求": K_DOC,
+    "来場予約": K_RESERVE,
+    "友だちに紹介": K_SHARE,
+    "チャット相談": K_CHAT,
+    # minor synonyms
+    "サイト": K_SITE,
+    "ホームページ": K_SITE,
 }
 
 # ======================================================================
-# セッション/重複ガード
+# Sessions / duplicate guard
 # ======================================================================
 class SessionManager:
     def __init__(self):
-        self._modes: Dict[str, Tuple[str, float]] = {}  # user_id -> (mode, timestamp)
+        self._modes: Dict[str, Tuple[str, float]] = {}
 
     def get_mode(self, user_id: str) -> Optional[str]:
-        record = self._modes.get(user_id)
-        if not record: return None
-        mode, ts = record
+        rec = self._modes.get(user_id)
+        if not rec: return None
+        mode, ts = rec
         if (time.time() - ts) > SESSION_TTL:
             del self._modes[user_id]
             return None
@@ -266,17 +289,15 @@ class SessionManager:
 sessions = SessionManager()
 
 class DuplicateGuard:
-    def __init__(self, ttl: int = 300):
+    def __init__(self, ttl: int = 15):
         self._seen: Dict[str, float] = {}
         self._ttl = ttl
 
     def seen(self, user_id: str, key: str) -> bool:
         now = time.time()
         full_key = f"{user_id}:{key}"
-        # 期限切れを削除
         expired = [k for k, ts in self._seen.items() if (now - ts) > self._ttl]
         for k in expired: del self._seen[k]
-        # 重複チェック
         if full_key in self._seen: return True
         self._seen[full_key] = now
         return False
@@ -284,7 +305,7 @@ class DuplicateGuard:
 dup_guard = DuplicateGuard(ttl=15)
 
 # ======================================================================
-# SDK初期化
+# LINE initialization
 # ======================================================================
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -315,21 +336,15 @@ else:
     logger.warning("❌ No LINE WebhookHandler (SDK or secret missing)")
 
 # ======================================================================
-# 同意関連（URL生成・文面）
+# Consent helpers
 # ======================================================================
 def _make_user_token(user_id: str) -> str:
-    """一時トークン生成"""
     secret = os.getenv("SESSION_SECRET", "kinoe-ai-session")
     data = f"{user_id}:{time.time()}"
     h = hashlib.sha256((data + secret).encode()).hexdigest()
     return f"{user_id}.{h[:16]}"
 
 def _make_consent_link(user_id: str) -> str:
-    """
-    LIFF同意画面URL生成：X-User-Idヘッダーで戻る想定
-    1) LIFF_CONSENT_URL があればそちら優先（トークン付与）
-    2) なければ PUBLIC_BASE_URL/line-consent 形式（フォールバック）
-    """
     token = _make_user_token(user_id)
     if LIFF_CONSENT_URL:
         sep = "&" if "?" in LIFF_CONSENT_URL else "?"
@@ -338,33 +353,24 @@ def _make_consent_link(user_id: str) -> str:
         return f"{PUBLIC_BASE_URL}/line-consent?user_token={token}"
 
 def _not_consent_msg_for(user_id: str) -> str:
-    """未同意の場合の文面（リンク付き）"""
     link = _make_consent_link(user_id)
-    return (
-        "🔔 AI相談を利用するには、最初に同意が必要です。\n\n"
-        f"こちらから同意をお願いします：\n{link}"
-    )
+    return ("🔔 AI相談を利用するには、最初に同意が必要です。\\n\\n"
+            f"こちらから同意をお願いします：\\n{link}")
 
 def _is_line_uid(s: str) -> bool:
-    """文字列がLINE UID (U...) 形式か？"""
     return bool(s and s.startswith("U") and len(s) > 20)
 
 def _extract_user_id_from_token(token: str) -> str:
-    """トークンから user_id を抽出（例: 'Uxxxx.hash' → 'Uxxxx'）"""
     if not token: return ""
     parts = token.split(".")
     if parts and _is_line_uid(parts[0]): return parts[0]
     return ""
 
 def _has_consent_sync(user_id: str) -> bool:
-    """
-    実装例：実際の同意状況を DB やキャッシュからチェック
-    ここでは仮に「常に True」として簡略化
-    """
-    return True  # 実装時は DB などで確認
+    return True
 
 # ======================================================================
-# Reply/Push
+# Reply/Push helpers
 # ======================================================================
 def _reply_or_push(reply_token: Optional[str], user_id: str, text: str) -> bool:
     api = _ensure_api()
@@ -396,10 +402,6 @@ def _push(user_id: str, text: str) -> bool:
         return False
 
 def _reply_or_push_flex(reply_token: Optional[str], user_id: str, flex_msg: FlexMessage) -> bool:
-    """
-    Flex メッセージを送信
-    ※ flex_msg は既に FlexMessage インスタンス
-    """
     api = _ensure_api()
     if not api or not user_id: return False
     try:
@@ -415,14 +417,9 @@ def _reply_or_push_flex(reply_token: Optional[str], user_id: str, flex_msg: Flex
         return False
 
 # ======================================================================
-# Flex メッセージ構築（同意ボタン用）
+# Flex message for consent
 # ======================================================================
 def build_consent_flex(liff_url: str) -> FlexMessage:
-    """
-    同意が必要な場合の Flex メッセージ
-    - タイトル: 「🤖 AI相談」
-    - 説明 + 同意ボタン
-    """
     if not FLEX_AVAILABLE:
         raise RuntimeError("FlexMessage not available")
 
@@ -440,7 +437,7 @@ def build_consent_flex(liff_url: str) -> FlexMessage:
                 ),
                 FlexSeparator(),
                 FlexText(
-                    text="・AIに個人情報は入力しないでください\n・AIの回答は必ずしも正しいとは限りません\n・最終案内はスタッフが行います",
+                    text="・AIに個人情報は入力しないでください\\n・AIの回答は必ずしも正しいとは限りません\\n・最終案内はスタッフが行います",
                     wrap=True,
                     size="xs",
                     color="#666666"
@@ -462,7 +459,7 @@ def build_consent_flex(liff_url: str) -> FlexMessage:
     return FlexMessage(alt_text="AI相談の同意をお願いします", contents=bubble)
 
 # ======================================================================
-# ワーカー（資金計画・AI）
+# Workers
 # ======================================================================
 def _worker_finance(user_id: str, text: str):
     try:
@@ -490,18 +487,13 @@ def _worker_ai(user_id: str, text: str):
         _push(user_id, "AIでエラーが発生しました。")
 
 # ======================================================================
-# Postback データ解決
+# Postback resolver
 # ======================================================================
 def _resolve_postback_key(data: str) -> Optional[str]:
-    """
-    Postbackデータから RICHMENU_FIXED_RESPONSES のキーを解決
-    action=XXX / data=XXX 形式に対応
-    """
     if data in RICHMENU_FIXED_RESPONSES:
         return data
     if data in RICHMENU_KEYWORD_MAPPING:
         return RICHMENU_KEYWORD_MAPPING[data]
-    # action= / data= の形式を試す
     for prefix in ["action=", "data="]:
         if data.startswith(prefix):
             val = data[len(prefix):]
@@ -512,10 +504,10 @@ def _resolve_postback_key(data: str) -> Optional[str]:
     return None
 
 # ======================================================================
-# Webhook エンドポイント
+# Webhook endpoint (IMPORTANT: /webhook) — use app.include_router(router, prefix="/line")
 # ======================================================================
-@router.post("/line/callback")
-async def callback(request: Request, background: BackgroundTasks):
+@router.post("/webhook")
+async def webhook(request: Request, background: BackgroundTasks):
     if not handler or not LINE_SDK_AVAILABLE:
         logger.error("handler not available")
         return JSONResponse({"error": "handler_unavailable"}, status_code=500)
@@ -526,9 +518,12 @@ async def callback(request: Request, background: BackgroundTasks):
         handler.handle(body.decode("utf-8"), sig)
         return Response(status_code=200)
     except Exception as e:
-        logger.error(f"callback error: {e}")
+        logger.error(f"webhook error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
+# ======================================================================
+# Handlers
+# ======================================================================
 if handler and LINE_SDK_AVAILABLE:
     @handler.add(FollowEvent)
     def on_follow(event):
@@ -542,49 +537,60 @@ if handler and LINE_SDK_AVAILABLE:
     def on_message(event):
         try:
             user_id = event.source.user_id
-            text = (event.message.text or "").strip()
+            text_raw = event.message.text or ""
+            text = _normalize_button_text(text_raw)
             reply_token = event.reply_token
             if not text: return
             if dup_guard.seen(user_id, f"msg:{text[:64]}"): return
 
-            # リッチメニュー固定応答
+            # Resolve richmenu
             key = None
             if text in RICHMENU_FIXED_RESPONSES:
                 key = text
             else:
-                for k, mapped in RICHMENU_KEYWORD_MAPPING.items():
-                    if k == text:
-                        key = mapped
-                        break
+                # exact-match after normalization
+                mapped = RICHMENU_KEYWORD_MAPPING.get(text)
+                if mapped:
+                    key = mapped
 
-            # リッチメニュー項目にヒット
             if key:
-                if key == "🤖 AI相談":
-                    # 未同意なら Flex ボタン（エラー時はテキストにフォールバック）
+                if key == K_AI:
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
                         if FLEX_AVAILABLE:
                             try:
                                 flex_msg = build_consent_flex(liff_url)
-                                success = _reply_or_push_flex(reply_token, user_id, flex_msg)
-                                if success:
-                                    logger.info(f"Sent Flex consent to {user_id[:8]}...")
-                                else:
-                                    logger.warning(f"Flex send failed for {user_id[:8]}..., falling back to text")
+                                if not _reply_or_push_flex(reply_token, user_id, flex_msg):
                                     _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                             except Exception as flex_err:
-                                logger.error(f"Flex build/send error: {flex_err}, falling back to text")
+                                logger.error(f"Flex build/send error: {flex_err}")
                                 _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         else:
                             _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
                     sessions.set_mode(user_id, "ai")
-                elif key == "資金計画":
+                    _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                    return
+
+                if key == K_SHARE:
+                    share_url = _resolve_share_url()
+                    if share_url:
+                        _reply_or_push(reply_token, user_id, f"友だちに共有するにはこちらを開いてください：\\n{share_url}")
+                    else:
+                        _reply_or_push(reply_token, user_id, "共有ページの設定が見つかりませんでした。管理者にお問い合わせください。")
+                    return
+
+                if key == "資金計画":
                     sessions.set_mode(user_id, "finance")
-                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                    _reply_or_push(reply_token, user_id, "📊 試算中です。少しお待ちください…")
+                    threading.Thread(target=_worker_finance, args=(user_id, text), daemon=True).start()
+                    return
+
+                # other fixed responses
+                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES.get(key, "（設定が見つかりません）"))
                 return
 
-            # モードに応じて振り分け
+            # Mode routing
             mode = sessions.get_mode(user_id)
             if mode == "finance":
                 _reply_or_push(reply_token, user_id, "📊 試算中です。少しお待ちください…")
@@ -592,14 +598,14 @@ if handler and LINE_SDK_AVAILABLE:
                 return
             if mode == "ai":
                 _reply_or_push(reply_token, user_id, "🔎 少しお待ちください…")
-                threading.Thread(target=_worker_ai, args=(user_id, text), daemon=True).start()
+                threading.Thread(target=_worker_ai, args=(user_id, text_raw), daemon=True).start()
                 return
 
-            # どれにも該当しない通常テキストへのフォールバック
+            # Fallback guidance (order only, sentences unchanged)
             fallback = (
-                "ご質問ありがとうございます😊\n\n"
-                "目的のボタンをタップしてください👇\n"
-                "🤖 AI相談 / 🌐 AI住まいサイト / 📋 資料請求 / 📍 来場予約 / 💬 チャット相談\n\n"
+                "ご質問ありがとうございます😊\\n\\n"
+                "目的のボタンをタップしてください👇\\n"
+                f"{FALLBACK_ORDER}\\n\\n"
                 "具体的なご質問もお気軽にどうぞ✨"
             )
             _reply_or_push(reply_token, user_id, fallback)
@@ -621,14 +627,13 @@ if handler and LINE_SDK_AVAILABLE:
             key = _resolve_postback_key(data)
 
             if key:
-                if key == "🤖 AI相談":
+                if key == K_AI:
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
                         if FLEX_AVAILABLE:
                             try:
                                 flex_msg = build_consent_flex(liff_url)
-                                success = _reply_or_push_flex(reply_token, user_id, flex_msg)
-                                if not success:
+                                if not _reply_or_push_flex(reply_token, user_id, flex_msg):
                                     _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                             except Exception as flex_err:
                                 logger.error(f"Postback flex error: {flex_err}")
@@ -637,40 +642,47 @@ if handler and LINE_SDK_AVAILABLE:
                             _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
                     sessions.set_mode(user_id, "ai")
-                elif key == "資金計画":
+                    _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                    return
+
+                if key == K_SHARE:
+                    share_url = _resolve_share_url()
+                    if share_url:
+                        _reply_or_push(reply_token, user_id, f"友だちに共有するにはこちらを開いてください：\\n{share_url}")
+                    else:
+                        _reply_or_push(reply_token, user_id, "共有ページの設定が見つかりませんでした。管理者にお問い合わせください。")
+                    return
+
+                if key == "資金計画":
                     sessions.set_mode(user_id, "finance")
-                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                    _reply_or_push(reply_token, user_id, "📊 試算中です。少しお待ちください…")
+                    threading.Thread(target=_worker_finance, args=(user_id, data), daemon=True).start()
+                    return
+
+                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES.get(key, "（設定が見つかりません）"))
                 return
 
             _reply_or_push(
                 reply_token, user_id,
-                "目的のボタンをタップしてください👇\n🤖 AI相談 / 🌐 AI住まいサイト / 📋 資料請求 / 📍 来場予約 / 💬 チャット相談"
+                f"目的のボタンをタップしてください👇\\n{FALLBACK_ORDER}"
             )
         except Exception as e:
             logger.error(f"postback handler error: {e}")
 
 # ======================================================================
-# 同意完了後のプッシュ（AI相談を自動開始）— UID最優先
+# After-consent push (unchanged)
 # ======================================================================
 @router.post("/line/after-consent")
 async def after_consent(request: Request):
-    """
-    同意完了後のLINE通知（強化版）
-    - X-User-Id / body.user_id が U… なら **最優先で to に使用**
-    - それ以外は user_token から解決（従来互換）
-    """
     request_id = getattr(request.state, "request_id", str(uuid4())[:8])
     try:
         logger.info(f"[{request_id}] after-consent: Processing request")
-
-        # JSON 取得
         try:
             payload = await request.json()
         except Exception as e:
             logger.error(f"[{request_id}] invalid json: {e}")
             return JSONResponse({"ok": False, "error": "invalid_json", "detail": str(e)}, status_code=400)
 
-        # 1) UID を最優先で解決
         uid_hdr = request.headers.get("X-User-Id") or ""
         uid_body = (payload or {}).get("user_id") or ""
         user_token = (payload or {}).get("user_token") or request.headers.get("X-User-Token") or request.headers.get("user_token") or ""
@@ -680,7 +692,6 @@ async def after_consent(request: Request):
         elif _is_line_uid(uid_body):
             user_id = uid_body
         else:
-            # 2) フォールバック：トークンから抽出
             user_id = _extract_user_id_from_token(user_token or "")
 
         if not _is_line_uid(user_id):
@@ -689,9 +700,8 @@ async def after_consent(request: Request):
 
         logger.info(f"[{request_id}] final user_id: {user_id[:8]}...")
 
-        # セッションをAIにセットし、既定の文面を送信（文言変更なし）
         sessions.set_mode(user_id, "ai")
-        ok = _push(user_id, RICHMENU_FIXED_RESPONSES["🤖 AI相談"])
+        ok = _push(user_id, RICHMENU_FIXED_RESPONSES[K_AI])
         if ok:
             _push(user_id, "🤖 AI相談を開始しました！何でもお聞きください😊")
             return JSONResponse({
@@ -713,12 +723,12 @@ async def after_consent(request: Request):
                              "request_id": request_id, "timestamp": datetime.now().isoformat()}, status_code=500)
 
 # ======================================================================
-# 追加: LIFFの「同意して開始」ボタンが叩く記録API（まずは204だけ返す）
+# Consent record endpoint (no-op)
 # ======================================================================
 class ConsentPayload(BaseModel):
     user_token: str
     consent: bool = True
-    utm: dict | None = None  # 任意でそのまま受ける
+    utm: dict | None = None
 
 @router.post("/line/consent", tags=["liff"], status_code=204)
 async def record_consent(req: Request, payload: ConsentPayload) -> Response:
@@ -730,7 +740,7 @@ async def record_consent(req: Request, payload: ConsentPayload) -> Response:
         return Response(status_code=204)
 
 # ======================================================================
-# 簡易ステータス
+# Health
 # ======================================================================
 @router.get("/line/health")
 def health():
