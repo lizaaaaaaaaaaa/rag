@@ -288,14 +288,12 @@ RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
 # ======================================================================
 
 _ZEN = str.maketrans({"　": " "})
-_RM = re.compile(r"[\s\uFE0F\u200D]+")  # 空白・絵文字結合子
-
+_RM = re.compile(r"[\s\uFE0F\u200D]+")
 
 def _key(s: str) -> str:
     s = (s or "").translate(_ZEN)
     s = _RM.sub("", s)
     return s.replace("友達", "友だち")
-
 
 SHARE_KEYS = {
     _key("🧑‍🤝‍🧑 友達に紹介"),
@@ -303,7 +301,6 @@ SHARE_KEYS = {
     _key("友達に紹介"),
     _key("友だちに紹介"),
 }
-
 
 def _share_url() -> str:
     """友だち紹介で開く LIFF or 静的HTML の URL を決定（空文字は返さない）"""
@@ -319,19 +316,59 @@ def _share_url() -> str:
         logger.info(f"[share] fallback PUBLIC_FRONT_BASE -> {url}")
         return url
     logger.warning("[share] no LIFF url found; using safe placeholder")
-    # 空文字を返すと LINE 側で 400 (May not be empty) になるため、プレースホルダURLを返す
     return "https://example.com/web/liff/share.html"
-
 
 from typing import List
 
-# SDKモデルで返す（辞書混在を避ける）
+# =========================
+# ★ 修正箇所（見た目改善）
+# =========================
 def reply_share_message() -> List["TextMessage"]:
+    """
+    返信表示を「AI相談」と同じカード風（Flex）に。
+    Flex未対応の環境ではテキストにフォールバック。
+    """
     url = _share_url()
+
+    if LINE_SDK_AVAILABLE and FLEX_AVAILABLE:
+        try:
+            bubble = FlexBubble(
+                header=FlexBox(
+                    layout="vertical",
+                    contents=[FlexText(text="友だちに紹介", weight="bold", size="lg")]
+                ),
+                body=FlexBox(
+                    layout="vertical",
+                    contents=[
+                        FlexText(
+                            text="このボタンから共有画面が開きます。\nLINEアプリ内でのご利用を推奨します。",
+                            wrap=True, size="sm"
+                        )
+                    ],
+                    spacing="md"
+                ),
+                footer=FlexBox(
+                    layout="vertical",
+                    contents=[
+                        FlexButton(
+                            style="primary",
+                            action=URIAction(label="LINEで紹介する", uri=url)
+                        ),
+                        # コピー用の控え（小さくグレーで）
+                        FlexText(text=url, size="xs", color="#808080", wrap=True)
+                    ],
+                    spacing="md"
+                )
+            )
+            return [FlexMessage(alt_text="友だちに紹介", contents=bubble)]
+        except Exception as e:
+            logger.warning(f"Flex build failed, fallback to text: {e}")
+
+    # Flexが使えない場合のフォールバック（従来テキスト）
     text = (
-        "友だちに共有するにはこちらを開いてください：\n"
+        "友だちに紹介するにはこちらを開いてください：\n"
         f"{url}\n\n"
-        "リンクを開くと共有画面が起動します。"
+        "LINEアプリ内で開くと共有画面が起動します。"
     )
     return [TextMessage(text=text)]
 
@@ -520,7 +557,6 @@ import httpx
 PORT = os.getenv("PORT", "8080")
 SELF_BASE = os.getenv("INTERNAL_BASE_URL", f"http://127.0.0.1:{PORT}")
 
-
 def _extract_user_id_from_token(token: str) -> Optional[str]:
     if not token:
         return None
@@ -540,10 +576,8 @@ def _extract_user_id_from_token(token: str) -> Optional[str]:
         return token
     return None
 
-
 def _is_line_uid(s: Optional[str]) -> bool:
     return isinstance(s, str) and s.startswith("U") and 20 <= len(s) <= 64
-
 
 def _has_consent_sync(user_id: str) -> bool:
     try:
@@ -560,7 +594,6 @@ def _has_consent_sync(user_id: str) -> bool:
     except Exception as e:
         logger.warning(f"Consent check failed for {user_id[:8]}...: {e}")
     return False
-
 
 def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
     q: Dict[str, str] = {}
@@ -581,7 +614,6 @@ def _make_consent_link(user_id: str, extra_qs: Dict[str, str] | None = None) -> 
         base = f"{PUBLIC_BASE_URL}{base}"
     return f"{base}?{urlencode(q)}" if q else base
 
-
 def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -> str:
     link = _make_consent_link(user_id, extra_qs)
     return (
@@ -589,7 +621,6 @@ def _not_consent_msg_for(user_id: str, extra_qs: Dict[str, str] | None = None) -
         "以下のボタンから同意ページを開いてください。\n\n"
         f"{link}"
     )
-
 
 # Flex（同意）
 
@@ -647,7 +678,6 @@ def _worker_finance(user_id: str, user_text: str):
         _push(user_id, result or "結果を作成できませんでした。")
     except Exception as e:
         logger.error(f"_worker_finance fatal: {e}")
-
 
 def _worker_ai(user_id: str, user_text: str):
     try:
@@ -896,7 +926,6 @@ class ConsentPayload(BaseModel):
     consent: bool = True
     utm: dict | None = None
 
-
 @router.post("/line/after-consent")
 async def after_consent(request: Request):
     request_id = getattr(request.state, "request_id", str(uuid4())[:8])
@@ -965,7 +994,6 @@ async def after_consent(request: Request):
             },
             status_code=500,
         )
-
 
 @router.post("/line/consent", tags=["liff"], status_code=204)
 async def record_consent(payload: ConsentPayload) -> Response:  # まずは 204 を返すだけ
