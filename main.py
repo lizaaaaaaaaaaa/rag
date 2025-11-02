@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from api.routers.debug_rag import router as debug_rag_router
@@ -55,6 +56,8 @@ app = FastAPI(
     description="High-Performance Unified AI Chat API",
     version="7.5.3",
 )
+
+app.mount("/web", StaticFiles(directory="web"), name="web")
 
 # ---------------------------------------------------------------------
 # ルーター安全登録（重複ガード付き）

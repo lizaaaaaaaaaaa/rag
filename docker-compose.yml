@@ -1,11 +1,12 @@
 # docker-compose.yml - 開発・本番環境用
-
 version: '3.8'
 
 services:
-  # メインアプリケーション
+  # メインアプリケーション（FastAPI: /web を静的配信）
   unified-chat:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.api          # ← ここを明示
     container_name: unified-chat-app
     ports:
       - "8080:8080"
@@ -15,36 +16,44 @@ services:
       - LINE_BOT_MODE=ultra_fast_financial
       - ENABLE_RAG_INITIALIZATION=true
       - ENABLE_DUPLICATE_PREVENTION=true
-      
+
       # キャッシュ設定
       - CACHE_MAX_SIZE=1000
       - CACHE_TTL_SECONDS=3600
       - CACHE_PERSISTENCE=true
-      
+
       # パフォーマンス設定
       - MAX_WORKERS=4
       - LOG_LEVEL=INFO
       - DEBUG_MODE=false
-      
+
       # 外部サービス設定（必要に応じて設定）
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
       - LINE_CHANNEL_SECRET=${LINE_CHANNEL_SECRET:-}
       - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN:-}
-      
+
+      # ★ 共有用 LIFF（今回のポイント / .env 推奨）
+      - LIFF_SHARE_URL=${LIFF_SHARE_URL:-}
+      - LIFF_ID_SHARE=${LIFF_ID_SHARE:-}
+
     volumes:
       # データの永続化
       - ./data:/app/data
       - ./logs:/app/logs
       - ./templates:/app/templates
-      
       # 設定ファイル（必要に応じて）
       - ./config:/app/config
-      
+      # （任意）ローカル開発で web を即時反映したい場合
+      - ./web:/app/web:ro
+
     networks:
       - unified-chat-network
-    
+
+    # 起動コマンドを明示（uvicorn / FastAPI）
+    command: uvicorn main:app --host 0.0.0.0 --port 8080
+
     # リソース制限
     deploy:
       resources:
@@ -54,15 +63,15 @@ services:
         reservations:
           memory: 512M
           cpus: '0.25'
-    
+
     # 依存サービスの起動を待つ
     depends_on:
       redis:
         condition: service_healthy
-    
+
     # 再起動ポリシー
     restart: unless-stopped
-    
+
     # ログ設定
     logging:
       driver: json-file
@@ -82,15 +91,11 @@ services:
     networks:
       - unified-chat-network
     restart: unless-stopped
-    
-    # ヘルスチェック
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3
-    
-    # リソース制限
     deploy:
       resources:
         limits:
@@ -106,14 +111,12 @@ services:
       - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro  # SSL証明書用（本番環境）
+      - ./ssl:/etc/nginx/ssl:ro
     networks:
       - unified-chat-network
     depends_on:
       - unified-chat
     restart: unless-stopped
-    
-    # ログ設定
     logging:
       driver: json-file
       options:
