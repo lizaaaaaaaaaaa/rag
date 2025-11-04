@@ -5,49 +5,52 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>AI相談のご利用前の同意</title>
   <style>
-    body{font-family:-apple-system,system-ui,"Noto Sans JP",sans-serif;padding:18px}
+    body{font-family:-apple-system,system-ui,"Noto Sans JP",sans-serif;padding:18px;background:#f6f6f6}
     h1{font-size:22px;margin:8px 0 16px}
     p,li,label{line-height:1.7}
+    .card{background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,0.08);padding:18px;margin-bottom:18px}
     .links{margin:10px 0 16px}
     .links a{color:#0366d6;text-decoration:underline}
     label{display:flex;gap:10px;align-items:baseline;margin:10px 0}
     input[type="checkbox"]{transform:scale(1.1);margin-top:2px}
-    button{margin-top:18px;font-size:16px;padding:10px 14px;border-radius:8px;border:1px solid #ddd;background:#06c755;color:#fff}
+    button{margin-top:18px;font-size:16px;padding:10px 14px;border-radius:8px;border:1px solid #ddd;background:#06c755;color:#fff;width:100%}
     button[disabled]{opacity:.5}
     small{color:#666}
   </style>
 </head>
 <body>
-  <h1>AI相談のご利用前の同意</h1>
-  <p>以下をご確認のうえ、チェックを入れて「同意して開始」を押してください。</p>
+  <div class="card">
+    <h1>AI相談のご利用前の同意</h1>
+    <p>以下をご確認のうえ、「同意して開始」を押してください。</p>
 
-  <!-- 🔽 追加文章ここから -->
-  <ul>
-    <li>AI に個人情報は入力しないでください</li>
-    <li>この AI は住宅検討の参考用に設計された自動応答です</li>
-    <li>AI の回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います</li>
-    <li>ご質問の内容により、AI の回答までお時間を頂戴する場合がございます</li>
-    <li>ご使用の前に、必ず同意が必要となります。何卒ご理解賜りますようお願い申し上げます</li>
-  </ul>
-  <!-- 🔼 追加文章ここまで -->
+    <!-- 🔽 追加文章ここから -->
+    <p style="font-size:15px;line-height:1.7;color:#333;">
+      ・AI に個人情報は入力しないでください。<br>
+      ・この AI は住宅検討の参考用に設計された自動応答です。<br>
+      ・AI の回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います。<br>
+      ・ご質問の内容により、AI の回答までお時間を頂戴する場合がございます。<br>
+      ・ご使用の前に、必ず同意が必要となります。何卒ご理解賜りますようお願い申し上げます。
+    </p>
+    <!-- 🔼 追加文章ここまで -->
 
-  <!-- 法務リンク（/legal 配信に統一） -->
-  <div class="links" aria-label="関連ポリシー・規約へのリンク">
-    <div>・プライバシーポリシー：<a href="/legal/privacy" target="_blank" rel="noopener">こちら</a></div>
-    <div>・利用規約：<a href="/legal/terms" target="_blank" rel="noopener">こちら</a></div>
-    <div>・Cookie（外部送信の詳細）：<a href="/legal/cookie" target="_blank" rel="noopener">こちら</a></div>
+    <!-- 法務リンク -->
+    <div class="links" aria-label="関連ポリシー・規約へのリンク">
+      <div>・プライバシーポリシー：<a href="/legal/privacy" target="_blank" rel="noopener">こちら</a></div>
+      <div>・利用規約：<a href="/legal/terms" target="_blank" rel="noopener">こちら</a></div>
+      <div>・Cookie（外部送信の詳細）：<a href="/legal/cookie" target="_blank" rel="noopener">こちら</a></div>
+    </div>
+
+    <!-- ✅ 必須3チェック -->
+    <label><input type="checkbox" id="chk_pp">プライバシーポリシー（上記リンク）に同意します</label>
+    <label><input type="checkbox" id="chk_xfer">入力内容が外部サービスへ送信される場合があることを理解しました</label>
+    <label><input type="checkbox" id="chk_ai_limits">AIの誤答・限界があることを理解しました</label>
+
+    <!-- ◇ 任意 -->
+    <label><input type="checkbox" id="chk_cookie">Cookie等の利用（計測を含む）に同意します（任意）</label>
+
+    <button id="btn-consent" disabled>同意して開始</button>
+    <p><small>※ 同意は公式LINE内の「AI相談」にのみ適用されます。</small></p>
   </div>
-
-  <!-- ✅ 必須3チェック（PP / 外部送信 / AI限界） -->
-  <label><input type="checkbox" id="chk_pp" aria-describedby="desc_pp">プライバシーポリシー（上記リンク）に同意します</label>
-  <label><input type="checkbox" id="chk_xfer" aria-describedby="desc_xfer">入力内容が外部サービスへ送信される場合があることを理解しました</label>
-  <label><input type="checkbox" id="chk_ai_limits" aria-describedby="desc_ai">AIの誤答・限界があることを理解しました</label>
-
-  <!-- ◇ 任意（Cookie同意は任意扱い） -->
-  <label><input type="checkbox" id="chk_cookie">Cookie等の利用（計測を含む）に同意します（任意）</label>
-
-  <button id="btn-consent" disabled>同意して開始</button>
-  <p><small>※ 同意は公式LINE内の「AI相談」にのみ適用されます。</small></p>
 
   <script>
     const qs = new URLSearchParams(location.search);
