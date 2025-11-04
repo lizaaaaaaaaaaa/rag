@@ -703,6 +703,7 @@ def build_consent_flex(liff_url: str) -> "FlexMessage":
                     color="#555555",
                 ),
                 FlexSeparator(),
+                # ✅ ここを 9 項目に拡張（UIレイアウトはそのまま）
                 FlexBox(
                     layout="vertical",
                     spacing="sm",
@@ -710,8 +711,13 @@ def build_consent_flex(liff_url: str) -> "FlexMessage":
                     contents=[
                         FlexText(text="・プライバシーポリシー / 利用規約", size="sm", wrap=True),
                         FlexText(text="・入力が外部サービスへ送信される場合あり", size="sm", wrap=True),
-                        FlexText(text="・AIの誤答・限界の理解", size="sm", wrap=True),
+                        FlexText(text="・AIの課題・限界の理解", size="sm", wrap=True),
                         FlexText(text="・Cookie等の利用（任意）", size="sm", wrap=True),
+                        FlexText(text="・AI に個人情報は入力しないでください", size="sm", wrap=True),
+                        FlexText(text="・この AI は住宅検討の参考用に設計された自動応答です", size="sm", wrap=True),
+                        FlexText(text="・AI の回答は必ずしも正しいとは限りません。→ 確定案内はスタッフが行います", size="sm", wrap=True),
+                        FlexText(text="・ご質問の内容により、AI の回答までお時間を頂戴する場合がございます", size="sm", wrap=True),
+                        FlexText(text="・ご使用の前に、必ず同意が必要となります。何卒ご理解賜りますようお願い申し上げます", size="sm", wrap=True),
                     ],
                 ),
                 FlexSeparator(),

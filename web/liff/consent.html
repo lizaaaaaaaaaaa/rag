@@ -21,9 +21,6 @@
   <h1>AI相談のご利用前の同意</h1>
   <p>以下をご確認のうえ、チェックを入れて「同意して開始」を押してください。</p>
 
-
-
-
   <!-- 法務リンク（/legal 配信に統一） -->
   <div class="links" aria-label="関連ポリシー・規約へのリンク">
     <div>・プライバシーポリシー：<a href="/legal/privacy" target="_blank" rel="noopener">こちら</a></div>
@@ -31,44 +28,26 @@
     <div>・Cookie（外部送信の詳細）：<a href="/legal/cookie" target="_blank" rel="noopener">こちら</a></div>
   </div>
 
-
-
-
   <!-- ✅ 必須3チェック（PP / 外部送信 / AI限界） -->
   <label><input type="checkbox" id="chk_pp" aria-describedby="desc_pp">プライバシーポリシー（上記リンク）に同意します</label>
   <label><input type="checkbox" id="chk_xfer" aria-describedby="desc_xfer">入力内容が外部サービスへ送信される場合があることを理解しました</label>
   <label><input type="checkbox" id="chk_ai_limits" aria-describedby="desc_ai">AIの誤答・限界があることを理解しました</label>
 
-
-
-
   <!-- ◇ 任意（Cookie同意は任意扱い） -->
   <label><input type="checkbox" id="chk_cookie">Cookie等の利用（計測を含む）に同意します（任意）</label>
 
-
-
-
   <button id="btn-consent" disabled>同意して開始</button>
   <p><small>※ 同意は公式LINE内の「AI相談」にのみ適用されます。</small></p>
-
-
-
 
   <script>
     // ===== ユーティリティ =====
     const qs = new URLSearchParams(location.search);
     const getParam = (k, d="") => qs.get(k) || d;
 
-
-
-
     // LINE Basic ID：テンプレ置換（liff_pages.py が __LINE_BASIC_ID__ を @付きで埋め込み）
     const BASIC = (getParam("basic_id") || "__LINE_BASIC_ID__").replace(/^@?/, "@").replace(/^@@/, "@");
     const POLICY_VERSION = getParam("policy_version") || (window.__POLICY_VERSION__ || "1.0.0");
     const USER_TOKEN = getParam("user_token") || "";
-
-
-
 
     // 必須3チェックONでボタン活性
     const btn = document.getElementById('btn-consent');
@@ -84,9 +63,6 @@
     });
     updateButton();
 
-
-
-
     // Deep Link 生成（友だちなら即トーク、未追加なら追加導線）
     function openLineChatWithAI(){
       const msg = encodeURIComponent("AI相談"); // リッチメニュー文言は変更しない
@@ -100,17 +76,11 @@
       }
     }
 
-
-
-
     async function saveConsentAndStart(){
       if(!USER_TOKEN){
         alert("無効なアクセスです（user_token が見つかりません）");
         return;
       }
-
-
-
 
       // 送信ペイロード
       const payload = {
@@ -129,16 +99,10 @@
         }
       };
 
-
-
-
       // UIロック
       btn.disabled = true;
       const prev = btn.textContent;
       btn.textContent = "保存中…";
-
-
-
 
       try {
         // 1) 同意保存（サーバ側：/consent/save は非同期でWORMも処理）
@@ -151,9 +115,6 @@
         });
         if(!r1.ok) throw new Error("consent_save_failed");
 
-
-
-
         // 2) AI相談を自動開始（サーバから定型文をPush：ユーザー操作不要）
         //    ※ 応答は待たずに次へ（体感速度を落とさない）
         fetch("/line/after-consent", {
@@ -161,9 +122,6 @@
           headers: {"Content-Type":"application/json"},
           body: JSON.stringify({ user_token: USER_TOKEN })
         }).catch(()=>{});
-
-
-
 
         // 3) LINEアプリへ戻す（LIFF内なら閉じる、外部ならDeep Link）
         try {
@@ -176,9 +134,6 @@
         btn.textContent = prev;
       }
     }
-
-
-
 
     btn.addEventListener("click", saveConsentAndStart);
   </script>
