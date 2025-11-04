@@ -1,107 +1,121 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>友だちに紹介</title>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     :root { color-scheme: light only; }
     body{font-family:-apple-system,system-ui,"Noto Sans JP",sans-serif;background:#f5f6f7;margin:0}
-    .wrap{max-width:640px;margin:0 auto;padding:20px}
-    .card{background:#fff;border-radius:14px;box-shadow:0 2px 10px rgba(0,0,0,.06);padding:18px}
-    h1{font-size:20px;margin:6px 0 2px}
-    p{line-height:1.7;margin:10px 0}
+    .wrap{max-width:680px;margin:0 auto;padding:20px}
+    .card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:22px}
+    h1{font-size:22px;margin:6px 0 10px}
+    p{line-height:1.7;margin:8px 0;color:#444}
     .muted{color:#666;font-size:13px}
-    .btn{display:inline-block;background:#06c755;color:#fff;text-align:center;font-weight:600;
-         border-radius:10px;padding:12px 18px;text-decoration:none}
-    .btn-sub{display:inline-block;background:#e8f5ea;color:#066b2f;border-radius:10px;
-         padding:10px 14px;text-decoration:none;margin-top:10px}
-    .link{word-break:break-all;color:#666;font-size:12px}
+    .btn{display:block;width:100%;background:#06c755;color:#fff;text-align:center;font-weight:700;
+         border-radius:12px;padding:14px 18px;text-decoration:none;margin-top:12px}
+    .btn-sub{display:block;width:100%;background:#e8f5ea;color:#066b2f;text-align:center;font-weight:600;
+         border-radius:12px;padding:12px 16px;text-decoration:none;margin-top:10px}
+    .hidden{display:none}
   </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="card">
-    <h1>友だちに紹介</h1>
-    <p class="muted">このページはLINEアプリ内で自動的に共有画面を開きます。</p>
-    <p id="msg" class="muted"></p>
-    <p><a id="openLine" class="btn" href="#" target="_self">LINEで紹介する</a></p>
-    <p><a id="nativeShare" class="btn-sub" href="#" target="_self">端末の共有メニューで送る</a></p>
-    <p class="link" id="fallbackLink"></p>
+  <div class="wrap">
+    <div class="card">
+      <h1>友だちに紹介</h1>
+      <p class="muted">このページはLINEアプリ内なら共有画面を自動で開きます。</p>
+      <p id="msg" class="muted"></p>
+
+      <a id="btnLine"  class="btn"     href="#">LINEで紹介する</a>
+      <a id="btnShare" class="btn-sub" href="#">端末の共有メニューで送る</a>
+      <!-- 生URLの表示は廃止（ユーザーには見せない） -->
+    </div>
   </div>
-</div>
 
-<script>
-(async () => {
-  // ======= 既定値（君の環境に合わせ済み） =======
-  const DEFAULT_LIFF_ID   = "2007887876-OjNbylba";           // ← LIFF_ID_SHARE
-  const DEFAULT_SHARE_URL = "https://ai.kinoedesign.co.jp/"; // 共有したいURL
+  <script>
+  (async () => {
+    // ===== 既定値（必要に応じて書き換え） =====
+    // あなたの LIFF（共有用）
+    const DEFAULT_LIFF_ID = "2007887876-OjNbylba";   // ← LIFF_ID_SHARE
 
-  // クエリ優先（?liff_id=...&url=...）
-  const qp = new URLSearchParams(location.search);
-  const LIFF_ID   = qp.get("liff_id") || DEFAULT_LIFF_ID;
-  const TARGET_URL = decodeURIComponent(qp.get("url") || DEFAULT_SHARE_URL);
+    // 公式アカウントの「友だち追加リンク」（短縮URL 例: https://lin.ee/xxxxxx）
+    // ※ ここを実際の“キノエデザイン 住まいAIプランナー”のURLに置き換えてください
+    const DEFAULT_ACCOUNT_URL = "https://lin.ee/PFVQPr1";
 
-  // 便利リンク
-  const liffDeepLink   = `https://liff.line.me/${encodeURIComponent(LIFF_ID)}?url=${encodeURIComponent(TARGET_URL)}`;
-  const universalShare = `https://line.me/R/msg/text/?${encodeURIComponent(TARGET_URL)}`;
+    const DEFAULT_TITLE = "AI相談のご紹介";
+    const DEFAULT_TEXT  = "キノエデザイン 住まいAIプランナーの公式LINEです👇\n";
 
-  // UI
-  const msg          = document.getElementById("msg");
-  const btnOpenLine  = document.getElementById("openLine");
-  const btnNative    = document.getElementById("nativeShare");
-  const fallbackLink = document.getElementById("fallbackLink");
+    // --- クエリで上書き可 ?liff_id=...&account=...&title=...&text=... ---
+    const qp           = new URLSearchParams(location.search);
+    const LIFF_ID      = qp.get("liff_id")  || DEFAULT_LIFF_ID;
+    const ACCOUNT_URL  = decodeURIComponent(qp.get("account") || DEFAULT_ACCOUNT_URL);
+    const SHARE_TITLE  = decodeURIComponent(qp.get("title")   || DEFAULT_TITLE);
+    const SHARE_TEXT   = decodeURIComponent(qp.get("text")    || DEFAULT_TEXT);
 
-  // ボタンは常時有効
-  btnOpenLine.href = liffDeepLink;
-  btnNative.addEventListener("click", async (e) => {
-    e.preventDefault();
-    if (navigator.share) {
+    // 共有本文（テキストメッセージとして送る）
+    const plainMessage = `${SHARE_TEXT}${ACCOUNT_URL}`;
+
+    // フォールバック用：LINEユニバーサルリンク（送信先選択が出る）
+    const universalLink = `https://line.me/R/msg/text/?${encodeURIComponent(plainMessage)}`;
+
+    // UI参照
+    const msgEl    = document.getElementById("msg");
+    const btnLine  = document.getElementById("btnLine");
+    const btnShare = document.getElementById("btnShare");
+
+    // 端末共有（Web Share API） → 非対応はLINEユニバーサルリンク
+    async function shareViaDevice() {
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: SHARE_TITLE, text: SHARE_TEXT, url: ACCOUNT_URL });
+          return;
+        } catch (e) { /* キャンセルなどは無視 */ }
+      }
+      location.href = universalLink;
+    }
+
+    // LINEの shareTargetPicker
+    async function shareViaLiffPicker() {
       try {
-        await navigator.share({ title: "AI相談のご紹介", url: TARGET_URL });
-        return;
-      } catch (_) {} // キャンセル時などは無視
-    }
-    // Web Share 非対応 → LINEユニバーサルリンクへ
-    location.href = universalShare;
-  });
+        await liff.init({ liffId: LIFF_ID });
 
-  // ① 外部ブラウザ（LINEアプリ外）なら、LINEを強制起動（スマホのみ）
-  const ua = navigator.userAgent || "";
-  const isLine   = /Line/i.test(ua);
-  const isMobile = /iPhone|Android/i.test(ua);
-  if (!isLine && isMobile) {
-    msg.textContent = "LINEアプリで開いています…";
-    location.replace(liffDeepLink);
-    return;
-  }
-
-  // ② LINE内：LIFF初期化 → 共有APIが使えれば即起動
-  try {
-    await liff.init({ liffId: LIFF_ID });
-
-    // API可なら shareTargetPicker を即起動
-    if (liff.isInClient() && liff.isApiAvailable('shareTargetPicker')) {
-      await liff.shareTargetPicker([
-        { type: "text", text: "AI相談のご紹介です👇\n" + TARGET_URL }
-        // 必要なら FlexMessage に差し替え可能
-      ]);
-      try { liff.closeWindow(); } catch(_) {}
-      return;
+        // LINEアプリ内かつAPI使用可 → 送信先選択を直接開く
+        if (liff.isInClient() && liff.isApiAvailable('shareTargetPicker')) {
+          await liff.shareTargetPicker([{ type: "text", text: plainMessage }]);
+          try { liff.closeWindow(); } catch (_) {}
+        } else {
+          // LINE内だがPicker不可 → ユニバーサルリンクにフォールバック
+          location.href = universalLink;
+        }
+      } catch (e) {
+        // 初期化失敗 → ユニバーサルリンクにフォールバック
+        location.href = universalLink;
+      }
     }
 
-    // ③ LINE内だが共有APIが使えない → ユーザー操作で共有
-    msg.textContent = "お使いの環境では共有APIが使えません。次のボタンから共有してください。";
-    fallbackLink.textContent = TARGET_URL;
+    // ボタン動作（ここが前回からの確実化ポイント）
+    btnLine.addEventListener("click",  (e) => { e.preventDefault(); shareViaLiffPicker(); });
+    btnShare.addEventListener("click", (e) => { e.preventDefault(); shareViaDevice(); });
 
-  } catch (e) {
-    // ④ LIFF初期化失敗 → 端末の共有 or LINEユニバーサルリンクへ
-    console.error(e);
-    msg.textContent = "共有の自動起動に失敗しました。次のボタンから共有してください。";
-    fallbackLink.textContent = TARGET_URL;
-  }
-})();
-</script>
+    // 自動起動ロジック：LINE判定
+    const ua       = navigator.userAgent || "";
+    const isLine   = /Line/i.test(ua);
+    const isMobile = /iPhone|Android/i.test(ua);
+
+    if (isLine) {
+      // LINEアプリ内 → 即 shareTargetPicker を試行
+      msgEl.textContent = "共有画面を開いています…";
+      shareViaLiffPicker();
+    } else if (isMobile) {
+      // 外部ブラウザ（スマホ） → 直接LINEへ切り替えて送信先選択へ
+      msgEl.textContent = "LINEアプリに切り替えます…";
+      location.replace(universalLink);
+    } else {
+      // PC等 → ボタンから手動共有
+      msgEl.textContent = "PC環境ではボタンから共有してください。";
+    }
+  })();
+  </script>
 </body>
 </html>
