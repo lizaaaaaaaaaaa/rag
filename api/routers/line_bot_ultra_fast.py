@@ -890,7 +890,7 @@ if LINE_SDK_AVAILABLE and handler:
                         break
 
             if key:
-                # ★ 修正：AI相談/住まいAI相談 どちらでも同意ゲートへ
+                # ★ AI相談/住まいAI相談 → 同意ゲートあり
                 if key in ("AI相談", "住まいAI相談"):
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
@@ -906,10 +906,18 @@ if LINE_SDK_AVAILABLE and handler:
                             _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
                     sessions.set_mode(user_id, "ai")
+                    _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES["住まいAI相談"])
+                    return
+
+                # ★ ここから追加：その他のメニューはそのまま返信（同意ゲートなし）
+                elif key in ("住まいAIサイト", "資料請求", "展示場来場予約", "チャット相談"):
+                    _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                    return
+
                 elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
-                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES.get("住まいAI相談") or RICHMENU_FIXED_RESPONSES[key])
-                return
+                    _reply_or_push(reply_token, user_id, "📊 資金診断を開始します。気になる条件を入力してください。")
+                    return
 
             # モードに応じて振り分け
             mode = sessions.get_mode(user_id)
@@ -960,7 +968,7 @@ if LINE_SDK_AVAILABLE and handler:
                 return
 
             if key:
-                # ★ 修正：AI相談/住まいAI相談 どちらでも同意ゲートへ
+                # ★ AI相談/住まいAI相談 → 同意ゲートあり
                 if key in ("AI相談", "住まいAI相談"):
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
@@ -976,10 +984,18 @@ if LINE_SDK_AVAILABLE and handler:
                             _reply_or_push(reply_token, user_id, _not_consent_msg_for(user_id))
                         return
                     sessions.set_mode(user_id, "ai")
+                    _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES["住まいAI相談"])
+                    return
+
+                # ★ ここから追加：その他のメニューはそのまま返信（同意ゲートなし）
+                elif key in ("住まいAIサイト", "資料請求", "展示場来場予約", "チャット相談"):
+                    _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                    return
+
                 elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
-                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES.get("住まいAI相談") or RICHMENU_FIXED_RESPONSES[key])
-                return
+                    _reply_or_push(reply_token, user_id, "📊 資金診断を開始します。気になる条件を入力してください。")
+                    return
 
             _reply_or_push(
                 reply_token,
