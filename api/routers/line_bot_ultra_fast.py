@@ -11,6 +11,7 @@ import logging, os, re, time, hashlib, threading, sys, pathlib, importlib, json,
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
+from urllib.parse import quote  # ← 追加（共有用のクエリ付与で使用）
 from uuid import uuid4
 
 from fastapi import APIRouter, Request, BackgroundTasks
@@ -103,7 +104,6 @@ _DEF_PAGE_RE = re.compile(r"[（(]\s*[pP]\s*[\.:：]?\s*(\d+|[?？]+)\s*[)）]")
 
 _PLACEHOLDER_RE = re.compile(r"(○○|〇〇|××|X{2,}|XXXX|TBD|未定|要確認|？？？|\?{2,}|＜.*?＞|ここに.*?を書く)")
 
-
 def _strip_citations(text: str) -> str:
     if not text:
         return text
@@ -113,7 +113,6 @@ def _strip_citations(text: str) -> str:
     text = _DEF_PAGE_RE.sub("", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
-
 def _strip_placeholders(t: str) -> str:
     if not t:
         return t
@@ -121,7 +120,6 @@ def _strip_placeholders(t: str) -> str:
     if "（資料に記載なし）" in tt and len(tt) < 40:
         return "資料内に該当情報が見つかりませんでした。必要であれば担当へ確認します。"
     return tt
-
 
 def _finalize_text(t: str) -> str:
     return _strip_placeholders(_strip_citations(t or "")).strip()
@@ -321,56 +319,85 @@ def _share_url() -> str:
 from typing import List
 
 # =========================
-# ★ 修正箇所（見た目改善）
+# ★ 修正箇所（URLの生表示を廃止し、Flexボタンのみ／LIFFにクエリ付与）
 # =========================
-def reply_share_message() -> List["TextMessage"]:
-    """
-    返信表示を「AI相談」と同じカード風（Flex）に。
-    Flex未対応の環境ではテキストにフォールバック。
-    """
-    url = _share_url()
 
+def _get_liff_share_url() -> str:
+    """既存の環境変数を利用してLIFFのベースURLを取得"""
+    return os.getenv("LIFF_SHARE_URL", "").strip()
+
+def _get_official_line_share_url() -> str:
+    """共有する“公式LINE”のURL。なければサイトURLをデフォルトに"""
+    return os.getenv("LINE_OA_SHARE_URL", "https://ai.kinoedesign.co.jp/").strip()
+
+def build_share_flex() -> "FlexMessage":
+    """友だち紹介のFlexカード（生URLは出さない/ボタンのみ）"""
+    liff_base = _get_liff_share_url()
+    oa_url    = _get_official_line_share_url()
+
+    # 共有内容
+    title = "AI相談のご紹介"
+    text  = "キノエデザイン住まいAIプランナーの公式LINEです。"
+
+    # LIFFに共有内容を引き渡す（タイトル/本文/URL）
+    if liff_base:
+        liff_url = (
+            f"{liff_base}"
+            f"?url={quote(oa_url)}"
+            f"&title={quote(title)}"
+            f"&text={quote(text)}"
+        )
+    else:
+        # 念のためのフォールバック（LIFF未設定時は公式LINE/サイトURLへ）
+        liff_url = oa_url
+
+    if not FLEX_AVAILABLE:
+        raise RuntimeError("FlexMessage not available")
+
+    bubble = FlexBubble(
+        body=FlexBox(
+            layout="vertical",
+            contents=[
+                FlexText(text="友だちに紹介", weight="bold", size="xl"),
+                FlexSeparator(margin="md"),
+                FlexText(
+                    text="このボタンから共有画面が開きます。\nLINEアプリ内でのご利用を推奨します。",
+                    wrap=True,
+                    size="sm",
+                    margin="md",
+                ),
+            ],
+            spacing="md"
+        ),
+        footer=FlexBox(
+            layout="vertical",
+            contents=[
+                FlexButton(
+                    style="primary",
+                    height="md",
+                    action=URIAction(label="LINEで紹介する", uri=liff_url),
+                ),
+            ],
+            spacing="sm",
+            margin="lg",
+        ),
+    )
+    return FlexMessage(alt_text="友だちに紹介", contents=bubble)
+
+def reply_share_message() -> List[Any]:
+    """
+    友だち紹介：Flexメッセージに差し替え（生URLをテキスト表示しない）
+    Flex未対応/失敗時は最小限の案内のみ（URLは表示しない）
+    """
     if LINE_SDK_AVAILABLE and FLEX_AVAILABLE:
         try:
-            bubble = FlexBubble(
-                header=FlexBox(
-                    layout="vertical",
-                    contents=[FlexText(text="友だちに紹介", weight="bold", size="lg")]
-                ),
-                body=FlexBox(
-                    layout="vertical",
-                    contents=[
-                        FlexText(
-                            text="このボタンから共有画面が開きます。\nLINEアプリ内でのご利用を推奨します。",
-                            wrap=True, size="sm"
-                        )
-                    ],
-                    spacing="md"
-                ),
-                footer=FlexBox(
-                    layout="vertical",
-                    contents=[
-                        FlexButton(
-                            style="primary",
-                            action=URIAction(label="LINEで紹介する", uri=url)
-                        ),
-                        # コピー用の控え（小さくグレーで）
-                        FlexText(text=url, size="xs", color="#808080", wrap=True)
-                    ],
-                    spacing="md"
-                )
-            )
-            return [FlexMessage(alt_text="友だちに紹介", contents=bubble)]
+            flex = build_share_flex()
+            return [flex]
         except Exception as e:
-            logger.warning(f"Flex build failed, fallback to text: {e}")
+            logger.warning(f"Flex build failed, fallback to plain notice: {e}")
 
-    # Flexが使えない場合のフォールバック（従来テキスト）
-    text = (
-        "友だちに紹介するにはこちらを開いてください：\n"
-        f"{url}\n\n"
-        "LINEアプリ内で開くと共有画面が起動します。"
-    )
-    return [TextMessage(text=text)]
+    # フォールバック（URLは出さない）
+    return [TextMessage(text="共有画面を開けませんでした。時間を置いてもう一度お試しください。")]
 
 # ======================================================================
 # 軽量重複防止（連打/再送対策）

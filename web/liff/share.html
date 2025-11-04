@@ -1,121 +1,197 @@
-<!doctype html>
+<!-- /web/liff/share.html まるごと置き換え -->
+<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta
+    name="viewport"
+    content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+  />
   <title>友だちに紹介</title>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
-    :root { color-scheme: light only; }
-    body{font-family:-apple-system,system-ui,"Noto Sans JP",sans-serif;background:#f5f6f7;margin:0}
-    .wrap{max-width:680px;margin:0 auto;padding:20px}
-    .card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:22px}
-    h1{font-size:22px;margin:6px 0 10px}
-    p{line-height:1.7;margin:8px 0;color:#444}
-    .muted{color:#666;font-size:13px}
-    .btn{display:block;width:100%;background:#06c755;color:#fff;text-align:center;font-weight:700;
-         border-radius:12px;padding:14px 18px;text-decoration:none;margin-top:12px}
-    .btn-sub{display:block;width:100%;background:#e8f5ea;color:#066b2f;text-align:center;font-weight:600;
-         border-radius:12px;padding:12px 16px;text-decoration:none;margin-top:10px}
-    .hidden{display:none}
+    :root {
+      --gap: 16px;
+      --radius: 14px;
+      --green: #06c755;   /* LINEっぽい緑 */
+      --soft: #eef6ef;
+      --shadow: 0 6px 20px rgba(0,0,0,.08);
+      --maxw: 680px;      /* 大端末でも横伸びしすぎないように */
+    }
+    html, body {
+      margin: 0; padding: 0;
+      background: #f7f7f8;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "ヒラギノ角ゴ ProN", "Hiragino Kaku Gothic ProN", "游ゴシック Medium", "Yu Gothic Medium", "Yu Gothic", Meiryo, sans-serif;
+      color: #111;
+    }
+    .wrap {
+      box-sizing: border-box;
+      padding: calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 20px);
+      max-width: var(--maxw);
+      margin: 0 auto;
+    }
+    .card {
+      background: #fff;
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+      padding: 20px 16px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      font-weight: 800;
+    }
+    .desc {
+      margin: 0 0 16px;
+      color: #444;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .btns {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--gap);
+      margin-top: 10px;
+    }
+    @media (min-width: 480px) {
+      .btns { grid-template-columns: 1fr; }
+    }
+
+    .btn {
+      width: 100%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      border-radius: var(--radius);
+      padding: 16px 18px;   /* 指で押しやすい高さ */
+      font-size: 18px;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      transition: transform .06s ease, filter .2s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:active { transform: translateY(1px) scale(.995); }
+
+    .btn-line {
+      background: var(--green);
+      color: #fff;
+    }
+    .btn-plain {
+      background: var(--soft);
+      color: #102a12;
+    }
+
+    .hint {
+      margin-top: 14px;
+      font-size: 12px;
+      color: #777;
+      text-align: left;
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
       <h1>友だちに紹介</h1>
-      <p class="muted">このページはLINEアプリ内なら共有画面を自動で開きます。</p>
-      <p id="msg" class="muted"></p>
+      <p class="desc">
+        このページはLINEアプリ内なら共有画面を自動で開きます。<br />
+        うまく開かない場合は、下のボタンから共有してください。
+      </p>
 
-      <a id="btnLine"  class="btn"     href="#">LINEで紹介する</a>
-      <a id="btnShare" class="btn-sub" href="#">端末の共有メニューで送る</a>
-      <!-- 生URLの表示は廃止（ユーザーには見せない） -->
+      <div class="btns">
+        <button id="btnLine" class="btn btn-line">LINEで紹介する</button>
+        <button id="btnSystem" class="btn btn-plain">端末の共有メニューで送る</button>
+      </div>
+
+      <!-- ※生URL表示は廃止 -->
+      <div id="hint" class="hint"></div>
     </div>
   </div>
 
   <script>
-  (async () => {
-    // ===== 既定値（必要に応じて書き換え） =====
-    // あなたの LIFF（共有用）
-    const DEFAULT_LIFF_ID = "2007887876-OjNbylba";   // ← LIFF_ID_SHARE
+    // ===== 受け取りパラメータ =====
+    const p = new URLSearchParams(location.search);
+    const shareUrl   = decodeURIComponent(p.get("url")   || "https://ai.kinoedesign.co.jp/");
+    const shareTitle = decodeURIComponent(p.get("title") || "AI相談のご紹介");
+    const shareText  = decodeURIComponent(p.get("text")  || "キノエデザイン住まいAIプランナーの公式LINEです。");
 
-    // 公式アカウントの「友だち追加リンク」（短縮URL 例: https://lin.ee/xxxxxx）
-    // ※ ここを実際の“キノエデザイン 住まいAIプランナー”のURLに置き換えてください
-    const DEFAULT_ACCOUNT_URL = "https://lin.ee/PFVQPr1";
+    const hint = document.getElementById("hint");
+    const setHint = (t) => { hint.textContent = t || ""; };
 
-    const DEFAULT_TITLE = "AI相談のご紹介";
-    const DEFAULT_TEXT  = "キノエデザイン 住まいAIプランナーの公式LINEです👇\n";
+    // ===== 共有ペイロードを共通化 =====
+    function buildShareItems() {
+      const textBlock = `${shareTitle}\n${shareText}\n${shareUrl}`;
+      return [{
+        type: "text",
+        text: textBlock,
+      }];
+    }
 
-    // --- クエリで上書き可 ?liff_id=...&account=...&title=...&text=... ---
-    const qp           = new URLSearchParams(location.search);
-    const LIFF_ID      = qp.get("liff_id")  || DEFAULT_LIFF_ID;
-    const ACCOUNT_URL  = decodeURIComponent(qp.get("account") || DEFAULT_ACCOUNT_URL);
-    const SHARE_TITLE  = decodeURIComponent(qp.get("title")   || DEFAULT_TITLE);
-    const SHARE_TEXT   = decodeURIComponent(qp.get("text")    || DEFAULT_TEXT);
-
-    // 共有本文（テキストメッセージとして送る）
-    const plainMessage = `${SHARE_TEXT}${ACCOUNT_URL}`;
-
-    // フォールバック用：LINEユニバーサルリンク（送信先選択が出る）
-    const universalLink = `https://line.me/R/msg/text/?${encodeURIComponent(plainMessage)}`;
-
-    // UI参照
-    const msgEl    = document.getElementById("msg");
-    const btnLine  = document.getElementById("btnLine");
-    const btnShare = document.getElementById("btnShare");
-
-    // 端末共有（Web Share API） → 非対応はLINEユニバーサルリンク
-    async function shareViaDevice() {
+    // ===== 端末の共有メニュー =====
+    async function systemShare() {
+      const textBlock = `${shareTitle}\n${shareText}\n${shareUrl}`;
       if (navigator.share) {
         try {
-          await navigator.share({ title: SHARE_TITLE, text: SHARE_TEXT, url: ACCOUNT_URL });
-          return;
-        } catch (e) { /* キャンセルなどは無視 */ }
+          await navigator.share({ title: shareTitle, text: textBlock, url: shareUrl });
+        } catch (_) {}
+      } else {
+        // フォールバック：URLをコピー
+        try {
+          await navigator.clipboard.writeText(textBlock);
+          alert("共有テキストをクリップボードにコピーしました。お好きなアプリで貼り付けてください。");
+        } catch (_) {
+          location.href = shareUrl;
+        }
       }
-      location.href = universalLink;
     }
 
-    // LINEの shareTargetPicker
-    async function shareViaLiffPicker() {
+    // ===== LIFF共有 =====
+    async function shareViaLINE() {
       try {
-        await liff.init({ liffId: LIFF_ID });
-
-        // LINEアプリ内かつAPI使用可 → 送信先選択を直接開く
-        if (liff.isInClient() && liff.isApiAvailable('shareTargetPicker')) {
-          await liff.shareTargetPicker([{ type: "text", text: plainMessage }]);
-          try { liff.closeWindow(); } catch (_) {}
+        if (!liff.isLoggedIn()) await liff.login();
+        if (liff.isApiAvailable("shareTargetPicker")) {
+          const res = await liff.shareTargetPicker(buildShareItems());
+          if (!res) {
+            // ユーザーがキャンセルなど
+            setHint("共有はキャンセルされました。再度お試しください。");
+          }
         } else {
-          // LINE内だがPicker不可 → ユニバーサルリンクにフォールバック
-          location.href = universalLink;
+          // API非対応（ブラウザ内など） → LINEアプリで開く
+          liff.openWindow({
+            url: "line://msg/text/" + encodeURIComponent(`${shareTitle}\n${shareText}\n${shareUrl}`),
+            external: false
+          });
         }
       } catch (e) {
-        // 初期化失敗 → ユニバーサルリンクにフォールバック
-        location.href = universalLink;
+        // 何か起きたら端末メニューへフォールバック
+        systemShare();
       }
     }
 
-    // ボタン動作（ここが前回からの確実化ポイント）
-    btnLine.addEventListener("click",  (e) => { e.preventDefault(); shareViaLiffPicker(); });
-    btnShare.addEventListener("click", (e) => { e.preventDefault(); shareViaDevice(); });
+    // ===== 起動 =====
+    const LIFF_ID = (new URLSearchParams(location.search)).get("liffId") || ""; // 使わないが将来の拡張用
 
-    // 自動起動ロジック：LINE判定
-    const ua       = navigator.userAgent || "";
-    const isLine   = /Line/i.test(ua);
-    const isMobile = /iPhone|Android/i.test(ua);
+    (async () => {
+      try {
+        await liff.init({ liffId: "{{LIFF_ID_SHARE_PLACEHOLDER}}" }); // ★ビルド時に差替え（バック側で置換しているならそのままでOK）
+        // LIFF内なら自動で共有を試みる
+        if (liff.isInClient()) {
+          shareViaLINE();
+          setHint("共有画面を開いています…");
+        }
+      } catch (_) {
+        // 失敗しても画面は使える（手動ボタンあり）
+      }
+    })();
 
-    if (isLine) {
-      // LINEアプリ内 → 即 shareTargetPicker を試行
-      msgEl.textContent = "共有画面を開いています…";
-      shareViaLiffPicker();
-    } else if (isMobile) {
-      // 外部ブラウザ（スマホ） → 直接LINEへ切り替えて送信先選択へ
-      msgEl.textContent = "LINEアプリに切り替えます…";
-      location.replace(universalLink);
-    } else {
-      // PC等 → ボタンから手動共有
-      msgEl.textContent = "PC環境ではボタンから共有してください。";
-    }
-  })();
+    // イベント
+    document.getElementById("btnLine").addEventListener("click", shareViaLINE);
+    document.getElementById("btnSystem").addEventListener("click", systemShare);
   </script>
 </body>
 </html>
