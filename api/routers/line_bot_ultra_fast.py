@@ -281,17 +281,18 @@ AIより、人の方がお好みの方はこちら。
 }
 
 # 表記ゆらぎ吸収用マップ（文言は変更しない）
-# ★ 修正：チャット相談 / 資料請求 のマッピングを入れ替え（他は変更なし）
+# ★ 修正：AI相談系のゆらぎを「AI相談」に正規化
 RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
-    "住まいAI相談": "住まいAI相談",
-    "🤖 住まいAI相談": "住まいAI相談",
-    
+    # 住まいAI相談 → AI相談 に正規化（ここが今回の重要ポイント）
+    "住まいAI相談": "AI相談",
+    "🤖 住まいAI相談": "AI相談",
+    "🤖 AI相談": "AI相談",
+
     "住まいAIサイト": "住まいAIサイト",
     "🌐 住まいAIサイト": "住まいAIサイト",
     "サイト": "住まいAIサイト",
     "ホームページ": "住まいAIサイト",
 
-    # ここを入れ替え（資料請求 → チャット相談 / チャット相談 → 資料請求）
     "チャット相談": "チャット相談",
     "💬チャット相談": "チャット相談",
     "チャット": "チャット相談",
@@ -342,7 +343,7 @@ def _share_url() -> str:
 from typing import List
 
 # =========================
-# ★ 修正箇所（URLの生表示を廃止し、Flexボタンのみ／LIFFにクエリ付与 + invite 対応）
+# 友だち紹介：Flex（URL生表示はしない）
 # =========================
 
 def _get_liff_share_url() -> str:
@@ -889,7 +890,8 @@ if LINE_SDK_AVAILABLE and handler:
                         break
 
             if key:
-                if key == "AI相談":
+                # ★ 修正：AI相談/住まいAI相談 どちらでも同意ゲートへ
+                if key in ("AI相談", "住まいAI相談"):
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
                         if FLEX_AVAILABLE:
@@ -906,7 +908,7 @@ if LINE_SDK_AVAILABLE and handler:
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
-                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES.get("住まいAI相談") or RICHMENU_FIXED_RESPONSES[key])
                 return
 
             # モードに応じて振り分け
@@ -958,7 +960,8 @@ if LINE_SDK_AVAILABLE and handler:
                 return
 
             if key:
-                if key == "AI相談":
+                # ★ 修正：AI相談/住まいAI相談 どちらでも同意ゲートへ
+                if key in ("AI相談", "住まいAI相談"):
                     if not _has_consent_sync(user_id):
                         liff_url = _make_consent_link(user_id)
                         if FLEX_AVAILABLE:
@@ -975,7 +978,7 @@ if LINE_SDK_AVAILABLE and handler:
                     sessions.set_mode(user_id, "ai")
                 elif key == "資金計画":
                     sessions.set_mode(user_id, "finance")
-                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
+                _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES.get("住まいAI相談") or RICHMENU_FIXED_RESPONSES[key])
                 return
 
             _reply_or_push(
@@ -1029,7 +1032,8 @@ async def after_consent(request: Request):
         logger.info(f"[{request_id}] final user_id: {user_id[:8]}...")
 
         sessions.set_mode(user_id, "ai")
-        ok = _push(user_id, RICHMENU_FIXED_RESPONSES["AI相談"])
+        # ★ 修正：固定文言は「住まいAI相談」を使用（辞書に存在するキー）
+        ok = _push(user_id, RICHMENU_FIXED_RESPONSES["住まいAI相談"])
         if ok:
             _push(
                 user_id,
