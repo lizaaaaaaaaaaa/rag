@@ -11,7 +11,7 @@ import logging, os, re, time, hashlib, threading, sys, pathlib, importlib, json,
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
-from urllib.parse import quote  # ← 追加（共有用のクエリ付与で使用）
+from urllib.parse import quote  # ← 共有用のクエリ付与で使用
 from uuid import uuid4
 
 from fastapi import APIRouter, Request, BackgroundTasks
@@ -319,7 +319,7 @@ def _share_url() -> str:
 from typing import List
 
 # =========================
-# ★ 修正箇所（URLの生表示を廃止し、Flexボタンのみ／LIFFにクエリ付与）
+# ★ 修正箇所（URLの生表示を廃止し、Flexボタンのみ／LIFFにクエリ付与 + invite 対応）
 # =========================
 
 def _get_liff_share_url() -> str:
@@ -327,29 +327,42 @@ def _get_liff_share_url() -> str:
     return os.getenv("LIFF_SHARE_URL", "").strip()
 
 def _get_official_line_share_url() -> str:
-    """共有する“公式LINE”のURL。なければサイトURLをデフォルトに"""
+    """互換：共有する“公式LINE/サイト”URL（旧：url パラメータとして渡す用）"""
     return os.getenv("LINE_OA_SHARE_URL", "https://ai.kinoedesign.co.jp/").strip()
+
+def _get_official_invite_url() -> str:
+    """
+    公式アカウントの“友だち追加（招待）URL”を取得
+    優先順：OFFICIAL_LINE_INVITE_URL → LINE_OA_SHARE_URL → 既定（管理画面で取得したURL）
+    """
+    return (
+        os.getenv("OFFICIAL_LINE_INVITE_URL", "").strip()
+        or os.getenv("LINE_OA_SHARE_URL", "").strip()
+        or "https://lin.ee/tXUD9eu"
+    )
 
 def build_share_flex() -> "FlexMessage":
     """友だち紹介のFlexカード（生URLは出さない/ボタンのみ）"""
     liff_base = _get_liff_share_url()
-    oa_url    = _get_official_line_share_url()
+    invite    = _get_official_invite_url()
+    oa_url    = _get_official_line_share_url()  # 互換：site/url フォールバック
 
     # 共有内容
     title = "AI相談のご紹介"
-    text  = "キノエデザイン住まいAIプランナーの公式LINEです。"
+    desc  = "キノエデザイン住まいAIプランナーの公式LINEです。"
 
-    # LIFFに共有内容を引き渡す（タイトル/本文/URL）
+    # LIFFに共有内容を引き渡す（invite / title / desc [+ 互換の url]）
     if liff_base:
         liff_url = (
             f"{liff_base}"
-            f"?url={quote(oa_url)}"
+            f"?invite={quote(invite)}"
             f"&title={quote(title)}"
-            f"&text={quote(text)}"
+            f"&desc={quote(desc)}"
+            f"&url={quote(oa_url)}"  # 互換維持：旧 share.html が参照する場合に備える
         )
     else:
         # 念のためのフォールバック（LIFF未設定時は公式LINE/サイトURLへ）
-        liff_url = oa_url
+        liff_url = invite or oa_url
 
     if not FLEX_AVAILABLE:
         raise RuntimeError("FlexMessage not available")
