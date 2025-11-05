@@ -217,7 +217,7 @@ RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
 または、直接メッセージでご質問ください。
 📍 各展示場でも実際にご相談いただけます""",
 
-"住まいAI相談": """🤖 住まいAI相談を開始します！
+    "住まいAI相談": """🤖 住まいAI相談を開始します！
 キノエデザインの住まいAIプランナーです。
 住まいに関するご質問をお気軽にどうぞ！
 
@@ -235,7 +235,7 @@ RICHMENU_FIXED_RESPONSES: Dict[str, str] = {
 ※ご質問の内容により、AIの回答までお時間を頂戴する場合がございます。
 ※ご使用の前に、必ず同意が必要となります。何卒ご理解賜りますようお願い申し上げます。""",
 
-"住まいAIサイト": """🌐 住まいAIサイトのご案内
+    "住まいAIサイト": """🌐 住まいAIサイトのご案内
 キノエデザインの住まいAI情報サイトをご紹介します。（家づくりの疑問にAIがお答えします）
 
 🏠
@@ -253,7 +253,7 @@ ZINE、ダウンロードもできます。
 ホームページURL：
 https://ai.kinoedesign.co.jp/line/""",
 
-"チャット相談": """💬 スタッフとのご相談
+    "チャット相談": """💬 スタッフとのご相談
 AIより、人の方がお好みの方はこちら。
 スタッフとチャット相談。
 お気軽にメッセージどうぞ！
@@ -269,13 +269,13 @@ AIより、人の方がお好みの方はこちら。
 
 お気軽にお声かけください！""",
 
-"展示場来場予約": """📍 展示場のご来場予約:
+    "展示場来場予約": """📍 展示場のご来場予約:
 24 時間いつでも、予約OKです。
 ご予約の際は、下記の来場予約ホームページURLよりご送信ください。
 来場予約ホームページURL：
 【https://kinoedesign.co.jp/consultation/ 】""",
 
-"資料請求": """📋資料請求ありがとうございます！
+    "資料請求": """📋資料請求ありがとうございます！
 下記のリンクより、資料をご請求ください。
 リンク：https://kinoedesign.co.jp/request/""",
 }
@@ -304,6 +304,23 @@ RICHMENU_KEYWORD_MAPPING: Dict[str, str] = {
     "資料請求": "資料請求",
     "📋 資料請求": "資料請求",
 }
+
+# --- 追加：チャット相談と資料請求のボタン入れ替わりをアプリ側で吸収 ----
+FIX_SWAP = os.getenv("LINE_FIX_CHAT_DOCS_SWAP", "true").lower() in ("1", "true", "yes")
+if FIX_SWAP:
+    SWAP_KEYS = {
+        # 資料請求→チャット相談に誤って届くケース
+        "資料請求": "チャット相談",
+        "📋資料請求": "チャット相談",
+        "📋 資料請求": "チャット相談",
+        # チャット相談→資料請求に誤って届くケース
+        "チャット相談": "資料請求",
+        "💬チャット相談": "資料請求",
+        "💬 チャット相談": "資料請求",
+        "チャット": "資料請求",
+    }
+    RICHMENU_KEYWORD_MAPPING.update(SWAP_KEYS)
+# ----------------------------------------------------------------------
 
 # ======================================================================
 # 友だち紹介：URL 生成 + ゆらぎキー
@@ -909,7 +926,7 @@ if LINE_SDK_AVAILABLE and handler:
                     _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES["住まいAI相談"])
                     return
 
-                # ★ ここから追加：その他のメニューはそのまま返信（同意ゲートなし）
+                # ★ その他のメニューはそのまま返信（同意ゲートなし）
                 elif key in ("住まいAIサイト", "資料請求", "展示場来場予約", "チャット相談"):
                     _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
                     return
@@ -987,7 +1004,7 @@ if LINE_SDK_AVAILABLE and handler:
                     _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES["住まいAI相談"])
                     return
 
-                # ★ ここから追加：その他のメニューはそのまま返信（同意ゲートなし）
+                # ★ その他のメニューはそのまま返信（同意ゲートなし）
                 elif key in ("住まいAIサイト", "資料請求", "展示場来場予約", "チャット相談"):
                     _reply_or_push(reply_token, user_id, RICHMENU_FIXED_RESPONSES[key])
                     return
@@ -1048,7 +1065,7 @@ async def after_consent(request: Request):
         logger.info(f"[{request_id}] final user_id: {user_id[:8]}...")
 
         sessions.set_mode(user_id, "ai")
-        # ★ 修正：固定文言は「住まいAI相談」を使用（辞書に存在するキー）
+        # ★ 固定文言は「住まいAI相談」を使用（辞書に存在するキー）
         ok = _push(user_id, RICHMENU_FIXED_RESPONSES["住まいAI相談"])
         if ok:
             _push(
