@@ -13,7 +13,7 @@ st.set_page_config(page_title="ログイン", page_icon="🔐", layout="centered
 
 # --- 起動時に admin を自動生成（ADMIN_PASSWORD があれば、未作成時のみ）---
 created = ensure_admin_bootstrap()
-st.caption("✅ admin を自動作成（ADMIN_PASSWORD 使用）" if created else "ℹ️ admin 作成はスキップ（既存 or ADMIN_PASSWORD 未設定）")
+st.caption("" if created else "")
 
 st.title("🔐 ログイン")
 
