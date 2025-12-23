@@ -25,7 +25,12 @@ GCS_VEC_DIR = os.environ.get("GCS_VECTORSTORE_PREFIX", "vectorstore")
 
 # 重要：/tmp を既定に（Cloud Run等の書込先）
 LOCAL_VECTOR_DIR = os.getenv("VECTOR_DIR", "/tmp/rag/vectorstore")
-INDEX_NAME = os.getenv("VECTOR_INDEX_NAME", "index")
+
+# ★ここは services/rag_chain.py / rag/fast_rag_chain.py と揃える
+#   - 既存: VECTOR_INDEX_NAME
+#   - 統一: INDEX_NAME
+#   ※互換性のため両方見る（先に INDEX_NAME を優先）
+INDEX_NAME = os.getenv("VECTOR_INDEX_NAME") or os.getenv("INDEX_NAME", "index")
 
 # 共通プロンプトのパス（伏字禁止等のルールをここで統一）
 PROMPT_PATH = os.getenv("RAG_PROMPT_PATH", "rag/prompt_template.txt")
@@ -98,18 +103,19 @@ def download_vectorstore_from_gcs(local_dir: str) -> bool:
 # =========================
 #  埋め込み
 # =========================
+# ★方針1（E5 prefix対応）の本体：passage:/query: を付ける
+EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-small")
+
 class MyEmbedding(Embeddings):
     """Sentence-Transformers を使う埋め込み（E5 prefix対応）"""
     def __init__(self, model_name: str):
         self.model = SentenceTransformer(model_name)
 
     def embed_documents(self, texts):
-        # E5系は passage: を推奨（文書側）
         texts = [f"passage: {t}" for t in texts]
         return self.model.encode(texts, show_progress_bar=False).tolist()
 
     def embed_query(self, text):
-        # E5系は query: を推奨（質問側）
         text = f"query: {text}"
         return self.model.encode(text).tolist()
 
@@ -314,7 +320,7 @@ def clean_and_format_response(raw_response: str) -> str:
 # =========================
 def create_initial_vectorstore():
     logger.info("Creating initial vectorstore...")
-    embeddings = MyEmbedding(os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-small"))
+    embeddings = MyEmbedding(EMBED_MODEL)
     initial_docs = [
         Document(page_content="このシステムはRAGを使用しています。PDFやFAQをアップロードすると、その内容に基づいて回答します。", metadata={"source": "system-init", "page": 1}),
         Document(page_content="アップロード文書はベクトル化され、検索結果を根拠に自然な回答を生成します。", metadata={"source": "system-init", "page": 2}),
@@ -329,12 +335,12 @@ def create_initial_vectorstore():
 def load_vectorstore():
     """ローカル→無ければGCS→それでも無ければ初期化"""
     try:
-        downloaded = download_vectorstore_from_gcs(LOCAL_VECTOR_DIR)
+        _ = download_vectorstore_from_gcs(LOCAL_VECTOR_DIR)
         index_path = os.path.join(LOCAL_VECTOR_DIR, f"{INDEX_NAME}.faiss")
         if not os.path.exists(index_path):
             logger.info("Vectorstore not found locally, creating initial one...")
             return create_initial_vectorstore()
-        embeddings = MyEmbedding(os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-small"))
+        embeddings = MyEmbedding(EMBED_MODEL)
         vectorstore = FAISS.load_local(
             LOCAL_VECTOR_DIR, embeddings, index_name=INDEX_NAME, allow_dangerous_deserialization=True
         )
@@ -372,7 +378,7 @@ def ingest_pdf_to_vectorstore(pdf_path: str) -> int:
         except Exception as _e:
             logger.warning(f"[ingest] metadata enrichment skipped: {_e}")
 
-        embeddings = MyEmbedding(os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-small"))
+        embeddings = MyEmbedding(EMBED_MODEL)
         os.makedirs(LOCAL_VECTOR_DIR, exist_ok=True)
         index_path = os.path.join(LOCAL_VECTOR_DIR, f"{INDEX_NAME}.faiss")
         if os.path.exists(index_path):
@@ -403,10 +409,10 @@ def ingest_faq_json_from_gcs(bucket_name: str, prefix: str = "faq/") -> int:
     if not client:
         logger.error("GCS client unavailable")
         return 0
-    bkt = client.bucket(bucket_name)
+    _ = client.bucket(bucket_name)
 
     os.makedirs(LOCAL_VECTOR_DIR, exist_ok=True)
-    emb = MyEmbedding(os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-small"))
+    emb = MyEmbedding(EMBED_MODEL)
     try:
         vs = FAISS.load_local(LOCAL_VECTOR_DIR, emb, index_name=INDEX_NAME, allow_dangerous_deserialization=True)
     except Exception:

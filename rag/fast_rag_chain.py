@@ -15,12 +15,9 @@ rag/fast_rag_chain.py — 完全修正版（最小影響・即時反映対応・
 - get_super_fast_rag_chain(vectorstore=None, return_source=True) -> UltraFastFAQChain
 - refresh_vectorstore(force=False) -> FAISS   # ★追加（即時反映用）
 
-互換性:
-- 既存の UltraFastFAQChain / FAST_RAG_* 環境変数の動作は維持
-
 ENV:
-- VECTOR_DIR (default: rag/vectorstore)
-- INDEX_NAME (default: index)
+- VECTOR_DIR (default: rag/vectorstore)   # ※本ファイルでは Cloud Run 上は /tmp を既定にする
+- INDEX_NAME (default: index)             # ※ VECTOR_INDEX_NAME があれば優先
 - FAST_RAG_MODEL (default: gpt-3.5-turbo)
 - FAST_RAG_TOP_K (default: 20)
 - FAST_RAG_TIMEOUT (default: 10.0)
@@ -28,6 +25,7 @@ ENV:
 - RAG_RELOAD_COOLDOWN_SEC (default: 3)
 - VECTORSTORE_TRY_GCS_SYNC (default: true)  # ローカルに index.* がない時のみGCS補完
 - RAG_PROMPT_PATH (default: rag/prompt_template.txt)
+- GCS_VECTORSTORE_PREFIX (default: vectorstore)
 
 # ★ MMR調整（追加 / 任意）
 - FAST_RAG_RETRIEVER (default: mmr)           # mmr | similarity
@@ -56,8 +54,8 @@ logger = logging.getLogger(__name__)
 
 # LangChain / VectorStore
 from langchain_community.vectorstores import FAISS
-from langchain_core.embeddings import Embeddings  # ★変更（HuggingFaceEmbeddingsから）
-from sentence_transformers import SentenceTransformer  # ★追加（E5 prefix対応）
+from langchain_core.embeddings import Embeddings
+from sentence_transformers import SentenceTransformer
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
@@ -70,10 +68,18 @@ FAST_RAG_FAQ_FIRST = os.getenv("FAST_RAG_FAQ_FIRST", "true").lower() == "true"  
 FAST_RAG_TIMEOUT = float(os.getenv("FAST_RAG_TIMEOUT", "10"))                   # RAG呼び上限秒
 FAST_RAG_TOP_K = int(os.getenv("FAST_RAG_TOP_K", "20"))                         # 検索k
 
-VECTOR_DIR = os.getenv("VECTOR_DIR", "rag/vectorstore")
-INDEX_NAME = os.getenv("INDEX_NAME", "index")
+# ✅ 修正①：Cloud Run 上では /tmp を既定に（K_SERVICE があれば Cloud Run）
+VECTOR_DIR_DEFAULT = "/tmp/rag/vectorstore" if os.getenv("K_SERVICE") else "rag/vectorstore"
+VECTOR_DIR = os.getenv("VECTOR_DIR", VECTOR_DIR_DEFAULT)
+
+# ✅ 修正②：INDEX_NAME の読み順を ingested_text.py と揃える
+INDEX_NAME = os.getenv("VECTOR_INDEX_NAME") or os.getenv("INDEX_NAME", "index")
+
 MODEL_NAME = os.getenv("FAST_RAG_MODEL", "gpt-3.5-turbo")                       # OpenAIモデル名
 PROMPT_PATH = os.getenv("RAG_PROMPT_PATH", "rag/prompt_template.txt")
+
+# ✅（あなたの実装を維持）GCS の vectorstore prefix を ingest 側と揃える
+GCS_VEC_DIR = os.getenv("GCS_VECTORSTORE_PREFIX", "vectorstore")
 
 # 追加: 即時反映/補完関連
 RAG_RELOAD_COOLDOWN_SEC = int(os.getenv("RAG_RELOAD_COOLDOWN_SEC", "3"))
@@ -99,7 +105,6 @@ def _sanitize_answer(text: str) -> str:
         return text
     t = _PLACEHOLDER_RE.sub("（資料に記載なし）", str(text))
     if not t.endswith(("。", "！", "？", ".", "!", "?")):
-        # ぶら下がり読点を句点に閉じる
         if t.endswith("、"):
             t = t[:-1] + "。"
         else:
@@ -114,7 +119,6 @@ _emb_lock = threading.Lock()
 _vs_lock = threading.Lock()
 _llm_lock = threading.Lock()
 
-# ★変更：HuggingFaceEmbeddings -> E5 prefix対応のEmbeddings
 _EMB: Optional[Embeddings] = None
 _VS: Optional[FAISS] = None
 _LLM: Optional[ChatOpenAI] = None
@@ -166,21 +170,16 @@ def _load_prompt() -> PromptTemplate:
     return _PROMPT
 
 
-# =========================
-# ★ここが方針1の本丸：E5 prefix対応 Embeddings
-# =========================
 class MyEmbedding(Embeddings):
     """Sentence-Transformers を使う埋め込み（E5 prefix対応）"""
     def __init__(self, model_name: str):
         self.model = SentenceTransformer(model_name)
 
     def embed_documents(self, texts):
-        # 文書側：passage:
         texts = [f"passage: {t}" for t in texts]
         return self.model.encode(texts, show_progress_bar=False).tolist()
 
     def embed_query(self, text):
-        # 質問側：query:
         text = f"query: {text}"
         return self.model.encode(text).tolist()
 
@@ -226,9 +225,10 @@ def _ensure_local_index() -> None:
         return
     try:
         from utils.gcs_client import download_if_exists  # type: ignore
-        # 一般的な配置想定: vectorstore/<index>.*
-        remote_faiss = f"vectorstore/{INDEX_NAME}.faiss"
-        remote_store = f"vectorstore/{INDEX_NAME}.pkl"
+
+        remote_faiss = f"{GCS_VEC_DIR}/{INDEX_NAME}.faiss"
+        remote_store = f"{GCS_VEC_DIR}/{INDEX_NAME}.pkl"
+
         d1 = download_if_exists(remote_faiss, faiss_path)
         d2 = download_if_exists(remote_store, store_path)
         if d1 or d2:
@@ -249,7 +249,9 @@ def load_super_fast_vectorstore() -> FAISS:
     with _vs_lock:
         if _VS is not None:
             return _VS
+
         _ensure_local_index()
+
         emb = _load_embeddings()
         try:
             _VS = FAISS.load_local(
@@ -258,7 +260,6 @@ def load_super_fast_vectorstore() -> FAISS:
                 index_name=INDEX_NAME,
                 allow_dangerous_deserialization=True,
             )
-            # 規模ログ（デバッグ用）
             try:
                 ntotal = getattr(getattr(_VS, "index", None), "ntotal", None)
                 if ntotal is not None:
@@ -267,6 +268,7 @@ def load_super_fast_vectorstore() -> FAISS:
                 pass
         except Exception:
             _VS = FAISS.from_texts(texts=[], embedding=emb)
+
         _LAST_VS_LOADED_AT = time.time()
     return _VS
 
@@ -280,7 +282,6 @@ def refresh_vectorstore(force: bool = False) -> FAISS:
             logger.info("[RAG] refresh skipped by cooldown")
             return _VS  # type: ignore
         _VS = None
-    # すぐにロードしてウォームアップ
     vs = load_super_fast_vectorstore()
     logger.info("[RAG] vectorstore refreshed")
     return vs
@@ -293,7 +294,6 @@ def _build_retrieval_chain(vectorstore: FAISS, return_source: bool) -> Retrieval
     prompt = _load_prompt()
     llm = _load_llm()
 
-    # ★ Retriever を MMR に（envで similarity に戻せる）
     if FAST_RAG_RETRIEVER == "similarity":
         retriever = vectorstore.as_retriever(search_kwargs={"k": FAST_RAG_TOP_K})
     else:
@@ -323,7 +323,6 @@ _FAQ: Dict[str, str] = {}
 
 
 def get_ultra_fast_cached_response(query: str) -> Optional[str]:
-    # 誤爆防止のため完全一致のみ
     return _FAQ.get(query.strip())
 
 
@@ -347,14 +346,11 @@ class UltraFastFAQChain:
                 "source_documents": [],
             }
 
-        # 1) FAQ即答（任意）
         if FAST_RAG_FAQ_FIRST:
             faq = get_ultra_fast_cached_response(query)
             if faq:
                 return {"result": _sanitize_answer(faq), "source_documents": []}
 
-        # 2) RAG実行（タイムボックス）
-        #    🔧 両キーを渡して環境差に対応
         future = self.executor.submit(self.base_chain.invoke, {"query": query, "question": query})
         try:
             res = future.result(timeout=FAST_RAG_TIMEOUT)
@@ -369,7 +365,6 @@ class UltraFastFAQChain:
                 "source_documents": [],
             }
 
-        # LangChainの戻り型に合わせて整形
         if isinstance(res, dict):
             result_text = res.get("result", "") or ""
             src_docs = res.get("source_documents", []) or []
@@ -380,15 +375,10 @@ class UltraFastFAQChain:
         if not self.return_source:
             src_docs = []
 
-        # ★ 最終ガード適用（伏字排除 & 句点で閉じる）
         result_text = _sanitize_answer(result_text)
-
         return {"result": result_text, "source_documents": src_docs}
 
 
-# =========================
-# エントリポイント
-# =========================
 def get_super_fast_rag_chain(
     vectorstore: Optional[FAISS] = None,
     return_source: bool = True,
@@ -402,3 +392,4 @@ def get_super_fast_rag_chain(
     vs = vectorstore or load_super_fast_vectorstore()
     base = _build_retrieval_chain(vs, return_source)
     return UltraFastFAQChain(base, return_source)
+

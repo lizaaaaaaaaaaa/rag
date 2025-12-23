@@ -8,7 +8,7 @@ RAGフロントドア（sources整形対応版）:
   RAG_IMPL=FAST|STANDARD        # 既定: FAST
   INCLUDE_SOURCES=true|false    # true で JSON の sources を返す
   VECTOR_DIR                    # 既定: Cloud Run は /tmp/rag/vectorstore, それ以外は rag/vectorstore
-  INDEX_NAME                    # 既定: index
+  VECTOR_INDEX_NAME / INDEX_NAME
 """
 
 from __future__ import annotations
@@ -29,10 +29,17 @@ else:
     VECTOR_DIR_DEFAULT = "rag/vectorstore"
 
 VECTOR_DIR = os.getenv("VECTOR_DIR", VECTOR_DIR_DEFAULT)
-INDEX_NAME = os.getenv("INDEX_NAME", "index")
+
+# ★修正ポイント：ingest / fast_rag_chain と index 名を完全に揃える（VECTOR_INDEX_NAME 優先）
+INDEX_NAME = os.getenv("VECTOR_INDEX_NAME") or os.getenv("INDEX_NAME", "index")
+
+# ✅重要：FAST実装（rag.fast_rag_chain）は import 時に env を読むので、
+#         services 側で決めた値を import 前に env に反映しておく（既に指定があれば上書きしない）
+os.environ.setdefault("VECTOR_DIR", VECTOR_DIR)
+os.environ.setdefault("INDEX_NAME", INDEX_NAME)
 
 # ---------------------------------------------------------
-# 出典ラベル整形（A 案の実装）
+# 出典ラベル整形
 # ---------------------------------------------------------
 def _basename(p: str) -> str:
     try:
@@ -46,8 +53,6 @@ def _format_source(md: dict) -> Optional[str]:
       1) original_filename
       2) basename(gcs_path)
       3) basename(source)
-    さらに、page / page_number / pageIndex を (p.X) 形式で付与。
-    original_filename がある場合は tmp*.pdf のような一時名は置き換える。
     """
     name = md.get("original_filename")
     gcs_path = md.get("gcs_path") or ""
@@ -59,7 +64,6 @@ def _format_source(md: dict) -> Optional[str]:
     if not name:
         return None
 
-    # tmp*.pdf → original_filename に置き換え（original_filename がある時のみ）
     if md.get("original_filename"):
         if re.match(r"^tmp[^/\\]*\.pdf$", name, re.IGNORECASE):
             name = md["original_filename"]
@@ -72,23 +76,23 @@ def _format_source(md: dict) -> Optional[str]:
 
 
 # ---------------------------------------------------------
-# FAST 実装（本番優先）
+# FAST 実装
 # ---------------------------------------------------------
 _FAST_CHAIN = None
 if RAG_IMPL_FAST:
     try:
-        # rag/fast_rag_chain.py に依存（既存構成準拠）
         from rag.fast_rag_chain import load_super_fast_vectorstore, get_super_fast_rag_chain  # type: ignore
+
         _VS = load_super_fast_vectorstore()
-        # sources を後段で整形するため、source_documents が返るように組む
         _FAST_CHAIN = get_super_fast_rag_chain(_VS, return_source=True)
     except Exception as e:
         print(f"[services.rag_chain] FAST impl init failed -> fallback STANDARD: {e}")
         RAG_IMPL_FAST = False
         _FAST_CHAIN = None
 
+
 # ---------------------------------------------------------
-# STANDARD 実装（フォールバック）
+# STANDARD 実装
 # ---------------------------------------------------------
 _STANDARD_QA = None
 if not RAG_IMPL_FAST:
@@ -97,19 +101,14 @@ if not RAG_IMPL_FAST:
         from langchain.prompts import PromptTemplate
         from langchain.chains import RetrievalQA
         from langchain_community.vectorstores import FAISS
-
-        # ★追加（方針1）：E5 prefix対応の埋め込み
         from langchain_core.embeddings import Embeddings
         from sentence_transformers import SentenceTransformer
 
         MODEL_NAME = os.getenv("STANDARD_RAG_MODEL", "gpt-3.5-turbo")
         PROMPT_PATH = os.getenv("RAG_PROMPT_PATH", "rag/prompt_template.txt")
-
-        # ★追加：埋め込みモデル名（ingested_text.py / fast_rag_chain.py と揃える）
         EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-small")
 
         class MyEmbedding(Embeddings):
-            """Sentence-Transformers を使う埋め込み（E5 prefix対応）"""
             def __init__(self, model_name: str):
                 self.model = SentenceTransformer(model_name)
 
@@ -118,53 +117,48 @@ if not RAG_IMPL_FAST:
                 return self.model.encode(texts, show_progress_bar=False).tolist()
 
             def embed_query(self, text):
-                text = f"query: {text}"
-                return self.model.encode(text).tolist()
+                return self.model.encode(f"query: {text}").tolist()
 
         def _load_prompt() -> PromptTemplate:
-            default_tpl = """あなたは有能なアシスタントです。与えられた「コンテキスト」の範囲内で、ユーザーの質問に日本語で簡潔かつ正確に答えてください。
+            default_tpl = """あなたは有能なアシスタントです。
 コンテキスト:
 {context}
 
 質問:
 {question}
-
-制約:
-- 不明な点は「分かりません」と述べ、推測しない
-- 数値や用語はコンテキストの文面を優先
-- 箇条書き主体で簡潔に
 """
-            try:
-                if os.path.exists(PROMPT_PATH):
-                    with open(PROMPT_PATH, encoding="utf-8") as f:
-                        tpl = f.read()
-                else:
-                    tpl = default_tpl
-            except Exception:
-                tpl = default_tpl
-            return PromptTemplate(input_variables=["context", "question"], template=tpl)
+            if os.path.exists(PROMPT_PATH):
+                with open(PROMPT_PATH, encoding="utf-8") as f:
+                    return PromptTemplate(
+                        input_variables=["context", "question"],
+                        template=f.read(),
+                    )
+            return PromptTemplate(
+                input_variables=["context", "question"],
+                template=default_tpl,
+            )
 
         def _load_vectorstore() -> FAISS:
-            # ★変更（方針1）：HuggingFaceEmbeddings -> MyEmbedding（prefix対応）
-            emb = MyEmbedding(model_name=EMBED_MODEL)
+            emb = MyEmbedding(EMBED_MODEL)
             try:
                 return FAISS.load_local(
-                    VECTOR_DIR, emb,
+                    VECTOR_DIR,
+                    emb,
                     index_name=INDEX_NAME,
                     allow_dangerous_deserialization=True,
                 )
             except Exception:
-                # 空のVSで起動だけは維持（回答はLLMに落ちないようガードすべき）
                 return FAISS.from_texts(texts=[], embedding=emb)
 
-        _PROMPT = _load_prompt()
         _VS = _load_vectorstore()
         _LLM = ChatOpenAI(model_name=MODEL_NAME, temperature=0)
+        _PROMPT = _load_prompt()
+
         _STANDARD_QA = RetrievalQA.from_chain_type(
             llm=_LLM,
             chain_type="stuff",
             retriever=_VS.as_retriever(search_kwargs={"k": int(os.getenv("STANDARD_TOP_K", "3"))}),
-            return_source_documents=True,  # ここは True 固定。返却時に INCLUDE_SOURCES で出し分け
+            return_source_documents=True,
             chain_type_kwargs={"prompt": _PROMPT},
         )
     except Exception as e:
@@ -176,59 +170,36 @@ if not RAG_IMPL_FAST:
 # 公開インターフェース
 # ---------------------------------------------------------
 def get_rag_response(query: str) -> Tuple[str, List[str]]:
-    """
-    返り値: (answer: str, sources: list[str])
-    - INCLUDE_SOURCES=false のときは sources は []
-    - 呼び出し側は answer のみ UI に表示し、sources は JSON で保持すればOK
-    """
     q = (query or "").strip()
     if not q:
-        return "ご質問が空のようです。もう一度入力してください。", []
+        return "ご質問が空です。", []
 
-    # FAST
     if RAG_IMPL_FAST and _FAST_CHAIN is not None:
-        try:
-            res = _FAST_CHAIN.invoke({"query": q})
-        except TypeError:
-            # 実装差異がある場合の保険
-            res = _FAST_CHAIN.invoke({"query": q, "question": q})
-
-        ans = res.get("result", "") if isinstance(res, dict) else str(res)
+        res = _FAST_CHAIN.invoke({"query": q})
+        ans = res.get("result", "")
         if not INCLUDE_SOURCES:
             return ans, []
 
-        srcs: List[str] = []
-        seen = set()
-        for d in (res.get("source_documents") or []):
-            md = getattr(d, "metadata", {}) or {}
-            label = _format_source(md)
-            if not label:
-                continue
-            if label in seen:
-                continue
-            seen.add(label)
-            srcs.append(label)
+        srcs, seen = [], set()
+        for d in res.get("source_documents", []):
+            label = _format_source(getattr(d, "metadata", {}) or {})
+            if label and label not in seen:
+                seen.add(label)
+                srcs.append(label)
         return ans, srcs
 
-    # STANDARD
     if _STANDARD_QA is not None:
         res = _STANDARD_QA.invoke({"query": q})
-        ans = res.get("result", "") if isinstance(res, dict) else str(res)
+        ans = res.get("result", "")
         if not INCLUDE_SOURCES:
             return ans, []
 
-        srcs: List[str] = []
-        seen = set()
-        for d in (res.get("source_documents") or []):
-            md = getattr(d, "metadata", {}) or {}
-            label = _format_source(md)
-            if not label:
-                continue
-            if label in seen:
-                continue
-            seen.add(label)
-            srcs.append(label)
+        srcs, seen = [], set()
+        for d in res.get("source_documents", []):
+            label = _format_source(getattr(d, "metadata", {}) or {})
+            if label and label not in seen:
+                seen.add(label)
+                srcs.append(label)
         return ans, srcs
 
-    # 初期化失敗時の最終フォールバック
-    return "現在準備中です。時間をおいてお試しください。", []
+    return "現在準備中です。", []
