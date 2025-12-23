@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-rag/fast_rag_chain.py — 完全修正版（最小影響・即時反映対応・伏字ガード）
+rag/fast_rag_chain.py — 完全修正版（最小影響・即時反映対応・伏字ガード + MMR対応）
 
 目的:
 - 既存I/Fを維持しつつ、アップロード直後にRAGへ**即時反映**できるようにする
 - RetrievalQAのキー差異に**両対応**（{"query", "question"} を同時に渡す）
 - ベクトルストアがローカルに無い場合、**任意でGCS補完**を試みる
-- 🔒 回答の最終段で **伏字/プレースホルダ（○○、〇〇、××、XXXX、TBD、？？？）を排除**し、
+- 🔒 回答の最終段で **伏字/プレースホルダ（□□、○○、〇〇、××、XXXX、TBD、？？？）を排除**し、
   かつ**文末を必ず完結**させる（Cloud Run経路でも常に有効）
+- ★ Retrieval を MMR 化（検索ヒットの多様性を増やし、表/羅列/抽出崩れへの耐性を上げる）
 
 主な公開関数:
 - load_super_fast_vectorstore() -> FAISS
@@ -21,12 +22,17 @@ ENV:
 - VECTOR_DIR (default: rag/vectorstore)
 - INDEX_NAME (default: index)
 - FAST_RAG_MODEL (default: gpt-3.5-turbo)
-- FAST_RAG_TOP_K (default: 10)
+- FAST_RAG_TOP_K (default: 20)
 - FAST_RAG_TIMEOUT (default: 10.0)
 - FAST_RAG_FAQ_FIRST (default: true)
 - RAG_RELOAD_COOLDOWN_SEC (default: 3)
 - VECTORSTORE_TRY_GCS_SYNC (default: true)  # ローカルに index.* がない時のみGCS補完
 - RAG_PROMPT_PATH (default: rag/prompt_template.txt)
+
+# ★ MMR調整（追加 / 任意）
+- FAST_RAG_RETRIEVER (default: mmr)           # mmr | similarity
+- FAST_RAG_FETCH_K (default: 60)              # mmrの候補数
+- FAST_RAG_LAMBDA_MULT (default: 0.35)        # 0.2〜0.5 推奨（低いほど多様性）
 """
 from __future__ import annotations
 
@@ -50,7 +56,8 @@ logger = logging.getLogger(__name__)
 
 # LangChain / VectorStore
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_core.embeddings import Embeddings  # ★変更（HuggingFaceEmbeddingsから）
+from sentence_transformers import SentenceTransformer  # ★追加（E5 prefix対応）
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
@@ -71,6 +78,14 @@ PROMPT_PATH = os.getenv("RAG_PROMPT_PATH", "rag/prompt_template.txt")
 # 追加: 即時反映/補完関連
 RAG_RELOAD_COOLDOWN_SEC = int(os.getenv("RAG_RELOAD_COOLDOWN_SEC", "3"))
 VECTORSTORE_TRY_GCS_SYNC = os.getenv("VECTORSTORE_TRY_GCS_SYNC", "true").lower() == "true"
+
+# ★追加: Retriever設定（MMRをデフォルトに）
+FAST_RAG_RETRIEVER = os.getenv("FAST_RAG_RETRIEVER", "mmr").lower()  # "mmr" | "similarity"
+FAST_RAG_FETCH_K = int(os.getenv("FAST_RAG_FETCH_K", "60"))
+FAST_RAG_LAMBDA_MULT = float(os.getenv("FAST_RAG_LAMBDA_MULT", "0.35"))
+
+# ★追加: 埋め込みモデル名（ingested_text.pyと揃える）
+EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-small")
 
 
 # =========================
@@ -99,7 +114,8 @@ _emb_lock = threading.Lock()
 _vs_lock = threading.Lock()
 _llm_lock = threading.Lock()
 
-_EMB: Optional[HuggingFaceEmbeddings] = None
+# ★変更：HuggingFaceEmbeddings -> E5 prefix対応のEmbeddings
+_EMB: Optional[Embeddings] = None
 _VS: Optional[FAISS] = None
 _LLM: Optional[ChatOpenAI] = None
 _PROMPT: Optional[PromptTemplate] = None
@@ -109,7 +125,6 @@ _LAST_VS_LOADED_AT: float = 0.0
 # =========================
 # パス補助
 # =========================
-
 def _index_paths() -> tuple[str, str]:
     """ローカルの index ファイルのパスを返す。"""
     base = pathlib.Path(VECTOR_DIR)
@@ -121,7 +136,6 @@ def _index_paths() -> tuple[str, str]:
 # =========================
 # プロンプト/埋め込み/LLM
 # =========================
-
 def _load_prompt() -> PromptTemplate:
     global _PROMPT
     if _PROMPT:
@@ -152,13 +166,32 @@ def _load_prompt() -> PromptTemplate:
     return _PROMPT
 
 
-def _load_embeddings() -> HuggingFaceEmbeddings:
+# =========================
+# ★ここが方針1の本丸：E5 prefix対応 Embeddings
+# =========================
+class MyEmbedding(Embeddings):
+    """Sentence-Transformers を使う埋め込み（E5 prefix対応）"""
+    def __init__(self, model_name: str):
+        self.model = SentenceTransformer(model_name)
+
+    def embed_documents(self, texts):
+        # 文書側：passage:
+        texts = [f"passage: {t}" for t in texts]
+        return self.model.encode(texts, show_progress_bar=False).tolist()
+
+    def embed_query(self, text):
+        # 質問側：query:
+        text = f"query: {text}"
+        return self.model.encode(text).tolist()
+
+
+def _load_embeddings() -> Embeddings:
     global _EMB
     if _EMB:
         return _EMB
     with _emb_lock:
         if _EMB is None:
-            _EMB = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-small")
+            _EMB = MyEmbedding(EMBED_MODEL)
     return _EMB
 
 
@@ -184,7 +217,6 @@ def _load_llm() -> ChatOpenAI:
 # =========================
 # GCS補完（任意）
 # =========================
-
 def _ensure_local_index() -> None:
     """ローカルに index が無い場合のみ、任意でGCSから補完を試みる。失敗は無視。"""
     if not VECTORSTORE_TRY_GCS_SYNC:
@@ -208,7 +240,6 @@ def _ensure_local_index() -> None:
 # =========================
 # VectorStore ロード/キャッシュ/リロード
 # =========================
-
 def load_super_fast_vectorstore() -> FAISS:
     """FAISSをロード（allow_dangerous_deserialization=True）。
     失敗時は空インデックスにフォールバック（問い合わせ経路を維持）。"""
@@ -258,11 +289,23 @@ def refresh_vectorstore(force: bool = False) -> FAISS:
 # =========================
 # チェーン構築
 # =========================
-
 def _build_retrieval_chain(vectorstore: FAISS, return_source: bool) -> RetrievalQA:
     prompt = _load_prompt()
     llm = _load_llm()
-    retriever = vectorstore.as_retriever(search_kwargs={"k": FAST_RAG_TOP_K})
+
+    # ★ Retriever を MMR に（envで similarity に戻せる）
+    if FAST_RAG_RETRIEVER == "similarity":
+        retriever = vectorstore.as_retriever(search_kwargs={"k": FAST_RAG_TOP_K})
+    else:
+        retriever = vectorstore.as_retriever(
+            search_type="mmr",
+            search_kwargs={
+                "k": FAST_RAG_TOP_K,
+                "fetch_k": max(FAST_RAG_FETCH_K, FAST_RAG_TOP_K),
+                "lambda_mult": FAST_RAG_LAMBDA_MULT,
+            },
+        )
+
     chain = RetrievalQA.from_chain_type(
         llm=llm,
         chain_type="stuff",
@@ -299,8 +342,10 @@ class UltraFastFAQChain:
     def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         query = (inputs.get("query") or inputs.get("question") or "").strip()
         if not query:
-            return {"result": _sanitize_answer("ご質問が空のようです。もう一度入力してください。"),
-                    "source_documents": []}
+            return {
+                "result": _sanitize_answer("ご質問が空のようです。もう一度入力してください。"),
+                "source_documents": [],
+            }
 
         # 1) FAQ即答（任意）
         if FAST_RAG_FAQ_FIRST:
@@ -344,7 +389,6 @@ class UltraFastFAQChain:
 # =========================
 # エントリポイント
 # =========================
-
 def get_super_fast_rag_chain(
     vectorstore: Optional[FAISS] = None,
     return_source: bool = True,

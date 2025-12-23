@@ -97,10 +97,29 @@ if not RAG_IMPL_FAST:
         from langchain.prompts import PromptTemplate
         from langchain.chains import RetrievalQA
         from langchain_community.vectorstores import FAISS
-        from langchain_community.embeddings import HuggingFaceEmbeddings
+
+        # ★追加（方針1）：E5 prefix対応の埋め込み
+        from langchain_core.embeddings import Embeddings
+        from sentence_transformers import SentenceTransformer
 
         MODEL_NAME = os.getenv("STANDARD_RAG_MODEL", "gpt-3.5-turbo")
         PROMPT_PATH = os.getenv("RAG_PROMPT_PATH", "rag/prompt_template.txt")
+
+        # ★追加：埋め込みモデル名（ingested_text.py / fast_rag_chain.py と揃える）
+        EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-small")
+
+        class MyEmbedding(Embeddings):
+            """Sentence-Transformers を使う埋め込み（E5 prefix対応）"""
+            def __init__(self, model_name: str):
+                self.model = SentenceTransformer(model_name)
+
+            def embed_documents(self, texts):
+                texts = [f"passage: {t}" for t in texts]
+                return self.model.encode(texts, show_progress_bar=False).tolist()
+
+            def embed_query(self, text):
+                text = f"query: {text}"
+                return self.model.encode(text).tolist()
 
         def _load_prompt() -> PromptTemplate:
             default_tpl = """あなたは有能なアシスタントです。与えられた「コンテキスト」の範囲内で、ユーザーの質問に日本語で簡潔かつ正確に答えてください。
@@ -126,7 +145,8 @@ if not RAG_IMPL_FAST:
             return PromptTemplate(input_variables=["context", "question"], template=tpl)
 
         def _load_vectorstore() -> FAISS:
-            emb = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-small")
+            # ★変更（方針1）：HuggingFaceEmbeddings -> MyEmbedding（prefix対応）
+            emb = MyEmbedding(model_name=EMBED_MODEL)
             try:
                 return FAISS.load_local(
                     VECTOR_DIR, emb,

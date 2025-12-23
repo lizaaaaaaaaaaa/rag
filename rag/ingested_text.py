@@ -99,12 +99,18 @@ def download_vectorstore_from_gcs(local_dir: str) -> bool:
 #  埋め込み
 # =========================
 class MyEmbedding(Embeddings):
-    """Sentence-Transformers を使う埋め込み（既存仕様を踏襲）"""
+    """Sentence-Transformers を使う埋め込み（E5 prefix対応）"""
     def __init__(self, model_name: str):
         self.model = SentenceTransformer(model_name)
+
     def embed_documents(self, texts):
+        # E5系は passage: を推奨（文書側）
+        texts = [f"passage: {t}" for t in texts]
         return self.model.encode(texts, show_progress_bar=False).tolist()
+
     def embed_query(self, text):
+        # E5系は query: を推奨（質問側）
+        text = f"query: {text}"
         return self.model.encode(text).tolist()
 
 # =========================
