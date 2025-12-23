@@ -516,7 +516,7 @@ def get_rag_chain(vectorstore, return_source: bool = True):
         from llm.llm_runner import load_llm
         llm, _, _ = load_llm()
         prompt = _load_prompt_from_file()
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
         rag_chain = RetrievalQA.from_chain_type(
             llm=llm,
             chain_type="stuff",

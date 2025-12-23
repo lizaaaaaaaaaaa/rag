@@ -133,7 +133,7 @@ def _strip_citations(text: str) -> str:
 # -------------------------------
 # 3-1) 出口サニタイズ：プレースホルダー（○○/TBD/？？？ 等）を最終段で除去
 # -------------------------------
-_PLACEHOLDER_RE = re.compile(r"(○○|〇〇|××|X{2,}|XXXX|TBD|未定|要確認|？？？|\?{2,}|＜.*?＞|ここに.*?を書く)")
+_PLACEHOLDER_RE = re.compile(r"(□□|○○|〇〇|××|X{2,}|XXXX|TBD|未定|要確認|？？？|\?{2,}|＜.*?＞|ここに.*?を書く)")
 
 def _strip_placeholders(t: str) -> str:
     if not t:

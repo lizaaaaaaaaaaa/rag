@@ -61,7 +61,7 @@ from langchain.chains import RetrievalQA
 # =========================
 FAST_RAG_FAQ_FIRST = os.getenv("FAST_RAG_FAQ_FIRST", "true").lower() == "true"  # FAQ優先
 FAST_RAG_TIMEOUT = float(os.getenv("FAST_RAG_TIMEOUT", "10"))                   # RAG呼び上限秒
-FAST_RAG_TOP_K = int(os.getenv("FAST_RAG_TOP_K", "10"))                         # 検索k
+FAST_RAG_TOP_K = int(os.getenv("FAST_RAG_TOP_K", "20"))                         # 検索k
 
 VECTOR_DIR = os.getenv("VECTOR_DIR", "rag/vectorstore")
 INDEX_NAME = os.getenv("INDEX_NAME", "index")
@@ -76,7 +76,7 @@ VECTORSTORE_TRY_GCS_SYNC = os.getenv("VECTORSTORE_TRY_GCS_SYNC", "true").lower()
 # =========================
 # 伏字サニタイズ（最終ガード）
 # =========================
-_PLACEHOLDER_RE = re.compile(r"(○○|〇〇|××|X{2,}|XXXX|TBD|？？？)")
+_PLACEHOLDER_RE = re.compile(r"(□□|○○|〇〇|××|X{2,}|XXXX|TBD|？？？)")
 
 def _sanitize_answer(text: str) -> str:
     """伏字を排除し、文末を必ず完結させる最終ガード。"""
